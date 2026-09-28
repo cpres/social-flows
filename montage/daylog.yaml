@@ -1,0 +1,74 @@
+# ---------------------------------------------------------------------------
+# DAY IN THE LIFE
+#
+# One short cut from every clip in a folder, in the order you shot them.
+# Drop a day's footage into a folder, point `folder:` at it, and run:
+#
+#     python3 montage.py daylog.yaml --dry-run
+#     python3 montage.py daylog.yaml
+#
+# Nothing here needs editing per-clip. That's the whole idea.
+# ---------------------------------------------------------------------------
+
+output: day-in-the-life.mp4
+
+# --- the footage ----------------------------------------------------------
+sources:
+  - folder: ~/Footage/2026-09-24
+    sort: time            # time (as shot) | name | shuffle
+    # limit: 40           # cap the number of clips
+    auto_start: 30%       # where inside each clip to cut from.
+                          #   a percentage, or a fixed time like 0:15
+    min_start: 2          # never start in the first 2 seconds
+    skip_shorter_than: 3  # ignore clips under 3 seconds
+
+# You can add a second folder, or a hand-picked file, alongside it:
+#
+#   - folder: ~/Footage/2026-09-25
+#     sort: time
+#
+#   - file: ~/Footage/favourites/elderberry-harvest.mov
+#     times: [1:12]
+
+rounds: 1                 # one pass. This is what makes it a day log
+                          # rather than the interleaved style.
+
+# --- pace -----------------------------------------------------------------
+music: ~/Music/montage-bed.mp3
+beat_sync: true
+beats_per_cut: 2          # 1 frantic, 2 lively, 4 calm
+                          # with many clips, 1 or 2 keeps it moving
+
+# no music? delete the music line above and use seconds instead:
+# clip_length: 1.6
+
+# --- feel -----------------------------------------------------------------
+transitions:
+  within_round: cut       # hard cuts between clips
+  soft_every: 5           # ...but soften every 5th one, so it breathes
+  between_rounds: dissolve
+  into_image: dissolve
+  out_of_image: dissolve
+  duration: 0.3
+
+# --- sound ----------------------------------------------------------------
+original_audio: true      # keep the glasses audio underneath
+original_volume: 0.35
+music_volume: 0.7
+music_fade_out: 2.0
+
+# --- framing --------------------------------------------------------------
+fit: fill                 # fill | blur | pad
+pad_color: forest         # forest | sage | cream  (pad mode only)
+
+# --- photos ---------------------------------------------------------------
+photo_motion: push
+photo_zoom: 0.06
+hold: 1.6                 # how long a photo sits on screen
+
+# --- render ---------------------------------------------------------------
+# encoder: videotoolbox   # Apple hardware encoder: much faster, slightly
+#                         # larger files. Fine for social.
+# bitrate: 12M            # videotoolbox only
+crf: 18                   # libx264 only, lower = better quality
+preset: veryfast
