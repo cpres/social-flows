@@ -47,6 +47,7 @@ ENGINE = HERE.parent / "montage" / "montage.py"
 sys.path.insert(0, str(ENGINE.parent))
 sys.path.insert(0, str(HERE))
 from db import DEFAULT_SETTINGS, Library, default_start, now, settings_of  # noqa: E402
+from music import Shelf, beat_detection_available  # noqa: E402
 
 ROOT = Path(os.environ.get("FOOTAGE_DIR", "~/Footage")).expanduser().resolve()
 RENDERS = Path(os.environ.get("RENDER_DIR", "~/Movies/Footage Studio")).expanduser()
@@ -56,6 +57,9 @@ SIDECAR = ".studio.json"
 TRANSITIONS = ("", "cut", "flash", "whip", "zoom", "dissolve", "dip")   # per-folder trims from the first version of the studio
 
 lib = Library(ROOT)
+shelf = Shelf(os.environ.get("MUSIC_DIR", "~/Music/Reels"), lib.home / "music")
+ITEM_COLUMNS = ("media_id", "position", "start", "length", "keep", "focus_x", "focus_y",
+                "transition", "lighten", "beats")
 app = FastAPI(title="Footage Studio")
 
 
@@ -81,7 +85,7 @@ def item_dict(row):
     return {"id": row["item_id"], "reelId": row["reel_id"], "mediaId": row["media_id"],
             "position": row["position"], "start": row["start"], "length": row["length"],
             "keep": bool(row["keep"]), "focusX": row["focus_x"], "focusY": row["focus_y"],
-            "transition": row["transition"], "lighten": row["lighten"]}
+            "transition": row["transition"], "lighten": row["lighten"], "beats": row["beats"]}
 
 
 def reel_row(db, reel_id):
@@ -320,11 +324,12 @@ def add_item(reel_id: int, body: dict = Body(...)):
             length, start = float(body.get("length") or s["defaultHold"]), 0.0
         fx, fy = unit(body.get("focusX", 0.5)), unit(body.get("focusY", 0.5))
         lighten = unit(body.get("lighten", 0))
+        beats = max(0, min(int(body.get("beats") or 0), 64))
         pos = db.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM reel_items "
                          "WHERE reel_id = ?", (reel_id,)).fetchone()[0]
         cur = db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length, "
-                         "focus_x, focus_y, lighten) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                         (reel_id, m["id"], pos, start, length, fx, fy, lighten))
+                         "focus_x, focus_y, lighten, beats) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (reel_id, m["id"], pos, start, length, fx, fy, lighten, beats))
         touch(db, reel_id)
         row = db.execute("SELECT id AS item_id, * FROM reel_items WHERE id = ?",
                          (cur.lastrowid,)).fetchone()
@@ -340,6 +345,8 @@ def update_item(item_id: int, body: dict = Body(...)):
         fields["transition"] = body["transition"]
     if "lighten" in body:
         fields["lighten"] = unit(body["lighten"])
+    if "beats" in body:
+        fields["beats"] = max(0, min(int(body["beats"]), 64))
     for key, col in (("focusX", "focus_x"), ("focusY", "focus_y")):
         if key in body:
             fields[col] = unit(body[key])
@@ -371,11 +378,68 @@ def delete_item(item_id: int):
     return {"ok": True}
 
 
+# ---------------------------------------------------------------- duplicate
+
+@app.post("/api/reels/{reel_id}/duplicate")
+def duplicate_reel(reel_id: int, body: dict = Body(default={})):
+    """A full copy of a reel (settings, parts, trims, framing) to experiment on."""
+    with lib.connect() as db:
+        r = reel_row(db, reel_id)
+        name = (body.get("name") or "").strip()
+        if not name:
+            n = 1
+            while True:
+                name = f"{r['name']} (copy{'' if n == 1 else ' ' + str(n)})"
+                if not db.execute("SELECT 1 FROM reels WHERE name = ?", (name,)).fetchone():
+                    break
+                n += 1
+        elif db.execute("SELECT 1 FROM reels WHERE name = ?", (name,)).fetchone():
+            raise HTTPException(409, f"A reel called '{name}' already exists")
+        cur = db.execute("INSERT INTO reels (name, settings, created_at, updated_at) "
+                         "VALUES (?, ?, ?, ?)", (name, r["settings"], now(), now()))
+        new_id = cur.lastrowid
+        cols = ", ".join(ITEM_COLUMNS)
+        db.execute(f"INSERT INTO reel_items (reel_id, {cols}) "
+                   f"SELECT ?, {cols} FROM reel_items WHERE reel_id = ? ORDER BY position, id",
+                   (new_id, reel_id))
+    return {"id": new_id, "name": name}
+
+
+# ---------------------------------------------------------------- music
+
+@app.get("/api/music")
+def music_shelf():
+    return {"dir": str(shelf.folder), "exists": shelf.folder.is_dir(),
+            "tracks": shelf.tracks(), "beatDetection": beat_detection_available()}
+
+
+@app.get("/api/music/{name}/file")
+def music_file(name: str):
+    path = shelf.path_of(name)
+    if not path or not path.exists() or path.parent != shelf.folder:
+        raise HTTPException(404, "No such track")
+    return FileResponse(path)
+
+
+@app.get("/api/music/{name}/beats")
+def music_beats(name: str):
+    path = shelf.path_of(name)
+    if not path or not path.exists() or path.parent != shelf.folder:
+        raise HTTPException(404, "No such track")
+    try:
+        return shelf.analyze(path)
+    except ImportError:
+        raise HTTPException(503, "Beat detection isn't installed: run "
+                                 "studio/.venv/bin/pip install librosa")
+
+
 # ---------------------------------------------------------------- export
 
 def build_config(reel, rows):
     s = settings_of(reel)
     kept = [r for r in rows if r["keep"] and not r["missing"]]
+    track = shelf.path_of(s.get("music"))
+    synced = bool(track and s.get("beatSync"))
     sources, seen = [], {}
     for n, row in enumerate(kept):
         stem = Path(row["name"]).stem[:14]
@@ -392,17 +456,31 @@ def build_config(reel, rows):
         else:
             entry["hold"] = round(row["length"], 2)
             entry["in_round"] = "all"
+        if synced:
+            entry["hold_beats" if row["kind"] == "photo" else "beats"] = (
+                row["beats"] or int(s.get("beatsPerCut", 4)))
         if n + 1 < len(kept):
             entry["transition"] = row["transition"] or s.get("transition") or "cut"
         sources.append(entry)
 
     cfg = {"output": str(RENDERS / f"{slug(reel['name'])}.mp4"), "rounds": 1, "sources": sources}
-    if s.get("music"):
-        cfg["music"] = s["music"]
-        cfg["beat_sync"] = bool(s.get("beatSync"))
-        cfg["beats_per_cut"] = int(s.get("beatsPerCut", 2))
-        cfg["music_volume"] = 0.7
+    if track:
+        if not track.exists():
+            raise HTTPException(400, f"Music file not found: {track}")
+        cfg["music"] = str(track)
+        cfg["music_start"] = round(float(s.get("musicStart") or 0), 3)
+        cfg["music_in_video"] = bool(s.get("musicInVideo", True))
+        cfg["beat_sync"] = synced
+        cfg["beats_per_cut"] = int(s.get("beatsPerCut", 4))
+        cfg["music_volume"] = float(s.get("musicVolume", 0.8))
         cfg["music_fade_out"] = 2.0
+        if synced:
+            try:
+                shelf.analyze(track)
+                cfg["beat_file"] = str(shelf.cache_file(track))
+            except ImportError:
+                raise HTTPException(400, "Beat sync needs the beat detector: run "
+                                         "studio/.venv/bin/pip install librosa")
     cfg.update({
         "clip_length": s["defaultLength"],
         "transitions": {"within_round": "cut", "between_rounds": "dissolve",
@@ -460,8 +538,8 @@ jobs_lock = threading.Lock()
 
 
 def job_view(job):
-    return {k: job[k] for k in ("id", "reelId", "status", "stage", "done", "total",
-                                "output", "startedAt", "finishedAt", "log")}
+    return {k: job.get(k) for k in ("id", "reelId", "status", "stage", "done", "total",
+                                    "output", "startedAt", "finishedAt", "log", "note")}
 
 
 def run_render(job, config_path):
@@ -486,6 +564,8 @@ def run_render(job, config_path):
                 job["stage"] = "joining"
             elif line.startswith("mixing"):
                 job["stage"] = "mixing"
+            elif line.startswith("Song left out"):
+                job["note"] = line
             else:
                 job["log"] = (job["log"] + [line])[-60:]
     proc.wait()

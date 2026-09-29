@@ -32,6 +32,10 @@ export const api = {
   renderStatus: (jobId) => fetch(`/api/renders/${jobId}`).then(json),
   renderVideo: (jobId) => `/api/renders/${jobId}/video`,
   reveal: (jobId) => send('POST', `/api/renders/${jobId}/reveal`),
+  duplicateReel: (id, name) => send('POST', `/api/reels/${id}/duplicate`, { name }),
+  music: () => fetch('/api/music').then(json),
+  musicBeats: (name) => fetch(`/api/music/${enc(name)}/beats`).then(json),
+  musicFile: (name) => `/api/music/${enc(name)}/file`,
 
   addItem: (reelId, item) => send('POST', `/api/reels/${reelId}/items`, item),
   updateItem: (id, patch) => send('PATCH', `/api/items/${id}`, patch),

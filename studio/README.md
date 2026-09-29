@@ -55,6 +55,21 @@ python3 studio/server.py --open
   with *Use on every part* to match the rest. It lifts shadows and midtones
   rather than flat brightness, so shade opens up without blowing out the sky.
   The preview shows it live; parts with it on get a ☀ in the list.
+- **Duplicate** (reel header) makes a full copy of a reel (parts, trims,
+  framing, transitions, music) so you can try a different cut without losing
+  the one you have.
+- **Music:** drop songs (MP3, M4A, WAV…) into `~/Music/Reels/` (or set
+  `MUSIC_DIR`), then pick one under the reel's *Settings → Music*. Set where the
+  song starts, and *Listen* to check it. Play reel plays the song and moves
+  through the parts in time with it.
+- **Cut on the beat:** the studio finds the song's beats once (cached), then each
+  part lasts a whole number of beats: 1, 2, 4 or 8 (default 4, set per reel).
+  Change a part's beats in its editor, or drag its end, which snaps to whole beats. The
+  strip shows beat ticks, with a longer one every 4 beats. The render uses
+  the same beats, so it cuts exactly where the preview does.
+- **Put the song in the video** (on by default). Turn it off to render the cuts
+  timed to the song but without it, then add the same song in Instagram, which
+  licenses it. The render tells you where in the song to start.
 - **Open a reel** to see its parts from every shoot. Drag to reorder (or *Sort by
   shot time*), fine-tune each part's start and length, skip parts without
   removing them, and set music, beat sync and framing under *Settings*.

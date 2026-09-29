@@ -16,6 +16,7 @@
         </p>
       </div>
       <button class="btn" @click="sortByShotTime" :disabled="items.length < 2">Sort by shot time</button>
+      <button class="btn" @click="duplicateReel" title="Make a copy of this reel to experiment on">Duplicate</button>
       <button class="btn" :class="{ active: showSettings }" @click="showSettings = !showSettings">Settings</button>
       <button class="btn" @click="doExport" :disabled="exporting || !kept.length">
         {{ exporting ? 'Checking…' : 'Preview cut list' }}
@@ -36,6 +37,7 @@
           <h3>Rendered</h3>
           <p class="mono path">{{ job.output }}</p>
           <p class="muted">Took {{ Math.round(job.finishedAt - job.startedAt) }}s.</p>
+          <p v-if="job.note" class="note">🎵 {{ job.note }}</p>
           <div class="controls">
             <button class="btn primary" @click="api.reveal(job.id)">Show in Finder</button>
             <button class="btn" @click="job = null">Close</button>
@@ -50,19 +52,58 @@
     </section>
 
     <section v-if="showSettings" class="panel settings">
-      <label class="field wide">
-        Music file (optional — absolute path, e.g. ~/Music/bed.mp3)
-        <input v-model.trim="settings.music" placeholder="~/Music/montage-bed.mp3" />
-      </label>
-      <label class="field check">
-        <span><input type="checkbox" v-model="settings.beatSync" :disabled="!settings.music" /> Beat sync</span>
-        <small v-if="settings.beatSync">Cuts snap to beats; your lengths become approximate ({{ settings.beatsPerCut }} beats per cut).</small>
-        <small v-else>Your lengths are used exactly.</small>
-      </label>
-      <label class="field" v-if="settings.beatSync">
-        Beats per cut
-        <input type="number" min="1" max="8" v-model.number="settings.beatsPerCut" />
-      </label>
+      <div class="music wide2">
+        <h3>Music</h3>
+        <div class="musicrow">
+          <label class="field">
+            Song
+            <select v-model="settings.music">
+              <option value="">No music</option>
+              <option v-if="settings.music && !shelfHas(settings.music)" :value="settings.music">{{ settings.music }}</option>
+              <option v-for="t in shelf.tracks" :key="t.name" :value="t.name">
+                {{ t.name.replace(/\.[^.]+$/, '') }}{{ t.bpm ? ` · ${Math.round(t.bpm)} bpm` : '' }}
+              </option>
+            </select>
+          </label>
+          <label class="field" v-if="settings.music">
+            Song starts at
+            <input :value="fmtTime(settings.musicStart || 0)" @change="setMusicStart($event)" />
+          </label>
+          <div class="field" v-if="settings.music && musicUrl">
+            &nbsp;
+            <button class="btn small" @click="listen">{{ listening ? '■ Stop' : '▶ Listen' }}</button>
+          </div>
+          <label class="field" v-if="settings.music">
+            Music volume
+            <input type="number" min="0" max="1" step="0.05" v-model.number="settings.musicVolume" />
+          </label>
+        </div>
+        <p class="muted small">
+          Songs come from <code>{{ shelf.dir }}</code><template v-if="!shelf.exists"> (make that folder and drop MP3s in)</template>.
+          <template v-if="analyzing"> Finding the beat…</template>
+          <template v-else-if="beatData"> {{ Math.round(beatData.bpm) }} bpm · one beat = {{ (60 / beatData.bpm).toFixed(2) }}s.</template>
+          <span v-if="musicError" class="warn"> {{ musicError }}</span>
+        </p>
+        <div class="musicrow" v-if="settings.music">
+          <label class="field check">
+            <span><input type="checkbox" v-model="settings.beatSync" :disabled="!shelf.beatDetection" /> Cut on the beat</span>
+            <small v-if="!shelf.beatDetection">Needs beat detection: run <code>studio/.venv/bin/pip install librosa</code></small>
+            <small v-else-if="settings.beatSync">Each part lasts whole beats; drag or pick beats per part.</small>
+            <small v-else>Your lengths are used exactly; the song plays underneath.</small>
+          </label>
+          <label class="field" v-if="settings.beatSync">
+            Beats per part (default)
+            <select v-model.number="settings.beatsPerCut">
+              <option v-for="b in BEAT_CHOICES" :key="b" :value="b">{{ b }}{{ period ? ` ≈ ${(b * period).toFixed(1)}s` : '' }}</option>
+            </select>
+          </label>
+          <label class="field check">
+            <span><input type="checkbox" v-model="settings.musicInVideo" /> Put the song in the video</span>
+            <small v-if="settings.musicInVideo">The render includes the music.</small>
+            <small v-else>Cut to the song, but leave it out, to add the same song in Instagram (which licenses it).</small>
+          </label>
+        </div>
+      </div>
       <label class="field">
         Framing
         <select v-model="settings.fit">
@@ -113,13 +154,20 @@
         {{ reelOn ? '❚❚ Pause' : '▶ Play reel' }} <kbd>Space</kbd>
       </button>
       <span class="mono clock">{{ fmtTime(reelTime ?? 0) }} / {{ fmtTime(reelLength) }}</span>
+      <span v-if="settings.music" class="songtag" :title="settings.music">
+        ♪ {{ settings.music.replace(/\.[^.]+$/, '').replace(/^.*\//, '') }}{{ beatData ? ` · ${Math.round(beatData.bpm)} bpm` : '' }}
+      </span>
       <div class="strip">
         <button
           v-for="p in kept" :key="p.id" class="seg"
           :class="{ current: p === current, playing: reelOn && p === current, photo: p.media.kind === 'photo' }"
-          :style="{ flexGrow: p.length }" :title="`${p.media.file} · ${p.length.toFixed(1)}s`"
+          :style="{ flexGrow: len(p) }" :title="`${p.media.file} · ${len(p).toFixed(1)}s`"
           @click="jumpTo(p)"
-        >{{ p.length.toFixed(1) }}</button>
+        >{{ synced ? `${beatsOf(p)}♩` : len(p).toFixed(1) }}</button>
+        <div
+          v-for="(x, i) in beatTicks" :key="i" class="tick" :class="{ bar: i % 4 === 0 }"
+          :style="{ left: `${x}%` }"
+        ></div>
         <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
       </div>
     </section>
@@ -142,8 +190,8 @@
             :media="p.media" :thumb-time="p.start" :selected="i === selected" :dim="!p.keep"
             :sub="folderTitle(p.media.folder)"
             :chip="(p.media.kind === 'video'
-              ? `${fmtTime(p.start)} → ${fmtTime(p.start + p.length)}  ${p.length.toFixed(1)}s`
-              : `hold ${p.length.toFixed(1)}s`) + (p.lighten ? '  ☀' : '')"
+              ? `${fmtTime(p.start)} → ${fmtTime(p.start + len(p))}  ${len(p).toFixed(1)}s`
+              : `hold ${len(p).toFixed(1)}s`) + (synced ? `  ${beatsOf(p)}♩` : '') + (p.lighten ? '  ☀' : '')"
             @select="select(i)"
           >
             <button
@@ -181,6 +229,7 @@
             </p>
           </ReelFrame>
           <label class="guides-toggle muted"><input type="checkbox" v-model="guides" /> Show Instagram overlays <kbd>G</kbd></label>
+          <audio ref="audioEl" v-if="musicUrl" :src="musicUrl" preload="auto" @ended="onSongEnded"></audio>
           <video
             v-if="reelOn && nextMedia" class="preload" muted preload="auto"
             :src="api.media(nextMedia.folder, nextMedia.file)"
@@ -191,7 +240,7 @@
 
         <template v-if="current.media.kind === 'video' && !current.media.missing">
           <TrimBar
-            :duration="current.media.duration" :start="current.start" :length="current.length"
+            :duration="current.media.duration" :start="current.start" :length="len(current)"
             :playhead="player.playhead.value" :segments="segments"
             :thumb-at="(t) => api.thumb(current.media.folder, current.media.file, t, 160)"
             @update="setRange" @seek="player.seek" @pick="pickSegment"
@@ -207,12 +256,22 @@
         </template>
 
         <TimingFields
-          :kind="current.media.kind" :start="current.start" :length="current.length"
+          :kind="current.media.kind" :start="current.start" :length="len(current)"
           :duration="current.media.duration" @update="setRange"
         >
           <label class="field check">
             <span><input type="checkbox" :checked="current.keep" @change="setKeep(current, $event.target.checked)" /> In the cut <kbd>X</kbd></span>
           </label>
+          <div class="tpick" v-if="synced">
+            <span class="muted">Beats (one beat = {{ period.toFixed(2) }}s)</span>
+            <div>
+              <button
+                v-for="b in BEAT_CHOICES" :key="b" class="btn small" :class="{ active: beatsOf(current) === b }"
+                @click="setBeats(current, b)"
+              >{{ b }}</button>
+              <button class="btn small" @click="beatsAll(beatsOf(current))" :title="`Make every part ${beatsOf(current)} beats`">Use on every part</button>
+            </div>
+          </div>
           <div class="tpick">
             <span class="muted">Lighten <kbd>L</kbd></span>
             <div>
@@ -268,7 +327,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
-import { fitRange, fmtTime, folderTitle, reelColor } from '../time'
+import { fitRange, fmtTime, folderTitle, parseTime, reelColor } from '../time'
 import ClipCard from '../components/ClipCard.vue'
 import ReelFrame from '../components/ReelFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
@@ -300,8 +359,8 @@ const clock = ref(Date.now() / 1000)
 
 const current = computed(() => items.value[selected.value])
 const kept = computed(() => items.value.filter((p) => p.keep && !p.media.missing))
-const reelLength = computed(() => kept.value.reduce((a, p) => a + p.length, 0))
-const player = usePlayer(() => current.value)
+const reelLength = computed(() => bounds.value[bounds.value.length - 1] || 0)
+const player = usePlayer(() => current.value && { start: current.value.start, length: len(current.value) })
 const reelName = (rid) => reels.value.find((r) => r.id === rid)?.name ?? 'reel'
 
 // Other parts of the same clip: elsewhere in this reel, and in other reels.
@@ -338,6 +397,7 @@ onMounted(async () => {
     otherItems.value = data.otherItems
     reels.value = data.reels
     Object.assign(settings, data.settings)
+    loadShelf().then(loadBeats)
     const want = items.value.findIndex((p) => p.id === Number(route.query.item))
     if (want >= 0) selected.value = want
   } catch (e) {
@@ -387,6 +447,10 @@ function pickSegment(segId) {
 
 function setRange({ start, length }) {
   const p = current.value
+  if (synced.value && Math.abs(length - len(p)) > 0.01) {
+    setBeats(p, Math.max(1, Math.round(length / period.value)))
+    length = len(p)
+  }
   const r = p.media.kind === 'video'
     ? fitRange(start, length, p.media.duration)
     : { start: 0, length: Math.max(0.2, Math.round(length * 100) / 100) }
@@ -396,10 +460,10 @@ function setRange({ start, length }) {
 
 function setIn() {
   const p = current.value
-  const end = p.start + p.length
+  const end = p.start + len(p)
   const t = player.playhead.value
   if (end - t >= 0.2) setRange({ start: t, length: end - t })
-  else setRange({ start: t, length: p.length })
+  else setRange({ start: t, length: len(p) })
 }
 
 function setOut() {
@@ -439,7 +503,7 @@ async function remove(p) {
 
 // A second part of the same clip, starting just after this one.
 async function duplicate(p) {
-  const r = fitRange(p.start + p.length, p.length, p.media.duration)
+  const r = fitRange(p.start + len(p), p.length, p.media.duration)
   const item = await api.addItem(id, { mediaId: p.mediaId, ...r, focusX: p.focusX, focusY: p.focusY, lighten: p.lighten })
   const i = items.value.indexOf(p) + 1
   items.value.splice(i, 0, { ...item, media: p.media })
@@ -485,6 +549,18 @@ async function rename() {
   }
 }
 
+async function duplicateReel() {
+  const name = window.prompt('Name for the copy', `${reel.value.name} (copy)`)
+  if (name === null) return
+  try {
+    await saver.flushAll()
+    const r = await api.duplicateReel(id, name.trim())
+    router.push(`/reel/${r.id}`)
+  } catch (e) {
+    window.alert(e.message)
+  }
+}
+
 async function removeReel() {
   if (!window.confirm(`Delete the reel "${reel.value.name}"? Your footage is not touched.`)) return
   await api.deleteReel(id)
@@ -502,6 +578,143 @@ async function doExport() {
     exporting.value = false
   }
 }
+
+// ---------------------------------------------------------------- music & beats
+
+const BEAT_CHOICES = [1, 2, 4, 8]
+const shelf = ref({ tracks: [], dir: '', exists: true, beatDetection: false })
+const beatData = ref(null)
+const analyzing = ref(false)
+const musicError = ref('')
+const audioEl = ref(null)
+const listening = ref(false)
+const songClock = ref(0)
+let songRaf
+
+const shelfHas = (name) => shelf.value.tracks.some((t) => t.name === name)
+const musicUrl = computed(() => (settings.music && shelfHas(settings.music) ? api.musicFile(settings.music) : null))
+const synced = computed(() => !!(settings.music && settings.beatSync && beatData.value && grid.value))
+const clocked = computed(() => !!musicUrl.value)   // play the reel against the song
+
+// Same rule as the engine: time runs from the first beat at/after the song start.
+const grid = computed(() => {
+  const d = beatData.value
+  if (!d || d.beats.length < 4) return null
+  const start = Number(settings.musicStart) || 0
+  const b = d.beats.filter((x) => x >= start - 0.02)
+  if (b.length < 4) return null
+  const first = b[0]
+  const rel = b.map((x) => x - first)
+  const steps = rel.slice(1).map((x, i) => x - rel[i]).sort((a, c) => a - c)
+  const step = steps[Math.floor(steps.length / 2)]
+  return { rel, step, songT0: first }
+})
+const period = computed(() => grid.value?.step || (beatData.value ? 60 / beatData.value.bpm : 0))
+const beatAt = (i) => {
+  const g = grid.value
+  return i < g.rel.length ? g.rel[i] : g.rel[g.rel.length - 1] + (i - g.rel.length + 1) * g.step
+}
+const beatsOf = (p) => p.beats || Number(settings.beatsPerCut) || 4
+
+// Where each kept part starts on the reel's timeline (plus the end).
+const bounds = computed(() => {
+  const out = [0]
+  if (synced.value && grid.value) {
+    let c = 0
+    for (const p of kept.value) { c += beatsOf(p); out.push(beatAt(c)) }
+  } else {
+    for (const p of kept.value) out.push(out[out.length - 1] + p.length)
+  }
+  return out
+})
+// How long a part plays: whole beats when cutting on the beat, else its length.
+function len(p) {
+  if (!p) return 0
+  if (!synced.value) return p.length
+  const k = kept.value.indexOf(p)
+  return k >= 0 ? bounds.value[k + 1] - bounds.value[k] : beatsOf(p) * period.value
+}
+const beatTicks = computed(() => {
+  if (!synced.value || !reelLength.value) return []
+  const out = []
+  for (let i = 1; out.length < 400; i++) {
+    const t = beatAt(i)
+    if (t >= reelLength.value) break
+    out.push((t / reelLength.value) * 100)
+  }
+  return out
+})
+
+function setBeats(p, n) {
+  p.beats = n
+  saver.queue(p.id, { beats: n })
+}
+function beatsAll(n) {
+  for (const p of items.value) if (p.beats !== n) setBeats(p, n)
+}
+function setMusicStart(e) {
+  const t = parseTime(e.target.value)
+  if (!isNaN(t) && t >= 0) settings.musicStart = Math.round(t * 100) / 100
+  e.target.value = fmtTime(settings.musicStart || 0)
+}
+
+async function loadShelf() {
+  try { shelf.value = await api.music() } catch { /* server without music support */ }
+}
+async function loadBeats() {
+  beatData.value = null
+  musicError.value = ''
+  if (!settings.music || !shelfHas(settings.music) || !shelf.value.beatDetection) return
+  analyzing.value = true
+  try {
+    beatData.value = await api.musicBeats(settings.music)
+  } catch (e) {
+    musicError.value = e.message
+  } finally {
+    analyzing.value = false
+  }
+}
+watch(() => settings.music, () => { stopListening(); loadBeats() })
+
+// The song position (seconds into the file) where the reel begins.
+const songT0 = computed(() => (synced.value && grid.value ? grid.value.songT0 : Number(settings.musicStart) || 0))
+
+function startSong(at) {
+  const a = audioEl.value
+  if (!a) return
+  a.volume = Math.min(1, Math.max(0, Number(settings.musicVolume ?? 0.8)))
+  a.currentTime = songT0.value + at
+  a.play().catch(() => {})
+  cancelAnimationFrame(songRaf)
+  const tick = () => {
+    if (!reelOn.value) return
+    const t = a.currentTime - songT0.value
+    songClock.value = t
+    const end = bounds.value[reelIdx.value + 1]
+    if (end !== undefined && t >= end) startPart(reelIdx.value + 1)
+    songRaf = requestAnimationFrame(tick)
+  }
+  songRaf = requestAnimationFrame(tick)
+}
+function onSongEnded() {
+  if (reelOn.value) { stopReel(); restart = true }
+  listening.value = false
+}
+function listen() {
+  const a = audioEl.value
+  if (!a) return
+  if (listening.value) return stopListening()
+  stopReel()
+  a.volume = Math.min(1, Math.max(0, Number(settings.musicVolume ?? 0.8)))
+  a.currentTime = songT0.value
+  a.play().catch(() => {})
+  listening.value = true
+}
+function stopListening() {
+  if (listening.value) audioEl.value?.pause()
+  listening.value = false
+}
+onBeforeUnmount(() => { cancelAnimationFrame(songRaf); audioEl.value?.pause() })
 
 // ---------------------------------------------------------------- transitions
 
@@ -560,13 +773,14 @@ const photoT = ref(0)
 const effect = ref(null)   // the transition to preview into the part now playing
 let photoTimer, photoTick, restart = false
 
-const offsetOf = (k) => kept.value.slice(0, k).reduce((a, p) => a + p.length, 0)
+const offsetOf = (k) => bounds.value[k] || 0
 const reelTime = computed(() => {
+  if (reelOn.value && clocked.value) return songClock.value
   const k = kept.value.indexOf(current.value)
   if (k < 0) return null
   const p = current.value
   const within = p.media.kind === 'video'
-    ? Math.min(Math.max(player.playhead.value - p.start, 0), p.length)
+    ? Math.min(Math.max(player.playhead.value - p.start, 0), len(p))
     : (reelOn.value ? photoT.value : 0)
   return offsetOf(k) + within
 })
@@ -601,10 +815,11 @@ function startPart(k) {
   if (v && !sameClip) v.pause()
   select(items.value.indexOf(p), true)
   if (p.media.kind !== 'video' || p.media.missing) {
+    if (clocked.value) return      // the song's clock moves us on
     photoT.value = 0
     const t0 = performance.now()
-    photoTick = setInterval(() => { photoT.value = Math.min(p.length, (performance.now() - t0) / 1000) }, 50)
-    photoTimer = setTimeout(() => startPart(k + 1), p.length * 1000)
+    photoTick = setInterval(() => { photoT.value = Math.min(len(p), (performance.now() - t0) / 1000) }, 50)
+    photoTimer = setTimeout(() => startPart(k + 1), len(p) * 1000)
   } else if (sameClip && v && v.readyState > 0) {
     player.seek(p.start)
     v.play().catch(() => {})
@@ -618,10 +833,10 @@ function onFrameLoaded() {
 
 // Move on when the playing part reaches its end.
 watch(() => player.playhead.value, (t) => {
-  if (!reelOn.value) return
+  if (!reelOn.value || clocked.value) return
   const p = kept.value[reelIdx.value]
   const v = player.video.value
-  if (p && p === current.value && p.media.kind === 'video' && v && !v.paused && t >= p.start + p.length) {
+  if (p && p === current.value && p.media.kind === 'video' && v && !v.paused && t >= p.start + len(p)) {
     startPart(reelIdx.value + 1)
   }
 })
@@ -637,6 +852,8 @@ function playReel() {
   if (restart) k = 0
   restart = false
   reelOn.value = true
+  stopListening()
+  if (clocked.value) startSong(offsetOf(k))
   startPart(k)
 }
 
@@ -645,13 +862,18 @@ function stopReel() {
   reelOn.value = false
   clearPhoto()
   player.video.value?.pause()
+  audioEl.value?.pause()
+  cancelAnimationFrame(songRaf)
 }
 
 const toggleReel = () => (reelOn.value ? stopReel() : playReel())
 
 function jumpTo(p) {
-  if (reelOn.value) startPart(kept.value.indexOf(p))
-  else select(items.value.indexOf(p))
+  if (reelOn.value) {
+    const k = kept.value.indexOf(p)
+    if (clocked.value) startSong(offsetOf(k))
+    startPart(k)
+  } else select(items.value.indexOf(p))
 }
 
 function playThisPart() {
@@ -759,6 +981,20 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .row.playing :deep(.clip) { border-color: var(--forest); box-shadow: 0 0 0 2px var(--forest); }
 .row.playing .num { color: var(--forest); font-size: 13px; }
 .preload { display: none; }
+.music { grid-column: 1 / -1; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
+.music h3 { margin: 0 0 8px; }
+.musicrow { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; }
+.musicrow .field { min-width: 160px; }
+.musicrow .field select { min-width: 260px; }
+.small { font-size: 12px; margin: 8px 0; }
+.warn { color: #9b3b2e; }
+.note { background: var(--sage-soft); padding: 6px 10px; border-radius: 6px; font-size: 13px; }
+.songtag {
+  flex: none; font-size: 12px; color: var(--forest); background: var(--sage-soft);
+  border-radius: 999px; padding: 2px 10px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tick { position: absolute; bottom: -6px; width: 1px; height: 4px; background: var(--muted); pointer-events: none; }
+.tick.bar { height: 7px; bottom: -9px; background: var(--forest); }
 .row { flex-wrap: wrap; }
 .tpill {
   margin: 2px 0 4px 64px; padding: 1px 10px; font-size: 11px; font-weight: 600; cursor: pointer;

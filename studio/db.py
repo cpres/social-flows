@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS reel_items (
     focus_x  REAL NOT NULL DEFAULT 0.5,     -- where the 9:16 window sits in the frame
     focus_y  REAL NOT NULL DEFAULT 0.5,     -- (0 = left/top, 1 = right/bottom)
     transition TEXT NOT NULL DEFAULT '',    -- into the next part; '' = reel default
-    lighten  REAL NOT NULL DEFAULT 0        -- 0..1, lifts shadows and midtones
+    lighten  REAL NOT NULL DEFAULT 0,       -- 0..1, lifts shadows and midtones
+    beats    INTEGER NOT NULL DEFAULT 0     -- with beat sync: beats long; 0 = reel default
 );
 CREATE INDEX IF NOT EXISTS items_reel ON reel_items(reel_id, position);
 CREATE INDEX IF NOT EXISTS items_media ON reel_items(media_id);
@@ -68,9 +69,12 @@ CREATE INDEX IF NOT EXISTS items_media ON reel_items(media_id);
 DEFAULT_SETTINGS = {
     "defaultLength": 2.0,   # seconds per video cut
     "defaultHold": 1.6,     # seconds per photo
-    "music": "",
-    "beatSync": False,      # when on, the engine uses beats and ignores lengths
-    "beatsPerCut": 2,
+    "music": "",            # a track on the music shelf (or a path)
+    "musicStart": 0.0,      # where in the song the reel starts (seconds)
+    "musicVolume": 0.8,
+    "musicInVideo": True,   # False: cut to the song but leave it out (add it in Instagram)
+    "beatSync": False,      # when on, parts are whole beats long
+    "beatsPerCut": 4,       # default beats per part
     "fit": "fill",
     "transition": "cut",    # between parts, unless a part picks its own
     "originalAudio": False,  # glasses audio off unless a reel turns it on
@@ -202,7 +206,8 @@ def migrate(db):
                              ("reel_items", "focus_x", "REAL NOT NULL DEFAULT 0.5"),
                              ("reel_items", "focus_y", "REAL NOT NULL DEFAULT 0.5"),
                              ("reel_items", "transition", "TEXT NOT NULL DEFAULT ''"),
-                             ("reel_items", "lighten", "REAL NOT NULL DEFAULT 0")]:
+                             ("reel_items", "lighten", "REAL NOT NULL DEFAULT 0"),
+                             ("reel_items", "beats", "INTEGER NOT NULL DEFAULT 0")]:
         if col not in have[table]:
             db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 

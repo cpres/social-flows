@@ -40,6 +40,15 @@ if [ ! -f .venv/.installed ] || [ requirements.txt -nt .venv/.installed ]; then
   .venv/bin/python -m pip install --quiet -r requirements.txt
   touch .venv/.installed
 fi
+# Beat detection for music (large; optional, so a failure doesn't stop the studio).
+if [ ! -f .venv/.music-installed ] || [ requirements-music.txt -nt .venv/.music-installed ]; then
+  echo "Installing beat detection (librosa) ..."
+  if .venv/bin/python -m pip install --quiet -r requirements-music.txt; then
+    touch .venv/.music-installed
+  else
+    echo "  (beat detection didn't install; music still plays, but beat sync is off)" >&2
+  fi
+fi
 
 # Build the web app when it's missing or the source changed.
 if [ ! -f web/dist/index.html ] || [ -n "$(find web/src web/index.html web/package.json -newer web/dist/index.html -print -quit)" ]; then

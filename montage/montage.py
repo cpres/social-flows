@@ -101,15 +101,44 @@ def run(cmd):
 
 # ---------------------------------------------------------------- music / beats
 
+def music_path(cfg, base_dir):
+    """The music file: absolute, ~/..., or relative to the config file."""
+    path = Path(cfg["music"]).expanduser()
+    return path if path.is_absolute() else base_dir / path
+
+
+def beat_grid(beats, music_start):
+    """Beats (song time) -> times from the first beat at/after music_start."""
+    beats = [b - music_start for b in beats if b >= music_start - 0.02]
+    if len(beats) < 4:
+        sys.exit("Couldn't find a steady beat after music_start. Set bpm: in the "
+                 "config or beat_sync: false.")
+    first = beats[0]
+    beats = [b - first for b in beats]
+    steps = sorted(b - a for a, b in zip(beats, beats[1:]))
+    step = steps[len(steps) // 2]
+    while len(beats) < 4000:  # extend past the end of the song if needed
+        beats.append(beats[-1] + step)
+    return beats, music_start + first, 60.0 / step
+
+
 def load_beats(cfg, base_dir):
     """Return (beat_times starting at 0, adjusted music_start) or (None, start)."""
     music_start = parse_time(cfg.get("music_start", 0))
     if not cfg.get("music") or not cfg.get("beat_sync", True):
         return None, music_start
 
-    path = (base_dir / cfg["music"]).expanduser()
+    path = music_path(cfg, base_dir)
     if not path.exists():
         sys.exit(f"Music file not found: {path}")
+
+    # Beats already detected for the whole song (Footage Studio caches them),
+    # so the preview and the render cut on exactly the same beats.
+    if cfg.get("beat_file"):
+        data = json.loads(Path(cfg["beat_file"]).expanduser().read_text())
+        beats, start, bpm = beat_grid(data["beats"], music_start)
+        print(f"  beat grid: ~{bpm:.0f} bpm (from {Path(cfg['beat_file']).name})")
+        return beats, start
 
     if cfg.get("bpm"):
         period = 60.0 / float(cfg["bpm"])
@@ -514,7 +543,9 @@ def assemble(segs, plan, cfg, workdir):
 
 
 def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output):
-    music = cfg.get("music")
+    # music_in_video: false times the cuts to the song but leaves it out of the
+    # file, for adding the same song in Instagram (which licenses it).
+    music = cfg.get("music") if cfg.get("music_in_video", True) else None
     common = ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
               "-movflags", "+faststart", "-t", f"{total_len:.3f}", str(output)]
 
@@ -524,7 +555,7 @@ def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output)
              "-map", "0:v", *audio, *common])
         return
 
-    music_path = (base_dir / music).expanduser()
+    music_file = music_path(cfg, base_dir)
     music_vol = float(cfg.get("music_volume", 1.0))
     fade = min(float(cfg.get("music_fade_out", 2.0)), total_len / 3)
     music_chain = (f"[1:a]aformat=sample_rates=48000:channel_layouts=stereo,"
@@ -541,7 +572,7 @@ def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output)
 
     run(["ffmpeg", "-y", "-v", "error",
          "-i", str(assembled),
-         "-ss", f"{music_start:.3f}", "-i", str(music_path),
+         "-ss", f"{music_start:.3f}", "-i", str(music_file),
          "-filter_complex", graph, "-map", "0:v", "-map", "[a]", *common])
 
 
@@ -605,7 +636,10 @@ def main():
         print("  mixing sound...                         ", end="\r")
         finish(assembled, cfg, base_dir, music_start, total, keep_audio, output)
 
-    print(f"Done: {output}                          \n")
+    print(f"Done: {output}                          ")
+    if cfg.get("music") and not cfg.get("music_in_video", True):
+        print(f"Song left out; add it in Instagram starting at {fmt(music_start)}")
+    print()
 
 
 if __name__ == "__main__":
