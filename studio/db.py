@@ -212,6 +212,32 @@ def migrate(db):
                              ("reel_items", "zoom", "REAL NOT NULL DEFAULT 1")]:
         if col not in have[table]:
             db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+    # v1: photo sizes now honour EXIF rotation; re-measure photos once.
+    if db.execute("PRAGMA user_version").fetchone()[0] < 1:
+        db.execute("UPDATE media SET width = 0 WHERE kind = 'photo'")
+        db.execute("PRAGMA user_version = 1")
+
+
+def photo_rotation(path):
+    """A phone photo's EXIF orientation, as degrees. ffprobe only reports it
+    on the decoded frame, not the stream, but ffmpeg (thumbnails, render)
+    applies it, so the size we store has to as well."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_frames",
+             "-read_intervals", "%+#1", "-show_entries", "frame_side_data=rotation:frame_tags=Orientation",
+             "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=30).stdout
+        frame = (json.loads(out or "{}").get("frames") or [{}])[0]
+        for sd in frame.get("side_data_list") or []:
+            if "rotation" in sd:
+                return sd["rotation"]
+        orient = str((frame.get("tags") or {}).get("Orientation", "")).strip()
+        if orient in ("5", "6", "7", "8"):   # EXIF: the four sideways orientations
+            return 90
+    except Exception:
+        pass
+    return None
 
 
 def probe(path):
@@ -241,6 +267,8 @@ def probe(path):
         for sd in stream.get("side_data_list") or []:
             if "rotation" in sd:
                 rotation = sd["rotation"]
+        if rotation is None and Library.kind_of(path) == "photo":
+            rotation = photo_rotation(path)
         if rotation is not None and abs(int(float(rotation))) % 180 == 90:
             w, h = h, w
         info["width"], info["height"] = w, h

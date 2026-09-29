@@ -77,9 +77,11 @@ const Guides = () => h('div', { class: 'guides' }, [
 
 // Size as seen (the server applies rotation); fall back to the file itself.
 const natural = reactive({ w: 0, h: 0 })
+// Once the image or video has loaded, trust what the browser shows (it
+// applies rotation flags); until then use the size the server measured.
 const aspect = computed(() => {
-  const w = props.media.width || natural.w
-  const hgt = props.media.height || natural.h
+  const w = natural.w || props.media.width
+  const hgt = natural.h || props.media.height
   return w && hgt ? w / hgt : OUT
 })
 function onMeta(e) {
