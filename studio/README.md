@@ -115,6 +115,15 @@ snaps each cut to `beats_per_cut` beats instead, ignoring per-clip lengths.
 **Playback.** If a clip won't preview in Chrome it's probably HEVC; Safari
 plays it. Thumbnails, trimming and rendering work either way.
 
+**Renders & Send to phone:** the *Renders* page (top bar) lists every
+finished video in `~/Movies/Footage Studio/`, newest first, even after a
+restart. Play it again, show it in Finder, or **Send to phone**: scan the QR
+code with your phone (on the same Wi-Fi) and it downloads the video, ready to
+post from the Instagram app with its music library. Only that one video is
+shared, over a private link that expires after an hour, on port 3010
+(`SHARE_PORT`); the rest of the studio stays on this Mac. The first time,
+macOS may ask whether Python may accept incoming connections: allow it.
+
 **Themes:** Light (cream), Grey (cool grey) or Dark, from the switch in the top bar. It's remembered, and until you pick one it follows your Mac's dark mode.
 
 Thumbnails are cached in `~/.cache/footage-studio/`.

@@ -39,11 +39,14 @@
           <p class="muted">Took {{ Math.round(job.finishedAt - job.startedAt) }}s.</p>
           <p v-if="job.note" class="note">🎵 {{ job.note }}</p>
           <div class="controls">
-            <button class="btn primary" @click="api.reveal(job.id)">Show in Finder</button>
+            <button class="btn primary" @click="sending = job.output.split('/').pop()">Send to phone</button>
+            <button class="btn" @click="api.reveal(job.id)">Show in Finder</button>
             <button class="btn" @click="job = null">Close</button>
           </div>
+          <p class="muted small"><RouterLink to="/renders">All renders →</RouterLink></p>
         </div>
       </div>
+      <SendToPhone v-if="sending" :name="sending" @close="sending = null" />
       <template v-else>
         <h3>Render failed</h3>
         <pre class="log">{{ job.log.join('\n') }}</pre>
@@ -329,6 +332,7 @@ import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
 import { fitRange, fmtTime, folderTitle, parseTime, reelColor } from '../time'
 import ClipCard from '../components/ClipCard.vue'
+import SendToPhone from '../components/SendToPhone.vue'
 import ReelFrame from '../components/ReelFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
 import TrimBar from '../components/TrimBar.vue'
@@ -355,6 +359,7 @@ const dragFrom = ref(null)
 const dragOver = ref(null)
 const guides = ref(false)
 const job = ref(null)
+const sending = ref(null)   // render file name being sent to the phone
 const clock = ref(Date.now() / 1000)
 
 const current = computed(() => items.value[selected.value])

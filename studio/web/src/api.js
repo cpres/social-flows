@@ -32,6 +32,13 @@ export const api = {
   renderStatus: (jobId) => fetch(`/api/renders/${jobId}`).then(json),
   renderVideo: (jobId) => `/api/renders/${jobId}/video`,
   reveal: (jobId) => send('POST', `/api/renders/${jobId}/reveal`),
+
+  // Every finished video in the renders folder (survives restarts).
+  rendered: () => fetch('/api/rendered').then(json),
+  renderedFile: (name) => `/api/rendered/${enc(name)}/file`,
+  renderedThumb: (name, v = '') => `/api/rendered/${enc(name)}/thumb?v=${v}`,
+  revealRendered: (name) => send('POST', `/api/rendered/${enc(name)}/reveal`),
+  shareRendered: (name) => send('POST', `/api/rendered/${enc(name)}/share`),
   duplicateReel: (id, name) => send('POST', `/api/reels/${id}/duplicate`, { name }),
   music: () => fetch('/api/music').then(json),
   musicBeats: (name) => fetch(`/api/music/${enc(name)}/beats`).then(json),

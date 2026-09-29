@@ -80,6 +80,10 @@ button, input, select { font: inherit; color: inherit; }
 }
 .root { font-size: 13px; opacity: 0.7; font-family: ui-monospace, monospace; margin-left: auto; }
 .themes.alone { margin-left: auto; }
+.nav { display: flex; gap: 4px; margin-left: 12px; }
+.nav a { font-size: 14px; padding: 4px 10px; border-radius: 8px; opacity: 0.75; }
+.nav a:hover { opacity: 1; background: rgb(255 255 255 / 8%); }
+.nav a.on { opacity: 1; background: rgb(255 255 255 / 14%); font-weight: 600; }
 .themes { display: flex; gap: 2px; padding: 2px; border-radius: 999px; background: rgb(255 255 255 / 10%); }
 .themes button {
   border: 0; background: transparent; color: inherit; font-size: 12px; padding: 3px 10px;

@@ -3,6 +3,10 @@
     <RouterLink to="/" class="brand">
       <span class="logo">▶</span> Footage Studio
     </RouterLink>
+    <nav class="nav">
+      <RouterLink to="/" :class="{ on: $route.path === '/' }">Reels &amp; shoots</RouterLink>
+      <RouterLink to="/renders" :class="{ on: $route.path === '/renders' }">Renders</RouterLink>
+    </nav>
     <span class="root" v-if="root">{{ root }}</span>
     <div class="themes" :class="{ alone: !root }" role="group" aria-label="Theme">
       <button

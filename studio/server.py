@@ -48,6 +48,7 @@ sys.path.insert(0, str(ENGINE.parent))
 sys.path.insert(0, str(HERE))
 from db import DEFAULT_SETTINGS, Library, default_start, now, settings_of  # noqa: E402
 from music import Shelf, beat_detection_available  # noqa: E402
+from share import Shares  # noqa: E402
 
 ROOT = Path(os.environ.get("FOOTAGE_DIR", "~/Footage")).expanduser().resolve()
 RENDERS = Path(os.environ.get("RENDER_DIR", "~/Movies/Footage Studio")).expanduser()
@@ -58,6 +59,8 @@ TRANSITIONS = ("", "cut", "flash", "whip", "zoom", "dissolve", "dip")   # per-fo
 
 lib = Library(ROOT)
 shelf = Shelf(os.environ.get("MUSIC_DIR", "~/Music/Reels"), lib.home / "music")
+shares = Shares(port=int(os.environ.get("SHARE_PORT", 3010)),
+                ttl=int(os.environ.get("SHARE_TTL", 3600)))
 ITEM_COLUMNS = ("media_id", "position", "start", "length", "keep", "focus_x", "focus_y",
                 "transition", "lighten", "beats", "zoom")
 app = FastAPI(title="Footage Studio")
@@ -629,12 +632,101 @@ def reveal(job_id: str):
     job = jobs.get(job_id)
     if not job or job["status"] != "done":
         raise HTTPException(404)
-    if sys.platform == "darwin":
-        subprocess.Popen(["open", "-R", job["output"]])
-    else:
-        subprocess.Popen(["xdg-open", str(Path(job["output"]).parent)],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    reveal_file(Path(job["output"]))
     return {"ok": True}
+
+
+def reveal_file(path):
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path.parent)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+# ---------------------------------------------------------------- finished videos
+# Everything in the renders folder, whether rendered today or last week, so
+# you can play it again, reveal it, or send it to your phone later.
+
+def rendered_path(name):
+    path = (RENDERS / name).resolve()
+    if path.parent != RENDERS.resolve() or path.suffix.lower() != ".mp4" or not path.exists():
+        raise HTTPException(404, "No such video")
+    return path
+
+
+@app.get("/api/rendered")
+def list_rendered():
+    if not RENDERS.is_dir():
+        return {"dir": str(RENDERS), "videos": []}
+    with lib.connect() as db:
+        by_slug = {slug(r["name"]): {"id": r["id"], "name": r["name"]}
+                   for r in db.execute("SELECT id, name FROM reels")}
+    videos = []
+    for p in RENDERS.iterdir():
+        if p.suffix.lower() != ".mp4" or p.name.startswith("."):
+            continue
+        st = p.stat()
+        videos.append({"name": p.name, "size": st.st_size, "modified": st.st_mtime,
+                       "duration": duration_of(p), "reel": by_slug.get(p.stem)})
+    videos.sort(key=lambda v: v["modified"], reverse=True)
+    return {"dir": str(RENDERS), "videos": videos}
+
+
+_durations = {}
+
+
+def duration_of(path):
+    key = (str(path), path.stat().st_mtime)
+    if key not in _durations:
+        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                              "-of", "csv=p=0", str(path)], capture_output=True, text=True).stdout
+        try:
+            _durations[key] = round(float(out.strip()), 1)
+        except ValueError:
+            _durations[key] = 0.0
+    return _durations[key]
+
+
+@app.get("/api/rendered/{name}/file")
+def rendered_file(name: str):
+    return FileResponse(rendered_path(name))
+
+
+@app.get("/api/rendered/{name}/thumb")
+def rendered_thumb(name: str):
+    path = rendered_path(name)
+    key = hashlib.sha1(f"render|{path}|{path.stat().st_mtime}".encode()).hexdigest()
+    out = CACHE / f"{key}.jpg"
+    if not out.exists():
+        CACHE.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", "0.5", "-i", str(path),
+                        "-frames:v", "1", "-vf", "scale=240:-2", "-q:v", "4", str(out)],
+                       capture_output=True, timeout=60)
+        if not out.exists():
+            raise HTTPException(500, "Could not make a thumbnail")
+    return FileResponse(out, headers={"Cache-Control": "max-age=86400"})
+
+
+@app.post("/api/rendered/{name}/reveal")
+def rendered_reveal(name: str):
+    reveal_file(rendered_path(name))
+    return {"ok": True}
+
+
+@app.post("/api/rendered/{name}/share")
+def rendered_share(name: str):
+    """A QR-able link on your home network that downloads this one video."""
+    path = rendered_path(name)
+    with lib.connect() as db:
+        titles = {slug(r["name"]): r["name"] for r in db.execute("SELECT name FROM reels")}
+    try:
+        url, expires = shares.add(path, titles.get(path.stem, path.stem))
+    except OSError as e:
+        raise HTTPException(503, f"Couldn't open the sharing port {shares.port}: {e}")
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    return {"url": url, "expiresAt": expires, "minutes": round(shares.ttl / 60)}
 
 
 # ---------------------------------------------------------------- files
