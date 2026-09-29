@@ -10,7 +10,7 @@ music_start: 0:00         # start the song partway in
 music_volume: 1.0
 music_fade_out: 2.0       # seconds of fade at the end
 
-original_audio: true      # keep glasses audio (birds, shovel, water)...
+original_audio: false     # true keeps glasses audio (birds, shovel, water)...
 original_volume: 0.35     # ...quietly under the music
 
 beat_sync: true           # cuts land on the music's beats

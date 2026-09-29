@@ -532,7 +532,7 @@ def main():
     if args.dry_run:
         return
 
-    keep_audio = bool(cfg.get("original_audio", True))
+    keep_audio = bool(cfg.get("original_audio", False))
     output = (base_dir / cfg.get("output", "montage.mp4")).expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
 

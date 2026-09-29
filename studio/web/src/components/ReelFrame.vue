@@ -8,7 +8,7 @@
       <div class="media" :style="mediaStyle">
         <video
           v-if="media.kind === 'video'" :ref="bindVideo" :src="api.media(media.folder, media.file)"
-          preload="auto" playsinline @loadedmetadata="onMeta" @play="$emit('play')" @pause="$emit('pause')"
+          preload="auto" playsinline :muted="muted" @loadedmetadata="onMeta" @play="$emit('play')" @pause="$emit('pause')"
           @error="$emit('error')" @click="$emit('toggle')"
         ></video>
         <img v-else :src="api.thumb(media.folder, media.file, 0, 1080)" alt="" @load="onImg" />
@@ -42,6 +42,7 @@ const props = defineProps({
   focusX: { type: Number, default: 0.5 },
   focusY: { type: Number, default: 0.5 },
   guides: Boolean,                                  // show where Instagram's UI covers
+  muted: Boolean,                                   // matches whether the reel keeps clip audio
   posterTime: { type: Number, default: 0 },
   bindVideo: { type: Function, default: () => {} },
 })

@@ -68,7 +68,7 @@ folder are pointed at the original, so the copies can be deleted afterwards.
 Trims made with the first version of the studio (`.studio.json`) are carried
 over the same way.
 
-Keys: `Space` play · `Enter` loop the part · `I`/`O` start/end at playhead ·
+Keys: `Space` play the selection (stops at its end) · `Enter` play/pause the whole clip · `I`/`O` start/end at playhead ·
 `←`/`→` nudge start (Shift = 1s) · `↑`/`↓` previous/next · `1`–`9` add to reel
 (shoot view) · `X` keep/skip (reel view).
 
