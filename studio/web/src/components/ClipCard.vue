@@ -49,13 +49,13 @@ watch(() => props.thumbTime, (t) => {
 
 <style scoped>
 .clip {
-  display: grid; grid-template-columns: 96px 1fr auto; gap: 10px; align-items: center;
+  display: grid; grid-template-columns: 58px 1fr auto; gap: 10px; align-items: center;
   padding: 8px; border-radius: 10px; cursor: pointer; border: 1px solid transparent;
 }
 .clip:hover { background: var(--paper); }
 .clip.selected { background: var(--paper); border-color: var(--sage); box-shadow: var(--shadow); }
 .clip.dim .thumb, .clip.dim .info { opacity: 0.4; }
-.thumb { position: relative; aspect-ratio: 16 / 10; border-radius: 6px; overflow: hidden; background: var(--forest); }
+.thumb { position: relative; aspect-ratio: 3 / 4; border-radius: 6px; overflow: hidden; background: var(--forest); }
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .gone { display: grid; place-items: center; height: 100%; color: var(--cream); font-size: 11px; }
 .dur {

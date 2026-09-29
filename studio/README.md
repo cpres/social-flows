@@ -44,9 +44,18 @@ python3 studio/server.py --open
 - **Open a reel** to see its parts from every shoot. Drag to reorder (or *Sort by
   shot time*), fine-tune each part's start and length, skip parts without
   removing them, and set music, beat sync and framing under *Settings*.
-- **Export & preview cut list** writes `~/Footage/.studio/reels/<reel>.yaml` and
-  shows `montage.py --dry-run`'s output, plus the command to render. Videos go
-  to `~/Movies/Footage Studio/` (set `RENDER_DIR` to change).
+- **Render video** runs the montage engine for you, with a progress bar, then
+  plays the result in the page. *Show in Finder* jumps to the file. Videos go to
+  `~/Movies/Footage Studio/` (set `RENDER_DIR` to change). *Preview cut list*
+  shows the engine's dry run first if you want to check timings.
+
+**Portrait & framing.** Reels are 1080×1920 (9:16). The preview shows each clip
+as it will appear in the reel. When a clip isn't exactly 9:16 (glasses footage
+is often 3:4), the part the reel keeps is outlined and the rest dimmed. Drag
+that window to keep the subject in frame; it's saved per part, so the same clip
+can be framed differently in different reels. Press `G` to see where Instagram's
+caption and buttons will cover the picture. Files stored sideways with a
+rotation flag (common from phones) are handled.
 
 Everything is stored in one SQLite file, `~/Footage/.studio/studio.db`
 (no database server to run). Files are never copied or moved. If you rename a
@@ -67,8 +76,8 @@ Keys: `Space` play · `Enter` loop the part · `I`/`O` start/end at playhead ·
 lengths are used exactly. Turn beat sync on in *Settings* and the engine
 snaps each cut to `beats_per_cut` beats instead, ignoring per-clip lengths.
 
-**Playback.** Chrome can't play HEVC; if smart-glasses `.mov` files don't
-preview, use Safari. Thumbnails and trimming work either way.
+**Playback.** If a clip won't preview in Chrome it's probably HEVC; Safari
+plays it. Thumbnails, trimming and rendering work either way.
 
 Thumbnails are cached in `~/.cache/footage-studio/`.
 

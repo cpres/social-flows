@@ -27,19 +27,23 @@
       </aside>
 
       <section class="editor" v-if="current">
-        <div class="stage">
-          <video
-            v-if="current.kind === 'video'" :ref="(el) => (player.video.value = el)"
-            :src="api.media(current.folder, current.file)" preload="auto" playsinline
-            @loadedmetadata="onLoaded" @play="player.events.onPlay" @pause="player.events.onPause"
-            @error="player.events.onError" @click="player.toggle"
-          ></video>
-          <img v-else :src="api.thumb(current.folder, current.file, 0, 1280)" alt="" />
-          <p v-if="player.failed.value" class="unplayable">
-            This browser can't play this file's codec (HEVC <code>.mov</code> often won't play in Chrome — try Safari).
-            Thumbnails and trimming still work.
-          </p>
+        <div class="preview-col">
+          <ReelFrame
+            :key="current.id" :media="current" fit="fill" :guides="guides"
+            :focus-x="range.focusX ?? 0.5" :focus-y="range.focusY ?? 0.5" :poster-time="range.start"
+            :bind-video="(el) => (player.video.value = el)"
+            @loaded="onLoaded" @play="player.events.onPlay" @pause="player.events.onPause"
+            @error="player.events.onError" @toggle="player.toggle" @focus="setFocus"
+          >
+            <p v-if="player.failed.value" class="unplayable">
+              This browser can't play this file's codec (HEVC often won't play in Chrome — try Safari).
+              Thumbnails and trimming still work.
+            </p>
+          </ReelFrame>
+          <label class="guides-toggle muted"><input type="checkbox" v-model="guides" /> Show Instagram overlays <kbd>G</kbd></label>
         </div>
+
+        <div class="edit-col">
 
         <p v-if="active" class="editing" :style="{ borderColor: reelColor(active.reelId) }">
           Editing its part in <b>{{ reelName(active.reelId) }}</b> — changes save as you go.
@@ -103,8 +107,9 @@
         <p class="muted keys">
           <kbd>Space</kbd> play · <kbd>Enter</kbd> play selection · <kbd>I</kbd>/<kbd>O</kbd> start/end at playhead ·
           <kbd>←</kbd>/<kbd>→</kbd> nudge 0.1s · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next ·
-          <kbd>1</kbd>–<kbd>9</kbd> add to reel
+          <kbd>1</kbd>–<kbd>9</kbd> add to reel · <kbd>G</kbd> Instagram overlays
         </p>
+        </div>
       </section>
     </div>
     <p v-else class="muted">No clips or photos in this folder.</p>
@@ -118,6 +123,7 @@ import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
 import { clockTime, defaultStart, fitRange, fmtTime, folderTitle, reelColor } from '../time'
 import ClipCard from '../components/ClipCard.vue'
+import ReelFrame from '../components/ReelFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
 import TrimBar from '../components/TrimBar.vue'
 
@@ -153,9 +159,10 @@ const segments = computed(() =>
 // A fresh selection per clip, where the engine would cut by default.
 function initDraft(m) {
   const length = m.kind === 'video' ? Math.min(1.5, m.duration || 1.5) : 1.6
-  drafts[m.id] = { start: m.kind === 'video' ? defaultStart(m.duration, length) : 0, length }
+  drafts[m.id] = { start: m.kind === 'video' ? defaultStart(m.duration, length) : 0, length, focusX: 0.5, focusY: 0.5 }
 }
-const draftOf = (m) => (m && drafts[m.id]) || { start: 0, length: 1.5 }
+const draftOf = (m) => (m && drafts[m.id]) || { start: 0, length: 1.5, focusX: 0.5, focusY: 0.5 }
+const guides = ref(false)
 
 const saver = debouncedSaver((id, patch) => api.updateItem(id, patch))
 
@@ -213,6 +220,17 @@ function setRange({ start, length }) {
   }
 }
 
+// Where the 9:16 window sits in a frame that isn't 9:16.
+function setFocus({ x, y }) {
+  const patch = { focusX: x, focusY: y }
+  if (active.value) {
+    Object.assign(active.value, patch)
+    saver.queue(active.value.id, patch)
+  } else {
+    Object.assign(draftOf(current.value), patch)
+  }
+}
+
 function setIn() {
   const r = range.value
   const end = r.start + r.length
@@ -236,7 +254,9 @@ async function tag(reel) {
   }
   const r = draftOf(m)
   try {
-    const item = await api.addItem(reel.id, { mediaId: m.id, start: r.start, length: r.length })
+    const item = await api.addItem(reel.id, {
+      mediaId: m.id, start: r.start, length: r.length, focusX: r.focusX, focusY: r.focusY,
+    })
     items.value.push(item)
     showFlash(`Added to ${reel.name}`)
   } catch (e) {
@@ -295,6 +315,7 @@ function onKey(e) {
   else if (k === 'ArrowLeft' && video) { setRange({ ...range.value, start: range.value.start - (e.shiftKey ? 1 : 0.1) }); player.seek(range.value.start) }
   else if (k === 'ArrowRight' && video) { setRange({ ...range.value, start: range.value.start + (e.shiftKey ? 1 : 0.1) }); player.seek(range.value.start) }
   else if (k === 'Escape') activeId.value = null
+  else if (k === 'g' || k === 'G') guides.value = !guides.value
   else if (/^[1-9]$/.test(k) && !active.value && reels.value[Number(k) - 1]) tag(reels.value[Number(k) - 1])
   else return
   e.preventDefault()

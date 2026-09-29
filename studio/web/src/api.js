@@ -27,6 +27,11 @@ export const api = {
   deleteReel: (id) => send('DELETE', `/api/reels/${id}`),
   reorder: (id, itemIds) => send('PUT', `/api/reels/${id}/order`, { itemIds }),
   exportReel: (id) => send('POST', `/api/reels/${id}/export`),
+  render: (id) => send('POST', `/api/reels/${id}/render`),
+  lastRender: (id) => fetch(`/api/reels/${id}/render`).then(json),
+  renderStatus: (jobId) => fetch(`/api/renders/${jobId}`).then(json),
+  renderVideo: (jobId) => `/api/renders/${jobId}/video`,
+  reveal: (jobId) => send('POST', `/api/renders/${jobId}/reveal`),
 
   addItem: (reelId, item) => send('POST', `/api/reels/${reelId}/items`, item),
   updateItem: (id, patch) => send('PATCH', `/api/items/${id}`, patch),

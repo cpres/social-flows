@@ -280,7 +280,7 @@ def build_plan(cfg, base_dir, beats):
             if src["_is_image"]:
                 if r in rounds_for_image(src, total_rounds):
                     plan.append({"kind": "image", "path": src["_path"], "label": label,
-                                 "round": r, "start": 0.0,
+                                 "round": r, "start": 0.0, "focus": src.get("focus", (0.5, 0.5)),
                                  "seconds": float(src.get("hold", default_hold)),
                                  "beats": int(src.get("hold_beats", beats_per_cut * 2))})
                 continue
@@ -296,6 +296,7 @@ def build_plan(cfg, base_dir, beats):
                 continue
             plan.append({"kind": "video", "path": src["_path"], "label": label,
                          "round": r, "start": start, "src_duration": src["_duration"],
+                         "focus": src.get("focus", (0.5, 0.5)),
                          "has_audio": src["_has_audio"],
                          "seconds": float(src.get("length", default_len)),
                          "beats": int(src.get("beats", beats_per_cut))})
@@ -351,16 +352,20 @@ def video_codec(cfg):
             "-crf", str(cfg.get("crf", 18))]
 
 
-def fit_filter(cfg, src_label, out_label):
+def fit_filter(cfg, src_label, out_label, focus=(0.5, 0.5)):
+    """Frame a source to the output size. `focus` picks which part of a
+    too-wide or too-tall source the crop keeps: 0 = left/top, 1 = right/bottom."""
     w, h = cfg["width"], cfg["height"]
+    fx, fy = (min(max(float(v), 0.0), 1.0) for v in focus)
+    crop = f"crop={w}:{h}:(iw-{w})*{fx:.4f}:(ih-{h})*{fy:.4f}"
     fit = cfg.get("fit", "fill")
     if fit == "fill":
         return (f"[{src_label}]scale={w}:{h}:force_original_aspect_ratio=increase,"
-                f"crop={w}:{h}[{out_label}]")
+                f"{crop}[{out_label}]")
     if fit == "blur":
         return (f"[{src_label}]split[fa][fb];"
                 f"[fa]scale={w}:{h}:force_original_aspect_ratio=increase,"
-                f"crop={w}:{h},boxblur=30:5[fbg];"
+                f"{crop},boxblur=30:5[fbg];"
                 f"[fb]scale={w}:{h}:force_original_aspect_ratio=decrease[ffg];"
                 f"[fbg][ffg]overlay=(W-w)/2:(H-h)/2[{out_label}]")
     if fit == "pad":
@@ -388,7 +393,7 @@ def render_segment(seg, idx, cfg, workdir, keep_audio):
         cmd += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
     a_in = "0:a:0" if use_source_audio else "1:a"
 
-    graph = fit_filter(cfg, "0:v", "fit") + ";"
+    graph = fit_filter(cfg, "0:v", "fit", seg.get("focus", (0.5, 0.5))) + ";"
     if seg["kind"] == "image" and cfg.get("photo_motion", "push") == "push":
         # Slow, gentle push-in. Upscale first so the zoom doesn't wobble.
         zoom = float(cfg.get("photo_zoom", 0.06))

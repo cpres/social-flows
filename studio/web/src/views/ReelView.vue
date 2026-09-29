@@ -17,9 +17,36 @@
       </div>
       <button class="btn" @click="sortByShotTime" :disabled="items.length < 2">Sort by shot time</button>
       <button class="btn" :class="{ active: showSettings }" @click="showSettings = !showSettings">Settings</button>
-      <button class="btn primary" @click="doExport" :disabled="exporting || !kept.length">
-        {{ exporting ? 'Exporting…' : 'Export & preview cut list' }}
+      <button class="btn" @click="doExport" :disabled="exporting || !kept.length">
+        {{ exporting ? 'Checking…' : 'Preview cut list' }}
       </button>
+      <button class="btn primary" @click="startRender" :disabled="rendering || !kept.length">
+        {{ rendering ? `Rendering… ${renderPct}%` : 'Render video' }}
+      </button>
+    </section>
+
+    <section class="panel render" v-if="job">
+      <template v-if="job.status === 'running'">
+        <div class="bar"><div class="fill" :style="{ width: `${renderPct}%` }"></div></div>
+        <p class="muted">{{ stageText }} · {{ elapsed }}s</p>
+      </template>
+      <div v-else-if="job.status === 'done'" class="result">
+        <video :src="`${api.renderVideo(job.id)}?t=${job.finishedAt}`" controls playsinline></video>
+        <div>
+          <h3>Rendered</h3>
+          <p class="mono path">{{ job.output }}</p>
+          <p class="muted">Took {{ Math.round(job.finishedAt - job.startedAt) }}s.</p>
+          <div class="controls">
+            <button class="btn primary" @click="api.reveal(job.id)">Show in Finder</button>
+            <button class="btn" @click="job = null">Close</button>
+          </div>
+        </div>
+      </div>
+      <template v-else>
+        <h3>Render failed</h3>
+        <pre class="log">{{ job.log.join('\n') }}</pre>
+        <button class="btn" @click="job = null">Close</button>
+      </template>
     </section>
 
     <section v-if="showSettings" class="panel settings">
@@ -107,23 +134,29 @@
       </aside>
 
       <section class="editor" v-if="current">
-        <div class="stage">
-          <p v-if="current.media.missing" class="unplayable">
-            This file is missing from <code>{{ current.media.folder }}/{{ current.media.file }}</code>.
-            Put it back (or in any shoot folder) and it will relink.
-          </p>
-          <video
-            v-else-if="current.media.kind === 'video'" :ref="(el) => (player.video.value = el)"
-            :src="api.media(current.media.folder, current.media.file)" preload="auto" playsinline
-            @loadedmetadata="player.seek(current.start)" @play="player.events.onPlay"
-            @pause="player.events.onPause" @error="player.events.onError" @click="player.toggle"
-          ></video>
-          <img v-else :src="api.thumb(current.media.folder, current.media.file, 0, 1280)" alt="" />
-          <p v-if="player.failed.value" class="unplayable">
-            This browser can't play this file's codec (HEVC <code>.mov</code> often won't play in Chrome — try Safari).
-            Thumbnails and trimming still work.
-          </p>
+        <div class="preview-col">
+          <div v-if="current.media.missing" class="frame-missing">
+            <p class="unplayable">
+              This file is missing from <code>{{ current.media.folder }}/{{ current.media.file }}</code>.
+              Put it back (or in any shoot folder) and it will relink.
+            </p>
+          </div>
+          <ReelFrame
+            v-else :key="current.id" :media="current.media" :fit="settings.fit || 'fill'" :guides="guides"
+            :focus-x="current.focusX" :focus-y="current.focusY" :poster-time="current.start"
+            :bind-video="(el) => (player.video.value = el)"
+            @loaded="player.seek(current.start)" @play="player.events.onPlay" @pause="player.events.onPause"
+            @error="player.events.onError" @toggle="player.toggle" @focus="setFocus"
+          >
+            <p v-if="player.failed.value" class="unplayable">
+              This browser can't play this file's codec (HEVC often won't play in Chrome — try Safari).
+              Thumbnails and trimming still work.
+            </p>
+          </ReelFrame>
+          <label class="guides-toggle muted"><input type="checkbox" v-model="guides" /> Show Instagram overlays <kbd>G</kbd></label>
         </div>
+
+        <div class="edit-col">
 
         <template v-if="current.media.kind === 'video' && !current.media.missing">
           <TrimBar
@@ -160,8 +193,9 @@
         <p class="muted keys">
           <kbd>Space</kbd> play · <kbd>Enter</kbd> play part · <kbd>I</kbd>/<kbd>O</kbd> start/end at playhead ·
           <kbd>←</kbd>/<kbd>→</kbd> nudge 0.1s · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next · <kbd>X</kbd> keep/skip ·
-          drag the list to reorder
+          <kbd>G</kbd> Instagram overlays · drag the list to reorder
         </p>
+        </div>
       </section>
     </div>
 
@@ -170,11 +204,10 @@
         <h2>{{ exportResult.ok ? 'Cut list' : 'Engine reported a problem' }}</h2>
         <p class="muted" v-if="exportResult.path">Wrote <code>{{ exportResult.path }}</code></p>
         <pre>{{ exportResult.dryRun }}</pre>
-        <template v-if="exportResult.command">
-          <p class="muted">Render it with this (the video lands in <code>{{ exportResult.output }}</code>):</p>
-          <pre>{{ exportResult.command }}</pre>
-        </template>
-        <button class="btn primary" @click="exportResult = null">Close</button>
+        <div class="controls">
+          <button class="btn primary" v-if="exportResult.ok" @click="exportResult = null; startRender()">Render video</button>
+          <button class="btn" @click="exportResult = null">Close</button>
+        </div>
       </div>
     </div>
   </main>
@@ -187,6 +220,7 @@ import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
 import { fitRange, fmtTime, folderTitle, reelColor } from '../time'
 import ClipCard from '../components/ClipCard.vue'
+import ReelFrame from '../components/ReelFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
 import TrimBar from '../components/TrimBar.vue'
 
@@ -210,6 +244,9 @@ const exportResult = ref(null)
 const listEl = ref(null)
 const dragFrom = ref(null)
 const dragOver = ref(null)
+const guides = ref(false)
+const job = ref(null)
+const clock = ref(Date.now() / 1000)
 
 const current = computed(() => items.value[selected.value])
 const kept = computed(() => items.value.filter((p) => p.keep && !p.media.missing))
@@ -313,6 +350,13 @@ function setOut() {
   if (player.playhead.value - p.start >= 0.2) setRange({ start: p.start, length: player.playhead.value - p.start })
 }
 
+function setFocus({ x, y }) {
+  const p = current.value
+  p.focusX = x
+  p.focusY = y
+  saver.queue(p.id, { focusX: x, focusY: y })
+}
+
 function setKeep(p, keep) {
   p.keep = keep
   saver.queue(p.id, { keep })
@@ -339,7 +383,7 @@ async function remove(p) {
 // A second part of the same clip, starting just after this one.
 async function duplicate(p) {
   const r = fitRange(p.start + p.length, p.length, p.media.duration)
-  const item = await api.addItem(id, { mediaId: p.mediaId, ...r })
+  const item = await api.addItem(id, { mediaId: p.mediaId, ...r, focusX: p.focusX, focusY: p.focusY })
   const i = items.value.indexOf(p) + 1
   items.value.splice(i, 0, { ...item, media: p.media })
   await saveOrder()
@@ -402,6 +446,55 @@ async function doExport() {
   }
 }
 
+// ---------------------------------------------------------------- render
+
+const rendering = computed(() => job.value?.status === 'running')
+const renderPct = computed(() => {
+  const j = job.value
+  if (!j) return 0
+  if (j.stage === 'joining') return 92
+  if (j.stage === 'mixing') return 97
+  if (j.stage === 'done') return 100
+  return j.total ? Math.round((j.done / j.total) * 90) : 0
+})
+const stageText = computed(() => ({
+  starting: 'Starting…', cutting: `Cutting ${job.value.done} of ${job.value.total}`,
+  joining: 'Joining cuts and transitions…', mixing: 'Mixing sound…',
+}[job.value.stage] || job.value.stage))
+const elapsed = computed(() => Math.max(0, Math.round(clock.value - job.value.startedAt)))
+
+let poll
+function watchJob() {
+  clearInterval(poll)
+  poll = setInterval(async () => {
+    clock.value = Date.now() / 1000
+    try {
+      job.value = await api.renderStatus(job.value.id)
+    } catch { /* server restarted: keep the last state */ }
+    if (job.value.status !== 'running') clearInterval(poll)
+  }, 700)
+}
+onBeforeUnmount(() => clearInterval(poll))
+
+async function startRender() {
+  try {
+    await saver.flushAll()
+    job.value = await api.render(id)
+    watchJob()
+  } catch (e) {
+    exportResult.value = { ok: false, path: '', dryRun: e.message }
+  }
+}
+
+// Pick up a render that's still going (or just finished) when the page opens.
+onMounted(async () => {
+  const last = await api.lastRender(id).catch(() => null)
+  if (last && (last.status === 'running' || Date.now() / 1000 - last.finishedAt < 600)) {
+    job.value = last
+    if (last.status === 'running') watchJob()
+  }
+})
+
 // ---------------------------------------------------------------- keyboard
 
 function onKey(e) {
@@ -418,6 +511,7 @@ function onKey(e) {
   else if (k === 'ArrowLeft' && video) { setRange({ ...current.value, start: current.value.start - (e.shiftKey ? 1 : 0.1) }); player.seek(current.value.start) }
   else if (k === 'ArrowRight' && video) { setRange({ ...current.value, start: current.value.start + (e.shiftKey ? 1 : 0.1) }); player.seek(current.value.start) }
   else if (k === 'Escape') exportResult.value = null
+  else if (k === 'g' || k === 'G') guides.value = !guides.value
   else return
   e.preventDefault()
 }
@@ -454,6 +548,13 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
   background: var(--paper); cursor: pointer; font-weight: 700; color: var(--muted);
 }
 .keep.on { background: var(--sage); border-color: var(--sage); color: var(--forest); }
+.render .bar { height: 10px; background: var(--sage-soft); border-radius: 999px; overflow: hidden; }
+.render .fill { height: 100%; background: var(--forest); transition: width 0.4s; }
+.render p { margin: 8px 0 0; }
+.result { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
+.result video { height: 360px; aspect-ratio: 9 / 16; background: #121812; border-radius: 8px; }
+.result .path { word-break: break-all; }
+.log { background: var(--cream); padding: 12px; border-radius: 8px; font-size: 12px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
 .legend { font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
 .lg { display: inline-flex; align-items: center; gap: 4px; }
 .lg .sw { width: 10px; height: 10px; border-radius: 50%; }

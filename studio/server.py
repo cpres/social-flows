@@ -20,6 +20,8 @@ import os
 import re
 import subprocess
 import sys
+import threading
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -70,13 +72,13 @@ def resolve(*parts):
 def media_dict(row):
     return {"id": row["id"], "folder": row["folder"], "file": row["name"], "kind": row["kind"],
             "duration": row["duration"], "capturedAt": row["captured_at"],
-            "missing": bool(row["missing"])}
+            "width": row["width"], "height": row["height"], "missing": bool(row["missing"])}
 
 
 def item_dict(row):
     return {"id": row["item_id"], "reelId": row["reel_id"], "mediaId": row["media_id"],
             "position": row["position"], "start": row["start"], "length": row["length"],
-            "keep": bool(row["keep"])}
+            "keep": bool(row["keep"]), "focusX": row["focus_x"], "focusY": row["focus_y"]}
 
 
 def reel_row(db, reel_id):
@@ -97,6 +99,10 @@ def fit(start, length, duration):
     length = min(max(0.2, length), duration)
     start = min(max(0.0, start), duration - length)
     return round(start, 3), round(length, 3)
+
+
+def unit(v):
+    return round(min(max(float(v), 0.0), 1.0), 4)
 
 
 def slug(name):
@@ -309,10 +315,12 @@ def add_item(reel_id: int, body: dict = Body(...)):
             start, length = fit(start, length, m["duration"])
         else:
             length, start = float(body.get("length") or s["defaultHold"]), 0.0
+        fx, fy = unit(body.get("focusX", 0.5)), unit(body.get("focusY", 0.5))
         pos = db.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM reel_items "
                          "WHERE reel_id = ?", (reel_id,)).fetchone()[0]
-        cur = db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length) "
-                         "VALUES (?, ?, ?, ?, ?)", (reel_id, m["id"], pos, start, length))
+        cur = db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length, "
+                         "focus_x, focus_y) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         (reel_id, m["id"], pos, start, length, fx, fy))
         touch(db, reel_id)
         row = db.execute("SELECT id AS item_id, * FROM reel_items WHERE id = ?",
                          (cur.lastrowid,)).fetchone()
@@ -322,6 +330,9 @@ def add_item(reel_id: int, body: dict = Body(...)):
 @app.patch("/api/items/{item_id}")
 def update_item(item_id: int, body: dict = Body(...)):
     fields = {k: body[k] for k in ("start", "length", "keep", "position") if k in body}
+    for key, col in (("focusX", "focus_x"), ("focusY", "focus_y")):
+        if key in body:
+            fields[col] = unit(body[key])
     if not fields:
         return {"ok": True}
     with lib.connect() as db:
@@ -362,6 +373,8 @@ def build_config(reel, rows):
         seen[stem] = seen.get(stem, 0) + 1
         entry = {"id": stem if seen[stem] == 1 else f"{stem}-{seen[stem]}",
                  "file": str(ROOT / row["path"])}
+        if (row["focus_x"], row["focus_y"]) != (0.5, 0.5):
+            entry["focus"] = [round(row["focus_x"], 3), round(row["focus_y"], 3)]
         if row["kind"] == "video":
             entry["times"] = [round(row["start"], 2)]
             entry["length"] = round(row["length"], 2)
@@ -393,8 +406,8 @@ def build_config(reel, rows):
     return cfg
 
 
-@app.post("/api/reels/{reel_id}/export")
-def export(reel_id: int):
+def write_config(reel_id):
+    """Write the reel's YAML for the engine; returns (path, config)."""
     with lib.connect() as db:
         reel = reel_row(db, reel_id)
         rows = db.execute("""SELECT i.*, m.path, m.name, m.kind, m.missing FROM reel_items i
@@ -411,12 +424,114 @@ def export(reel_id: int):
               f"{datetime.now():%Y-%m-%d %H:%M}.\n"
               f"# Edit the reel in the studio; hand edits here are overwritten on export.\n\n")
     out.write_text(header + yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
+    return out, cfg
+
+
+@app.post("/api/reels/{reel_id}/export")
+def export(reel_id: int):
+    out, cfg = write_config(reel_id)
     result = subprocess.run([sys.executable, str(ENGINE), str(out), "--dry-run"],
                             capture_output=True, text=True, timeout=300)
     return {"path": str(out), "ok": result.returncode == 0,
             "dryRun": (result.stdout + result.stderr).strip(),
             "output": cfg["output"],
             "command": f'python3 "{ENGINE}" "{out}"'}
+
+
+# ---------------------------------------------------------------- render
+
+# One render at a time per reel, run in the background; the page polls.
+jobs = {}           # job id -> job dict
+latest = {}         # reel id -> job id
+jobs_lock = threading.Lock()
+
+
+def job_view(job):
+    return {k: job[k] for k in ("id", "reelId", "status", "stage", "done", "total",
+                                "output", "startedAt", "finishedAt", "log")}
+
+
+def run_render(job, config_path):
+    proc = subprocess.Popen([sys.executable, "-u", str(ENGINE), str(config_path)],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    buf = b""
+    while True:
+        chunk = proc.stdout.read(256)
+        if not chunk:
+            break
+        buf += chunk
+        # The engine redraws its progress line with \r.
+        *lines, buf = re.split(rb"[\r\n]", buf)
+        for raw in lines:
+            line = raw.decode(errors="replace").strip()
+            if not line:
+                continue
+            m = re.match(r"cutting (\d+)/(\d+)", line)
+            if m:
+                job["stage"], job["done"], job["total"] = "cutting", int(m[1]), int(m[2])
+            elif line.startswith("joining"):
+                job["stage"] = "joining"
+            elif line.startswith("mixing"):
+                job["stage"] = "mixing"
+            else:
+                job["log"] = (job["log"] + [line])[-60:]
+    proc.wait()
+    job["status"] = "done" if proc.returncode == 0 and Path(job["output"]).exists() else "failed"
+    job["stage"] = job["status"]
+    job["finishedAt"] = now()
+
+
+@app.post("/api/reels/{reel_id}/render")
+def start_render(reel_id: int):
+    with jobs_lock:
+        current = jobs.get(latest.get(reel_id))
+        if current and current["status"] == "running":
+            return job_view(current)
+        out, cfg = write_config(reel_id)
+        RENDERS.mkdir(parents=True, exist_ok=True)
+        job = {"id": uuid.uuid4().hex[:12], "reelId": reel_id, "status": "running",
+               "stage": "starting", "done": 0, "total": len(cfg["sources"]),
+               "output": cfg["output"], "startedAt": now(), "finishedAt": None, "log": []}
+        jobs[job["id"]] = job
+        latest[reel_id] = job["id"]
+    threading.Thread(target=run_render, args=(job, out), daemon=True).start()
+    return job_view(job)
+
+
+@app.get("/api/reels/{reel_id}/render")
+def last_render(reel_id: int):
+    job = jobs.get(latest.get(reel_id))
+    return job_view(job) if job else None
+
+
+@app.get("/api/renders/{job_id}")
+def render_status(job_id: str):
+    job = jobs.get(job_id) or {}
+    if not job:
+        raise HTTPException(404, "No such render")
+    return job_view(job)
+
+
+@app.get("/api/renders/{job_id}/video")
+def render_video(job_id: str):
+    job = jobs.get(job_id)
+    if not job or job["status"] != "done":
+        raise HTTPException(404)
+    return FileResponse(job["output"])
+
+
+@app.post("/api/renders/{job_id}/reveal")
+def reveal(job_id: str):
+    """Show the rendered file in Finder (or the folder, elsewhere)."""
+    job = jobs.get(job_id)
+    if not job or job["status"] != "done":
+        raise HTTPException(404)
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", job["output"]])
+    else:
+        subprocess.Popen(["xdg-open", str(Path(job["output"]).parent)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- files

@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS media (
     mtime       REAL NOT NULL,
     captured_at REAL NOT NULL,
     duration    REAL NOT NULL DEFAULT 0,
+    width       INTEGER NOT NULL DEFAULT 0,   -- as viewed, rotation applied
+    height      INTEGER NOT NULL DEFAULT 0,
     missing     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS media_folder ON media(folder);
@@ -53,7 +55,9 @@ CREATE TABLE IF NOT EXISTS reel_items (
     position REAL NOT NULL,
     start    REAL NOT NULL DEFAULT 0,
     length   REAL NOT NULL,
-    keep     INTEGER NOT NULL DEFAULT 1
+    keep     INTEGER NOT NULL DEFAULT 1,
+    focus_x  REAL NOT NULL DEFAULT 0.5,     -- where the 9:16 window sits in the frame
+    focus_y  REAL NOT NULL DEFAULT 0.5      -- (0 = left/top, 1 = right/bottom)
 );
 CREATE INDEX IF NOT EXISTS items_reel ON reel_items(reel_id, position);
 CREATE INDEX IF NOT EXISTS items_media ON reel_items(media_id);
@@ -79,6 +83,7 @@ class Library:
             self.home.mkdir(exist_ok=True)
             with self.connect() as db:
                 db.executescript(SCHEMA)
+                migrate(db)
 
     @contextmanager
     def connect(self):
@@ -130,7 +135,8 @@ class Library:
             for rel, p in on_disk.items():
                 st = p.stat()
                 row = known.get(rel)
-                if row and row["size"] == st.st_size and row["mtime"] == st.st_mtime:
+                if (row and row["size"] == st.st_size and row["mtime"] == st.st_mtime
+                        and row["width"]):
                     if row["missing"]:
                         db.execute("UPDATE media SET missing = 0 WHERE id = ?", (row["id"],))
                     continue
@@ -139,23 +145,24 @@ class Library:
             with ThreadPoolExecutor(max_workers=8) as pool:
                 probed = list(pool.map(lambda t: probe(t[1]), todo))
 
-            for (rel, p, st), (duration, captured) in zip(todo, probed):
+            for (rel, p, st), info in zip(todo, probed):
                 values = dict(path=rel, folder=p.parent.name, name=p.name, kind=self.kind_of(p),
-                              size=st.st_size, mtime=st.st_mtime, captured_at=captured,
-                              duration=duration)
+                              size=st.st_size, mtime=st.st_mtime, **info)
                 if rel in known:
                     db.execute("""UPDATE media SET size=:size, mtime=:mtime, captured_at=:captured_at,
-                                  duration=:duration, missing=0 WHERE path=:path""", values)
+                                  duration=:duration, width=:width, height=:height, missing=0
+                                  WHERE path=:path""", values)
                     continue
                 moved = self._moved_from(db, values, on_disk)
                 if moved:
                     db.execute("""UPDATE media SET path=:path, folder=:folder, name=:name,
-                                  mtime=:mtime, missing=0 WHERE id=:id""", {**values, "id": moved})
+                                  mtime=:mtime, width=:width, height=:height, missing=0
+                                  WHERE id=:id""", {**values, "id": moved})
                 else:
                     db.execute("""INSERT INTO media (path, folder, name, kind, size, mtime,
-                                  captured_at, duration)
+                                  captured_at, duration, width, height)
                                   VALUES (:path, :folder, :name, :kind, :size, :mtime,
-                                  :captured_at, :duration)""", values)
+                                  :captured_at, :duration, :width, :height)""", values)
 
             # Anything we used to know in these folders that's gone is missing.
             names = {f.name for f in folders}
@@ -182,23 +189,52 @@ class Library:
         return row["id"] if row else media_id
 
 
+def migrate(db):
+    """Add columns introduced after a library was first created."""
+    have = {t: {r["name"] for r in db.execute(f"PRAGMA table_info({t})")}
+            for t in ("media", "reel_items")}
+    for table, col, decl in [("media", "width", "INTEGER NOT NULL DEFAULT 0"),
+                             ("media", "height", "INTEGER NOT NULL DEFAULT 0"),
+                             ("reel_items", "focus_x", "REAL NOT NULL DEFAULT 0.5"),
+                             ("reel_items", "focus_y", "REAL NOT NULL DEFAULT 0.5")]:
+        if col not in have[table]:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
+
 def probe(path):
-    """(duration, capture time) in one ffprobe call; photos have no duration."""
-    duration, captured = 0.0, None
+    """Duration, capture time and on-screen size in one ffprobe call.
+
+    Phones often store portrait video as sideways pixels plus a rotation
+    flag; width/height here are as it's actually seen.
+    """
+    info = {"duration": 0.0, "captured_at": None, "width": 0, "height": 0}
     try:
         out = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries",
-             "format=duration:format_tags=creation_time", "-of", "json", str(path)],
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "format=duration:format_tags=creation_time:stream=width,height"
+             ":stream_tags=rotate:stream_side_data=rotation",
+             "-of", "json", str(path)],
             capture_output=True, text=True, timeout=30).stdout
-        fmt = json.loads(out or "{}").get("format", {})
+        data = json.loads(out or "{}")
+        fmt = data.get("format", {})
         if Library.kind_of(path) == "video":
-            duration = float(fmt.get("duration") or 0)
+            info["duration"] = round(float(fmt.get("duration") or 0), 3)
         stamp = (fmt.get("tags") or {}).get("creation_time")
         if stamp:
-            captured = datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+            info["captured_at"] = datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+        stream = (data.get("streams") or [{}])[0]
+        w, h = int(stream.get("width") or 0), int(stream.get("height") or 0)
+        rotation = (stream.get("tags") or {}).get("rotate")
+        for sd in stream.get("side_data_list") or []:
+            if "rotation" in sd:
+                rotation = sd["rotation"]
+        if rotation is not None and abs(int(float(rotation))) % 180 == 90:
+            w, h = h, w
+        info["width"], info["height"] = w, h
     except Exception:
         pass
-    return round(duration, 3), captured or path.stat().st_mtime
+    info["captured_at"] = info["captured_at"] or path.stat().st_mtime
+    return info
 
 
 def default_start(duration, length):

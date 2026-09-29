@@ -111,7 +111,7 @@ async function newReel() {
 h1 { margin: 0; font-size: 26px; color: var(--forest); }
 .head p { margin: 0; }
 .notice { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 20px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; }
 .card {
   background: var(--paper); border-radius: var(--radius); overflow: hidden;
   box-shadow: var(--shadow); transition: transform 0.15s, box-shadow 0.15s; text-align: left;
@@ -123,7 +123,7 @@ h1 { margin: 0; font-size: 26px; color: var(--forest); }
   min-height: 190px; color: var(--forest); font-weight: 600;
 }
 .plus { font-size: 34px; line-height: 1; }
-.cover { position: relative; aspect-ratio: 16 / 10; background: var(--forest); }
+.cover { position: relative; aspect-ratio: 4 / 5; background: var(--forest); }
 .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .empty { display: grid; place-items: center; height: 100%; color: var(--sage); }
 .badge {
