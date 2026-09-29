@@ -6,9 +6,7 @@ where (and for how long) to cut each clip.
 Selections are saved next to the footage in `<folder>/.studio.json`. Export
 writes `<folder>/montage.yaml`, which montage.py renders on its own.
 
-    pip install -r studio/requirements.txt
-    (cd studio/web && npm install && npm run build)   # once
-    python3 studio/server.py                          # http://localhost:8765
+    ./studio/run.sh        # sets up on first run, then http://localhost:3009
 
 FOOTAGE_DIR overrides the footage root (default ~/Footage).
 """
@@ -22,10 +20,17 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import yaml
-from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+try:
+    import uvicorn
+    import yaml
+    from fastapi import Body, FastAPI, HTTPException
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+except ImportError as missing:
+    sys.exit(f"Missing Python package: {missing.name}\n\n"
+             f"Start the studio with  ./studio/run.sh  (it sets everything up), or:\n"
+             f"  python3 -m venv .venv && source .venv/bin/activate\n"
+             f"  pip install -r studio/requirements.txt")
 
 HERE = Path(__file__).resolve().parent
 ENGINE = HERE.parent / "montage" / "montage.py"
@@ -275,7 +280,7 @@ if DIST.is_dir():
 
 def main():
     ap = argparse.ArgumentParser(description="Footage Studio")
-    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--port", type=int, default=3009)
     ap.add_argument("--open", action="store_true", help="open the browser")
     args = ap.parse_args()
     if not DIST.is_dir():
@@ -284,7 +289,6 @@ def main():
     if args.open:
         import webbrowser
         webbrowser.open(f"http://localhost:{args.port}")
-    import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
 
 

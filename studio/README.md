@@ -4,19 +4,25 @@ A local app for picking moments out of long clips. Browse the folders in
 `~/Footage`, preview each clip, and set **where each cut starts and how long
 it runs**. It writes the config `montage/montage.py` already reads.
 
-## Setup (once)
-
-```
-brew install ffmpeg
-pip install -r studio/requirements.txt
-cd studio/web && npm install && npm run build
-```
-
 ## Run
 
 ```
-python3 studio/server.py --open      # http://localhost:8765
-FOOTAGE_DIR=/some/other/dir python3 studio/server.py
+brew install ffmpeg node      # once
+./studio/run.sh               # opens http://localhost:3009
+```
+
+The first run creates a Python environment in `studio/.venv`, installs the
+packages and builds the web app; later runs start straight away.
+`./studio/run.sh --port 9000` picks another port, and
+`FOOTAGE_DIR=/some/other/dir ./studio/run.sh` points it at another folder.
+
+Manual alternative:
+
+```
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r studio/requirements.txt
+(cd studio/web && npm install && npm run build)
+python3 studio/server.py --open
 ```
 
 ## How it works
