@@ -345,7 +345,10 @@ watch(settings, () => { if (ready) saver.queue('settings', { ...settings }) }, {
 
 function select(i, fromReel = false) {
   if (i < 0 || i >= items.value.length) return
-  if (!fromReel) stopReel()
+  if (!fromReel) {
+    stopReel()
+    restart = false   // picking a cut means "play from here"
+  }
   selected.value = i
   player.reset()
   player.playhead.value = current.value.start
@@ -576,13 +579,13 @@ function startPart(k) {
     photoTimer = setTimeout(() => startPart(k + 1), p.length * 1000)
   } else if (sameClip && v && v.readyState > 0) {
     player.seek(p.start)
-    v.play()
+    v.play().catch(() => {})
   }                              // a different clip starts once it has loaded
 }
 
 function onFrameLoaded() {
   player.seek(current.value.start)
-  if (reelOn.value) player.video.value?.play()
+  if (reelOn.value) player.video.value?.play().catch(() => {})
 }
 
 // Move on when the playing part reaches its end.
@@ -595,9 +598,15 @@ watch(() => player.playhead.value, (t) => {
   }
 })
 
+// Start from the cut you're on (or the next kept one if it's skipped); only
+// go back to the top when the reel just finished and nothing was picked since.
 function playReel() {
   let k = kept.value.indexOf(current.value)
-  if (k < 0 || restart) k = 0
+  if (k < 0) {
+    const after = items.value.slice(selected.value + 1).find((p) => kept.value.includes(p))
+    k = after ? kept.value.indexOf(after) : 0
+  }
+  if (restart) k = 0
   restart = false
   reelOn.value = true
   startPart(k)

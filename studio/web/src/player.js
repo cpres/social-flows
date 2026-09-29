@@ -33,7 +33,7 @@ export function usePlayer(range) {
   function toggle() {
     const v = video.value
     if (!v) return
-    if (v.paused) v.play()
+    if (v.paused) v.play().catch(() => {})
     else { v.pause(); playingPart.value = false }
   }
   function playPart() {
@@ -43,7 +43,7 @@ export function usePlayer(range) {
     if (playingPart.value && !v.paused) { v.pause(); playingPart.value = false; return }
     playingPart.value = true
     v.currentTime = r.start
-    v.play()
+    v.play().catch(() => {})
   }
   function reset() {
     playingPart.value = false
