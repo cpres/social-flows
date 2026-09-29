@@ -29,7 +29,7 @@
       <section class="editor" v-if="current">
         <div class="preview-col">
           <ReelFrame
-            :key="current.id" :media="current" fit="fill" :guides="guides"
+            :key="current.id" :media="current" fit="fill" :guides="guides" muted
             :focus-x="range.focusX ?? 0.5" :focus-y="range.focusY ?? 0.5" :poster-time="range.start"
             :bind-video="(el) => (player.video.value = el)"
             @loaded="onLoaded" @play="player.events.onPlay" @pause="player.events.onPause"

@@ -71,7 +71,11 @@
           <option value="pad">Brand colour bars</option>
         </select>
       </label>
-      <label class="field">
+      <label class="field check">
+        <span><input type="checkbox" v-model="settings.originalAudio" /> Keep glasses audio</span>
+        <small>{{ settings.originalAudio ? 'Mixed under any music.' : 'Off: music only, or silent.' }}</small>
+      </label>
+      <label class="field" v-if="settings.originalAudio">
         Glasses audio volume
         <input type="number" min="0" max="1" step="0.05" v-model.number="settings.originalVolume" />
       </label>
@@ -143,6 +147,7 @@
           </div>
           <ReelFrame
             v-else :key="current.id" :media="current.media" :fit="settings.fit || 'fill'" :guides="guides"
+            :muted="!settings.originalAudio"
             :focus-x="current.focusX" :focus-y="current.focusY" :poster-time="current.start"
             :bind-video="(el) => (player.video.value = el)"
             @loaded="player.seek(current.start)" @play="player.events.onPlay" @pause="player.events.onPause"

@@ -395,7 +395,7 @@ def build_config(reel, rows):
         "transitions": {"within_round": "cut", "between_rounds": "dissolve",
                         "into_image": "dissolve", "out_of_image": "dissolve",
                         "duration": 0.3},
-        "original_audio": True,
+        "original_audio": bool(s.get("originalAudio")),
         "original_volume": s.get("originalVolume", 0.35),
         "fit": s.get("fit", "fill"),
         "photo_motion": "push",

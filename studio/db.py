@@ -70,6 +70,7 @@ DEFAULT_SETTINGS = {
     "beatSync": False,      # when on, the engine uses beats and ignores lengths
     "beatsPerCut": 2,
     "fit": "fill",
+    "originalAudio": False,  # glasses audio off unless a reel turns it on
     "originalVolume": 0.35,
 }
 

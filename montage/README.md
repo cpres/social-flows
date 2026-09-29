@@ -1,6 +1,6 @@
 # Steward Montage
 
-Cuts several long clips together in interleaved rounds, so viewers watch a few actions progress side by side. Cuts land on the music's beats. Rounds are separated by soft dissolves, photos get a slow push-in, and the glasses audio sits quietly under the music.
+Cuts several long clips together in interleaved rounds, so viewers watch a few actions progress side by side. Cuts land on the music's beats. Rounds are separated by soft dissolves and photos get a slow push-in. The glasses audio is off by default; set `original_audio: true` to keep it quietly under the music.
 
 ## Setup (once)
 
@@ -22,8 +22,8 @@ librosa detects the beat automatically. If you skip it, set `bpm:` in the config
 
 - **Pace:** `beats_per_cut` (1 = frantic, 2 = lively, 4 = calm). Give single clips `beats: 4` to let them breathe.
 - **Softness:** set `within_round: dissolve` for a dreamier piece, or `between_rounds: dip` for a breath through black.
-- **Ambience:** `original_volume` controls how much bird, water, and tool sound comes through. Set it to 0.5 or higher for a raw feel.
-- **No music:** remove the `music:` line. Timing then uses `clip_length` / `length` / `hold` in seconds, and the glasses audio carries the piece.
+- **Ambience:** with `original_audio: true`, `original_volume` controls how much bird, water, and tool sound comes through. Set it to 0.5 or higher for a raw feel.
+- **No music:** remove the `music:` line. Timing then uses `clip_length` / `length` / `hold` in seconds, and the piece is silent unless you set `original_audio: true` to let the glasses audio carry it.
 
 If a cut would run past the end of a clip, the script slides it earlier so it stays on the beat. The dry run tells you when that happens.
 
