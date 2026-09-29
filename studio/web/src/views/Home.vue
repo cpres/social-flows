@@ -144,9 +144,9 @@ h1 { margin: 0; font-size: 26px; color: var(--forest); }
 .empty { display: grid; place-items: center; height: 100%; color: var(--sage); }
 .badge {
   position: absolute; right: 8px; bottom: 8px; font-size: 12px; font-weight: 600;
-  background: rgb(31 42 31 / 75%); color: var(--cream); padding: 2px 8px; border-radius: 999px;
+  background: rgb(31 42 31 / 75%); color: var(--on-media); padding: 2px 8px; border-radius: 999px;
 }
-.badge.used { right: auto; left: 8px; background: var(--sage); color: var(--forest); }
+.badge.used { right: auto; left: 8px; background: var(--sage); color: var(--on-sage); }
 .swatch { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; }
 .meta { padding: 12px 14px 14px; }
 h2 { margin: 0 0 4px; font-size: 17px; }

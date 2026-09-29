@@ -143,7 +143,7 @@ function up() {
 .handle.out .tip { transform: translateX(-10%); }
 .playhead {
   position: absolute; top: -6px; bottom: -6px; width: 2px; margin-left: -1px;
-  background: var(--cream); box-shadow: 0 0 0 1px var(--forest); pointer-events: none; z-index: 3;
+  background: var(--on-media); box-shadow: 0 0 0 1px #1f2a1f; pointer-events: none; z-index: 3;
 }
 .lane { position: relative; height: 10px; margin-top: 28px; }
 .part {

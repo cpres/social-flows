@@ -977,7 +977,7 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .settings .wide { grid-column: span 2; }
 .field.check span { display: flex; gap: 6px; align-items: center; color: var(--ink); font-size: 14px; }
 .field.check small { font-size: 12px; }
-.danger { color: #9b3b2e; }
+.danger { color: var(--danger); }
 .transport { display: flex; align-items: center; gap: 12px; margin: 16px 0 34px; }
 .playreel { flex: none; min-width: 148px; }
 .clock { flex: none; color: var(--forest); min-width: 116px; }
@@ -996,7 +996,7 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .musicrow .field { min-width: 160px; }
 .musicrow .field select { min-width: 260px; }
 .small { font-size: 12px; margin: 8px 0; }
-.warn { color: #9b3b2e; }
+.warn { color: var(--danger); }
 .note { background: var(--sage-soft); padding: 6px 10px; border-radius: 6px; font-size: 13px; }
 .songtag {
   flex: none; font-size: 12px; color: var(--forest); background: var(--sage-soft);
@@ -1015,7 +1015,7 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .tpick div { display: flex; gap: 4px; flex-wrap: wrap; }
 .seg {
   flex-basis: 0; min-width: 6px; border: 0; border-radius: 4px; cursor: pointer; padding: 0;
-  background: var(--sage); color: var(--forest); font-size: 10px; font-weight: 700; overflow: hidden;
+  background: var(--sage); color: var(--on-sage); font-size: 10px; font-weight: 700; overflow: hidden;
 }
 .seg.photo { background: var(--sage-soft); }
 .seg.current { background: var(--forest); color: var(--cream); }
@@ -1028,12 +1028,12 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
   width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--line);
   background: var(--paper); cursor: pointer; font-weight: 700; color: var(--muted);
 }
-.keep.on { background: var(--sage); border-color: var(--sage); color: var(--forest); }
+.keep.on { background: var(--sage); border-color: var(--sage); color: var(--on-sage); }
 .render .bar { height: 10px; background: var(--sage-soft); border-radius: 999px; overflow: hidden; }
 .render .fill { height: 100%; background: var(--forest); transition: width 0.4s; }
 .render p { margin: 8px 0 0; }
 .result { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
-.result video { height: 360px; aspect-ratio: 9 / 16; background: #121812; border-radius: 8px; }
+.result video { height: 360px; aspect-ratio: 9 / 16; background: var(--stage); border-radius: 8px; }
 .result .path { word-break: break-all; }
 .log { background: var(--cream); padding: 12px; border-radius: 8px; font-size: 12px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
 .legend { font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }

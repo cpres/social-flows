@@ -115,6 +115,8 @@ snaps each cut to `beats_per_cut` beats instead, ignoring per-clip lengths.
 **Playback.** If a clip won't preview in Chrome it's probably HEVC; Safari
 plays it. Thumbnails, trimming and rendering work either way.
 
+**Themes:** Light (cream), Grey (cool grey) or Dark, from the switch in the top bar. It's remembered, and until you pick one it follows your Mac's dark mode.
+
 Thumbnails are cached in `~/.cache/footage-studio/`.
 
 UI development: run the server, then `npm run dev` in `studio/web` (proxies `/api`).

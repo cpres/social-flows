@@ -175,7 +175,7 @@ const mediaStyle = computed(() => {
 })
 
 const backdrop = computed(() =>
-  props.fit === 'pad' ? BRAND.forest : mode.value === 'fit' ? '#121812' : 'transparent')
+  props.fit === 'pad' ? BRAND.forest : mode.value === 'fit' ? 'var(--stage)' : 'transparent')
 
 // The 9:16 window, as percentages of the source.
 // The 9:16 window as percentages of the source: the largest one that fits,
@@ -262,7 +262,7 @@ const round = (v) => Math.round(v * 1000) / 1000
 <style scoped>
 .frame-stage {
   position: relative; display: grid; place-items: center;
-  background: #121812; border-radius: var(--radius); overflow: hidden;
+  background: var(--stage); border-radius: var(--radius); overflow: hidden;
 }
 .box { position: relative; overflow: hidden; }
 .media { position: absolute; }
@@ -284,13 +284,13 @@ const round = (v) => Math.round(v * 1000) / 1000
 .corner.sw { left: 2px; bottom: 2px; cursor: nesw-resize; }
 .zoomtag {
   position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); font-size: 11px; font-weight: 700; pointer-events: none;
-  padding: 1px 7px; border-radius: 999px; background: var(--sage); color: var(--forest);
+  padding: 1px 7px; border-radius: 999px; background: var(--sage); color: var(--on-sage);
 }
 .window.movable { pointer-events: auto; cursor: grab; touch-action: none; }
 .window.dragging { cursor: grabbing; }
 .hint {
   position: absolute; top: 8px; left: 50%; transform: translateX(-50%); white-space: nowrap;
-  font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgb(31 42 31 / 70%); color: var(--cream);
+  font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgb(31 42 31 / 70%); color: var(--on-media);
   pointer-events: none;
 }
 .defs { position: absolute; width: 0; height: 0; }
@@ -314,7 +314,7 @@ const round = (v) => Math.round(v * 1000) / 1000
 :deep(.guides) { position: absolute; inset: 0; pointer-events: none; }
 :deep(.g-caption), :deep(.g-buttons) {
   position: absolute; display: grid; place-items: center; font-size: 10px; letter-spacing: 0.06em;
-  text-transform: uppercase; color: var(--cream); background: rgb(247 241 227 / 18%);
+  text-transform: uppercase; color: var(--on-media); background: rgb(247 241 227 / 18%);
   border: 1px dashed rgb(247 241 227 / 60%);
 }
 :deep(.g-caption) { left: 0; right: 16%; bottom: 0; height: 20%; }

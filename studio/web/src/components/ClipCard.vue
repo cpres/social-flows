@@ -55,17 +55,17 @@ watch(() => props.thumbTime, (t) => {
   padding: 8px; border-radius: 10px; cursor: pointer; border: 1px solid transparent;
 }
 .clip:hover { background: var(--paper); }
-.clip.used { border-color: #c5d3b8; }
+.clip.used { border-color: var(--used); }
 .clip.selected { background: var(--paper); border-color: var(--sage); box-shadow: var(--shadow); }
 .clip.dim .thumb, .clip.dim .info { opacity: 0.4; }
 .thumb { position: relative; aspect-ratio: 3 / 4; border-radius: 6px; overflow: hidden; background: var(--forest); }
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.gone { display: grid; place-items: center; height: 100%; color: var(--cream); font-size: 11px; }
+.gone { display: grid; place-items: center; height: 100%; color: var(--on-media); font-size: 11px; }
 .dur {
   position: absolute; right: 3px; bottom: 3px; font-size: 10px; padding: 0 4px; border-radius: 3px;
-  background: rgb(31 42 31 / 75%); color: var(--cream); font-family: ui-monospace, monospace;
+  background: rgb(31 42 31 / 75%); color: var(--on-media); font-family: ui-monospace, monospace;
 }
-.dur.photo { background: var(--sage); color: var(--forest); font-family: inherit; }
+.dur.photo { background: var(--sage); color: var(--on-sage); font-family: inherit; }
 .info { min-width: 0; }
 .name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sub { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

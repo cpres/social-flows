@@ -9,11 +9,59 @@
   --muted: #6b7566;
   --line: #e4dccb;
   --warn: #b5642d;
+  --danger: #9b3b2e;
+  --used: #c5d3b8;            /* outline on clips already in a reel */
+  --on-sage: #344a34;         /* text on sage fills */
+  --topbar: #344a34;
+  --topbar-ink: #f7f1e3;
+  --on-media: #f7f1e3;        /* light text over video and thumbnails, in every theme */
+  --stage: #121812;           /* behind the video */
   --radius: 12px;
   --shadow: 0 1px 2px rgb(31 42 31 / 6%), 0 4px 14px rgb(31 42 31 / 7%);
+  color-scheme: light;
   font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   color: var(--ink);
   background: var(--cream);
+}
+
+/* Themes. --forest is the accent (headings, primary buttons) and --cream the
+   page background, which is also the text colour on accent buttons. */
+:root[data-theme='grey'] {
+  --forest: #3a4a5c;
+  --forest-2: #2d3a49;
+  --sage: #8c9cb0;
+  --sage-soft: #dde3ea;
+  --cream: #eceff3;
+  --paper: #f9fafb;
+  --ink: #1d242c;
+  --muted: #66707c;
+  --line: #d5dae1;
+  --used: #b6c1ce;
+  --on-sage: #1d242c;
+  --topbar: #2a333f;
+  --topbar-ink: #eceff3;
+  --stage: #10141a;
+  --shadow: 0 1px 2px rgb(20 28 38 / 6%), 0 4px 14px rgb(20 28 38 / 8%);
+}
+:root[data-theme='dark'] {
+  --forest: #a9c49a;
+  --forest-2: #bfd6b1;
+  --sage: #7f9a70;
+  --sage-soft: #2b3528;
+  --cream: #15181b;
+  --paper: #1e2226;
+  --ink: #e4e7ea;
+  --muted: #98a0a8;
+  --line: #333a41;
+  --warn: #e0a070;
+  --danger: #e38b7b;
+  --used: #4d5c47;
+  --on-sage: #10140f;
+  --topbar: #0f1113;
+  --topbar-ink: #d9dee3;
+  --stage: #0b0d0f;
+  --shadow: 0 1px 2px rgb(0 0 0 / 35%), 0 4px 14px rgb(0 0 0 / 30%);
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -23,14 +71,22 @@ button, input, select { font: inherit; color: inherit; }
 
 .topbar {
   display: flex; align-items: center; gap: 16px;
-  padding: 12px 24px; background: var(--forest); color: var(--cream);
+  padding: 12px 24px; background: var(--topbar); color: var(--topbar-ink);
 }
 .brand { font-weight: 700; letter-spacing: 0.01em; display: flex; align-items: center; gap: 8px; }
 .logo {
   display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 7px;
-  background: var(--sage); color: var(--forest); font-size: 12px;
+  background: var(--sage); color: var(--topbar); font-size: 12px;
 }
 .root { font-size: 13px; opacity: 0.7; font-family: ui-monospace, monospace; margin-left: auto; }
+.themes.alone { margin-left: auto; }
+.themes { display: flex; gap: 2px; padding: 2px; border-radius: 999px; background: rgb(255 255 255 / 10%); }
+.themes button {
+  border: 0; background: transparent; color: inherit; font-size: 12px; padding: 3px 10px;
+  border-radius: 999px; cursor: pointer; opacity: 0.75;
+}
+.themes button:hover { opacity: 1; }
+.themes button.on { background: var(--sage); color: var(--topbar); opacity: 1; font-weight: 600; }
 
 .btn {
   border: 1px solid var(--line); background: var(--paper); border-radius: 8px;
@@ -86,7 +142,7 @@ kbd {
   position: absolute; left: 12px; right: 12px; bottom: 12px; margin: 0; padding: 10px 12px;
   background: var(--paper); border-radius: 8px; font-size: 13px; z-index: 2;
 }
-.frame-missing { position: relative; background: #121812; border-radius: var(--radius); height: 420px; }
+.frame-missing { position: relative; background: var(--stage); border-radius: var(--radius); height: 420px; }
 .controls { display: flex; align-items: center; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
 .spacer { flex: 1; }
 .keys { font-size: 12px; line-height: 2; }
@@ -112,7 +168,7 @@ kbd {
   .preview-col { position: static; }
   .cliplist { position: static; max-height: 40vh; }
 }
-.btn.primary kbd { background: transparent; color: var(--cream); border-color: rgb(247 241 227 / 45%); }
+.btn.primary kbd { background: transparent; color: var(--cream); border-color: currentColor; opacity: 0.8; }
 .refresh {
   display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%;
   padding: 6px 10px; margin: 2px 0; border: 1px dashed var(--line); border-radius: 8px;
