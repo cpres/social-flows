@@ -98,13 +98,20 @@
     </section>
 
     <!-- the reel at a glance: one block per kept part, sized by its length -->
-    <section class="strip" v-if="kept.length">
-      <button
-        v-for="p in kept" :key="p.id" class="seg"
-        :class="{ current: p === current, photo: p.media.kind === 'photo' }"
-        :style="{ flexGrow: p.length }" :title="`${p.media.file} · ${p.length.toFixed(1)}s`"
-        @click="select(items.indexOf(p))"
-      >{{ p.length.toFixed(1) }}</button>
+    <section class="transport" v-if="kept.length">
+      <button class="btn primary playreel" @click="toggleReel" :title="reelOn ? 'Pause (Space)' : 'Play the whole reel (Space)'">
+        {{ reelOn ? '❚❚ Pause' : '▶ Play reel' }} <kbd>Space</kbd>
+      </button>
+      <span class="mono clock">{{ fmtTime(reelTime ?? 0) }} / {{ fmtTime(reelLength) }}</span>
+      <div class="strip">
+        <button
+          v-for="p in kept" :key="p.id" class="seg"
+          :class="{ current: p === current, playing: reelOn && p === current, photo: p.media.kind === 'photo' }"
+          :style="{ flexGrow: p.length }" :title="`${p.media.file} · ${p.length.toFixed(1)}s`"
+          @click="jumpTo(p)"
+        >{{ p.length.toFixed(1) }}</button>
+        <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
+      </div>
     </section>
 
     <p v-if="!items.length" class="panel empty">
@@ -116,11 +123,11 @@
       <aside class="cliplist" ref="listEl">
         <div
           v-for="(p, i) in items" :key="p.id" class="row"
-          :class="{ over: dragOver === i }"
+          :class="{ over: dragOver === i, playing: reelOn && i === selected }"
           draggable="true" @dragstart="dragFrom = i" @dragover.prevent="dragOver = i"
           @dragleave="dragOver = null" @drop="drop(i)" @dragend="dragOver = null"
         >
-          <span class="num">{{ i + 1 }}</span>
+          <span class="num">{{ reelOn && i === selected ? '▶' : i + 1 }}</span>
           <ClipCard
             :media="p.media" :thumb-time="p.start" :selected="i === selected" :dim="!p.keep"
             :sub="folderTitle(p.media.folder)"
@@ -146,11 +153,11 @@
             </p>
           </div>
           <ReelFrame
-            v-else :key="current.id" :media="current.media" :fit="settings.fit || 'fill'" :guides="guides"
-            :muted="!settings.originalAudio"
+            v-else :key="current.mediaId" :media="current.media" :fit="settings.fit || 'fill'" :guides="guides"
+            :muted="!settings.originalAudio" :cropped="reelOn"
             :focus-x="current.focusX" :focus-y="current.focusY" :poster-time="current.start"
             :bind-video="(el) => (player.video.value = el)"
-            @loaded="player.seek(current.start)" @play="player.events.onPlay" @pause="player.events.onPause"
+            @loaded="onFrameLoaded" @play="player.events.onPlay" @pause="player.events.onPause"
             @error="player.events.onError" @toggle="player.toggle" @focus="setFocus"
           >
             <p v-if="player.failed.value" class="unplayable">
@@ -159,6 +166,10 @@
             </p>
           </ReelFrame>
           <label class="guides-toggle muted"><input type="checkbox" v-model="guides" /> Show Instagram overlays <kbd>G</kbd></label>
+          <video
+            v-if="reelOn && nextMedia" class="preload" muted preload="auto"
+            :src="api.media(nextMedia.folder, nextMedia.file)"
+          ></video>
         </div>
 
         <div class="edit-col">
@@ -171,8 +182,8 @@
             @update="setRange" @seek="player.seek" @pick="pickSegment"
           />
           <div class="controls">
-            <button class="btn" @click="player.toggle">{{ player.playing.value ? 'Pause' : 'Play' }} <kbd>Enter</kbd></button>
-            <button class="btn" :class="{ active: player.playingPart.value }" @click="player.playPart">▶ Play part <kbd>Space</kbd></button>
+            <button class="btn" @click="stopReel(); player.toggle()">{{ player.playing.value && !reelOn ? 'Pause' : 'Play clip' }}</button>
+            <button class="btn" :class="{ active: player.playingPart.value }" @click="playThisPart">▶ Play part <kbd>Enter</kbd></button>
             <span class="muted mono">{{ fmtTime(player.playhead.value) }}</span>
             <span class="spacer"></span>
             <button class="btn small" @click="setIn">Start here <kbd>I</kbd></button>
@@ -196,7 +207,7 @@
           <span v-for="s in segments" :key="s.id" class="lg"><span class="sw" :style="{ background: s.color }"></span>{{ s.label }}</span>
         </p>
         <p class="muted keys">
-          <kbd>Space</kbd> play part · <kbd>Enter</kbd> play/pause whole clip · <kbd>I</kbd>/<kbd>O</kbd> start/end at playhead ·
+          <kbd>Space</kbd> play/pause the whole reel · <kbd>Enter</kbd> play just this part · <kbd>I</kbd>/<kbd>O</kbd> start/end at playhead ·
           <kbd>←</kbd>/<kbd>→</kbd> nudge 0.1s · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next · <kbd>X</kbd> keep/skip ·
           <kbd>G</kbd> Instagram overlays · drag the list to reorder
         </p>
@@ -308,11 +319,15 @@ watch(settings, () => { if (ready) saver.queue('settings', { ...settings }) }, {
 
 // ---------------------------------------------------------------- selection
 
-function select(i) {
+function select(i, fromReel = false) {
   if (i < 0 || i >= items.value.length) return
+  if (!fromReel) stopReel()
   selected.value = i
   player.reset()
   player.playhead.value = current.value.start
+  // Another part of the same clip: the video stays loaded, so just move to it.
+  const v = player.video.value
+  if (v && v.readyState > 0 && !fromReel) player.seek(current.value.start)
   const el = listEl.value?.children[i]
   const list = listEl.value
   if (el && list) {
@@ -451,6 +466,107 @@ async function doExport() {
   }
 }
 
+// ---------------------------------------------------------------- play the reel
+
+// Plays every kept part in order, cropped to the reel, so you can see how the
+// cuts flow. The part playing is selected (and highlighted) as it goes.
+const reelOn = ref(false)
+const reelIdx = ref(0)
+const photoT = ref(0)
+let photoTimer, photoTick, restart = false
+
+const offsetOf = (k) => kept.value.slice(0, k).reduce((a, p) => a + p.length, 0)
+const reelTime = computed(() => {
+  const k = kept.value.indexOf(current.value)
+  if (k < 0) return null
+  const p = current.value
+  const within = p.media.kind === 'video'
+    ? Math.min(Math.max(player.playhead.value - p.start, 0), p.length)
+    : (reelOn.value ? photoT.value : 0)
+  return offsetOf(k) + within
+})
+const nextMedia = computed(() => {
+  const list = kept.value
+  for (let k = reelIdx.value + 1; k < list.length; k++) {
+    const m = list[k].media
+    if (m.kind === 'video' && m.id !== current.value?.mediaId) return m
+  }
+  return null
+})
+
+function clearPhoto() {
+  clearTimeout(photoTimer)
+  clearInterval(photoTick)
+}
+
+function startPart(k) {
+  clearPhoto()
+  const list = kept.value
+  if (k >= list.length) {       // end of the reel
+    stopReel()
+    restart = true
+    return
+  }
+  reelIdx.value = k
+  const p = list[k]
+  const sameClip = current.value?.mediaId === p.mediaId
+  const v = player.video.value
+  if (v && !sameClip) v.pause()
+  select(items.value.indexOf(p), true)
+  if (p.media.kind !== 'video' || p.media.missing) {
+    photoT.value = 0
+    const t0 = performance.now()
+    photoTick = setInterval(() => { photoT.value = Math.min(p.length, (performance.now() - t0) / 1000) }, 50)
+    photoTimer = setTimeout(() => startPart(k + 1), p.length * 1000)
+  } else if (sameClip && v && v.readyState > 0) {
+    player.seek(p.start)
+    v.play()
+  }                              // a different clip starts once it has loaded
+}
+
+function onFrameLoaded() {
+  player.seek(current.value.start)
+  if (reelOn.value) player.video.value?.play()
+}
+
+// Move on when the playing part reaches its end.
+watch(() => player.playhead.value, (t) => {
+  if (!reelOn.value) return
+  const p = kept.value[reelIdx.value]
+  const v = player.video.value
+  if (p && p === current.value && p.media.kind === 'video' && v && !v.paused && t >= p.start + p.length) {
+    startPart(reelIdx.value + 1)
+  }
+})
+
+function playReel() {
+  let k = kept.value.indexOf(current.value)
+  if (k < 0 || restart) k = 0
+  restart = false
+  reelOn.value = true
+  startPart(k)
+}
+
+function stopReel() {
+  if (!reelOn.value) return
+  reelOn.value = false
+  clearPhoto()
+  player.video.value?.pause()
+}
+
+const toggleReel = () => (reelOn.value ? stopReel() : playReel())
+
+function jumpTo(p) {
+  if (reelOn.value) startPart(kept.value.indexOf(p))
+  else select(items.value.indexOf(p))
+}
+
+function playThisPart() {
+  stopReel()
+  player.playPart()
+}
+onBeforeUnmount(clearPhoto)
+
 // ---------------------------------------------------------------- render
 
 const rendering = computed(() => job.value?.status === 'running')
@@ -506,8 +622,8 @@ function onKey(e) {
   if (e.target.closest('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey || !current.value) return
   const k = e.key
   const video = current.value.media.kind === 'video'
-  if (k === ' ') player.playPart()
-  else if (k === 'Enter') player.toggle()
+  if (k === ' ') toggleReel()
+  else if (k === 'Enter') playThisPart()
   else if ((k === 'i' || k === 'I') && video) setIn()
   else if ((k === 'o' || k === 'O') && video) setOut()
   else if (k === 'x' || k === 'X') setKeep(current.value, !current.value.keep)
@@ -536,7 +652,18 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .field.check span { display: flex; gap: 6px; align-items: center; color: var(--ink); font-size: 14px; }
 .field.check small { font-size: 12px; }
 .danger { color: #9b3b2e; }
-.strip { display: flex; gap: 2px; margin: 16px 0 4px; height: 26px; }
+.transport { display: flex; align-items: center; gap: 12px; margin: 16px 0 34px; }
+.playreel { flex: none; min-width: 148px; }
+.clock { flex: none; color: var(--forest); min-width: 116px; }
+.strip { position: relative; flex: 1; display: flex; gap: 2px; height: 30px; }
+.seg.playing { background: var(--forest); color: var(--cream); box-shadow: 0 0 0 2px var(--sage); }
+.reelhead {
+  position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px;
+  background: #c0703a; border-radius: 1px; pointer-events: none;
+}
+.row.playing :deep(.clip) { border-color: var(--forest); box-shadow: 0 0 0 2px var(--forest); }
+.row.playing .num { color: var(--forest); font-size: 13px; }
+.preload { display: none; }
 .seg {
   flex-basis: 0; min-width: 6px; border: 0; border-radius: 4px; cursor: pointer; padding: 0;
   background: var(--sage); color: var(--forest); font-size: 10px; font-weight: 700; overflow: hidden;

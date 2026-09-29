@@ -16,7 +16,7 @@
 
       <!-- the part of the frame the reel keeps -->
       <div
-        v-if="mode === 'crop'" class="window" :class="{ movable, dragging }" :style="windowStyle"
+        v-if="mode === 'crop' && !cropped" class="window" :class="{ movable, dragging }" :style="windowStyle"
         @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="up"
       >
         <span class="hint" v-if="movable">drag to reframe</span>
@@ -42,7 +42,8 @@ const props = defineProps({
   focusX: { type: Number, default: 0.5 },
   focusY: { type: Number, default: 0.5 },
   guides: Boolean,                                  // show where Instagram's UI covers
-  muted: Boolean,                                   // matches whether the reel keeps clip audio
+  muted: Boolean,
+  cropped: Boolean,                                 // show only what the reel shows (while playing it)                                   // matches whether the reel keeps clip audio
   posterTime: { type: Number, default: 0 },
   bindVideo: { type: Function, default: () => {} },
 })
@@ -74,7 +75,7 @@ function onImg(e) {
 // fill crops the source to 9:16 (show the whole source with the kept window);
 // blur and pad fit the whole source inside a 9:16 frame.
 const mode = computed(() => (props.fit === 'fill' ? 'crop' : 'fit'))
-const boxAspect = computed(() => (mode.value === 'crop' ? aspect.value : OUT))
+const boxAspect = computed(() => (mode.value === 'crop' && !props.cropped ? aspect.value : OUT))
 
 const stage = ref(null)
 // The frame fills the column's width, up to a height that fits the window;
@@ -100,6 +101,14 @@ const box = computed(() => {
 })
 
 const mediaStyle = computed(() => {
+  if (mode.value === 'crop' && props.cropped) {
+    // scale the source so the 9:16 window fills the box
+    const w = win.value
+    return {
+      width: `${(100 / w.w) * 100}%`, height: `${(100 / w.h) * 100}%`,
+      left: `${(-w.left / w.w) * 100}%`, top: `${(-w.top / w.h) * 100}%`,
+    }
+  }
   if (mode.value === 'crop') return { inset: 0 }
   // contained inside the 9:16 box
   const a = aspect.value

@@ -41,6 +41,10 @@ python3 studio/server.py --open
   reels with one click.
 - Coloured marks under the filmstrip show every part of that clip already in a
   reel; click one (or *Edit* in the list below) to adjust it.
+- **Play reel** (`Space` in a reel) plays every kept part in order, cropped
+  exactly as the reel will be, so you can judge how the cuts flow. The part
+  that's playing is highlighted in the list and on the strip; click a block on
+  the strip to jump there. `Enter` plays just the selected part.
 - **Open a reel** to see its parts from every shoot. Drag to reorder (or *Sort by
   shot time*), fine-tune each part's start and length, skip parts without
   removing them, and set music, beat sync and framing under *Settings*.
@@ -68,9 +72,12 @@ folder are pointed at the original, so the copies can be deleted afterwards.
 Trims made with the first version of the studio (`.studio.json`) are carried
 over the same way.
 
-Keys: `Space` play the selection (stops at its end) · `Enter` play/pause the whole clip · `I`/`O` start/end at playhead ·
-`←`/`→` nudge start (Shift = 1s) · `↑`/`↓` previous/next · `1`–`9` add to reel
-(shoot view) · `X` keep/skip (reel view).
+Keys in a shoot: `Space` play the selection (stops at its end) · `Enter` play/pause
+the whole clip · `I`/`O` start/end at playhead · `←`/`→` nudge start (Shift = 1s) ·
+`↑`/`↓` previous/next · `1`–`9` add to reel · `G` Instagram overlays.
+
+Keys in a reel: `Space` play/pause the whole reel · `Enter` play just this part ·
+`I`/`O`, `←`/`→`, `↑`/`↓` as above · `X` keep/skip · `G` Instagram overlays.
 
 **Lengths and beat sync.** With no music, or beat sync off (the default), your
 lengths are used exactly. Turn beat sync on in *Settings* and the engine
