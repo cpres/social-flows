@@ -51,7 +51,9 @@ from db import DEFAULT_SETTINGS, Library, default_start, now, settings_of  # noq
 ROOT = Path(os.environ.get("FOOTAGE_DIR", "~/Footage")).expanduser().resolve()
 RENDERS = Path(os.environ.get("RENDER_DIR", "~/Movies/Footage Studio")).expanduser()
 CACHE = Path("~/.cache/footage-studio").expanduser()
-SIDECAR = ".studio.json"   # per-folder trims from the first version of the studio
+SIDECAR = ".studio.json"
+# What a part can lead into the next with ('' = the reel's default).
+TRANSITIONS = ("", "cut", "flash", "whip", "zoom", "dissolve", "dip")   # per-folder trims from the first version of the studio
 
 lib = Library(ROOT)
 app = FastAPI(title="Footage Studio")
@@ -78,7 +80,8 @@ def media_dict(row):
 def item_dict(row):
     return {"id": row["item_id"], "reelId": row["reel_id"], "mediaId": row["media_id"],
             "position": row["position"], "start": row["start"], "length": row["length"],
-            "keep": bool(row["keep"]), "focusX": row["focus_x"], "focusY": row["focus_y"]}
+            "keep": bool(row["keep"]), "focusX": row["focus_x"], "focusY": row["focus_y"],
+            "transition": row["transition"]}
 
 
 def reel_row(db, reel_id):
@@ -330,6 +333,10 @@ def add_item(reel_id: int, body: dict = Body(...)):
 @app.patch("/api/items/{item_id}")
 def update_item(item_id: int, body: dict = Body(...)):
     fields = {k: body[k] for k in ("start", "length", "keep", "position") if k in body}
+    if "transition" in body:
+        if body["transition"] not in TRANSITIONS:
+            raise HTTPException(400, f"Unknown transition: {body['transition']}")
+        fields["transition"] = body["transition"]
     for key, col in (("focusX", "focus_x"), ("focusY", "focus_y")):
         if key in body:
             fields[col] = unit(body[key])
@@ -365,10 +372,9 @@ def delete_item(item_id: int):
 
 def build_config(reel, rows):
     s = settings_of(reel)
+    kept = [r for r in rows if r["keep"] and not r["missing"]]
     sources, seen = [], {}
-    for row in rows:
-        if not row["keep"] or row["missing"]:
-            continue
+    for n, row in enumerate(kept):
         stem = Path(row["name"]).stem[:14]
         seen[stem] = seen.get(stem, 0) + 1
         entry = {"id": stem if seen[stem] == 1 else f"{stem}-{seen[stem]}",
@@ -381,6 +387,8 @@ def build_config(reel, rows):
         else:
             entry["hold"] = round(row["length"], 2)
             entry["in_round"] = "all"
+        if n + 1 < len(kept):
+            entry["transition"] = row["transition"] or s.get("transition") or "cut"
         sources.append(entry)
 
     cfg = {"output": str(RENDERS / f"{slug(reel['name'])}.mp4"), "rounds": 1, "sources": sources}

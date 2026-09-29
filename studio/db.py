@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS reel_items (
     length   REAL NOT NULL,
     keep     INTEGER NOT NULL DEFAULT 1,
     focus_x  REAL NOT NULL DEFAULT 0.5,     -- where the 9:16 window sits in the frame
-    focus_y  REAL NOT NULL DEFAULT 0.5      -- (0 = left/top, 1 = right/bottom)
+    focus_y  REAL NOT NULL DEFAULT 0.5,     -- (0 = left/top, 1 = right/bottom)
+    transition TEXT NOT NULL DEFAULT ''     -- into the next part; '' = reel default
 );
 CREATE INDEX IF NOT EXISTS items_reel ON reel_items(reel_id, position);
 CREATE INDEX IF NOT EXISTS items_media ON reel_items(media_id);
@@ -70,6 +71,7 @@ DEFAULT_SETTINGS = {
     "beatSync": False,      # when on, the engine uses beats and ignores lengths
     "beatsPerCut": 2,
     "fit": "fill",
+    "transition": "cut",    # between parts, unless a part picks its own
     "originalAudio": False,  # glasses audio off unless a reel turns it on
     "originalVolume": 0.35,
 }
@@ -197,7 +199,8 @@ def migrate(db):
     for table, col, decl in [("media", "width", "INTEGER NOT NULL DEFAULT 0"),
                              ("media", "height", "INTEGER NOT NULL DEFAULT 0"),
                              ("reel_items", "focus_x", "REAL NOT NULL DEFAULT 0.5"),
-                             ("reel_items", "focus_y", "REAL NOT NULL DEFAULT 0.5")]:
+                             ("reel_items", "focus_y", "REAL NOT NULL DEFAULT 0.5"),
+                             ("reel_items", "transition", "TEXT NOT NULL DEFAULT ''")]:
         if col not in have[table]:
             db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 

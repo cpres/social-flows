@@ -45,6 +45,12 @@ python3 studio/server.py --open
   exactly as the reel will be, so you can judge how the cuts flow. The part
   that's playing is highlighted in the list and on the strip; click a block on
   the strip to jump there. `Enter` plays just the selected part.
+- **Transitions:** under each part in a reel, a small pill shows how it leads
+  into the next. Click it (or press `T`) to cycle **Cut → Flash → Whip → Zoom**;
+  the part's editor also offers Dissolve and Dip. *Flash* is a quick white flash,
+  *Whip* a fast blurred slide, *Zoom* a cut where the next shot punches in and
+  settles. Set a reel-wide default under *Settings*. Playing the reel shows a
+  rough preview of each one; the render does the real thing.
 - **Open a reel** to see its parts from every shoot. Drag to reorder (or *Sort by
   shot time*), fine-tune each part's start and length, skip parts without
   removing them, and set music, beat sync and framing under *Settings*.

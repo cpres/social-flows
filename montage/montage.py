@@ -47,6 +47,13 @@ BRAND_BG = {"forest": "0x344a34", "sage": "0x8aa37c", "cream": "0xf7f1e3"}
 # Friendly transition names -> ffmpeg xfade names. Any other xfade name also works.
 TRANSITIONS = {"dissolve": "fade", "dip": "fadeblack", "dip_white": "fadewhite"}
 
+# Short, punchy transitions for build reels. Each part can pick the one that
+# leads out of it with `transition:` (cut | flash | whip | zoom | dissolve | dip).
+FLASH_D = 0.16    # fade through white
+WHIP_D = 0.22     # fast slide with horizontal motion blur either side of the join
+PUNCH_D = 0.30    # incoming shot starts zoomed in and snaps back
+PUNCH_ZOOM = 0.18
+
 EDGE_FADE = 0.03  # tiny audio fade on every cut so hard cuts never click
 
 
@@ -281,6 +288,7 @@ def build_plan(cfg, base_dir, beats):
                 if r in rounds_for_image(src, total_rounds):
                     plan.append({"kind": "image", "path": src["_path"], "label": label,
                                  "round": r, "start": 0.0, "focus": src.get("focus", (0.5, 0.5)),
+                                 "transition": src.get("transition"),
                                  "seconds": float(src.get("hold", default_hold)),
                                  "beats": int(src.get("hold_beats", beats_per_cut * 2))})
                 continue
@@ -297,6 +305,7 @@ def build_plan(cfg, base_dir, beats):
             plan.append({"kind": "video", "path": src["_path"], "label": label,
                          "round": r, "start": start, "src_duration": src["_duration"],
                          "focus": src.get("focus", (0.5, 0.5)),
+                         "transition": src.get("transition"),
                          "has_audio": src["_has_audio"],
                          "seconds": float(src.get("length", default_len)),
                          "beats": int(src.get("beats", beats_per_cut))})
@@ -318,13 +327,30 @@ def build_plan(cfg, base_dir, beats):
     # 3. Transitions between neighbours. Soft ones overlap, so the outgoing
     #    cut renders a little extra tail.
     base_d = float((cfg.get("transitions") or {}).get("duration", 0.35))
+    for seg in plan:
+        seg["t_after"], seg["d_after"], seg["label_after"] = None, 0.0, None
+        seg.setdefault("whip_in", 0.0)
+        seg.setdefault("whip_out", 0.0)
+        seg.setdefault("punch_in", 0.0)
     for i, seg in enumerate(plan):
-        seg["t_after"], seg["d_after"] = None, 0.0
         if i + 1 < len(plan):
-            name = transition_between(seg, plan[i + 1], cfg, i)
-            if name != "cut":
-                d = min(base_d, 0.45 * seg["length"], 0.45 * plan[i + 1]["length"])
-                seg["t_after"], seg["d_after"] = name, round(d * fps) / fps
+            nxt = plan[i + 1]
+            style = seg.get("transition")
+            if style == "zoom":            # a hard cut; the next shot punches in
+                nxt["punch_in"] = min(PUNCH_D, nxt["length"])
+                seg["label_after"] = "zoom punch-in"
+            else:
+                if style in ("flash", "whip"):
+                    name, want = ("fadewhite", FLASH_D) if style == "flash" else ("slideleft", WHIP_D)
+                else:
+                    name = TRANSITIONS.get(style, style) if style else transition_between(seg, nxt, cfg, i)
+                    want = base_d
+                if name != "cut":
+                    d = min(want, 0.45 * seg["length"], 0.45 * nxt["length"])
+                    seg["t_after"], seg["d_after"] = name, round(d * fps) / fps
+                    seg["label_after"] = style or {v: k for k, v in TRANSITIONS.items()}.get(name, name)
+                    if style == "whip":
+                        seg["whip_out"] = nxt["whip_in"] = seg["d_after"]
         seg["render_length"] = seg["length"] + seg["d_after"]
 
     # 4. If a cut would run off the end of its clip, slide it earlier
@@ -399,18 +425,35 @@ def render_segment(seg, idx, cfg, workdir, keep_audio):
     a_in = "0:a:0" if use_source_audio else "1:a"
 
     graph = fit_filter(cfg, "0:v", "fit", seg.get("focus", (0.5, 0.5))) + ";"
+    # Zoom punch-in: start PUNCH_ZOOM larger and ease back to normal.
+    punch_frames = round(seg.get("punch_in", 0) * fps)
+    punch = (f"+{PUNCH_ZOOM}*pow(max(0,1-on/{punch_frames}),2)" if punch_frames else "")
     if seg["kind"] == "image" and cfg.get("photo_motion", "push") == "push":
         # Slow, gentle push-in. Upscale first so the zoom doesn't wobble.
         zoom = float(cfg.get("photo_zoom", 0.06))
         graph += (f"[fit]scale={w * 2}:{h * 2},"
-                  f"zoompan=z='1+{zoom}*on/{n_frames}':"
+                  f"zoompan=z='1+{zoom}*on/{n_frames}{punch}':"
                   f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
                   f"d={n_frames}:s={w}x{h}:fps={fps},")
     elif seg["kind"] == "image":
-        graph += f"[fit]loop=loop={n_frames}:size=1,fps={fps},"
+        if punch:
+            graph += (f"[fit]scale={w * 2}:{h * 2},zoompan=z='1{punch}':"
+                      f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                      f"d={n_frames}:s={w}x{h}:fps={fps},")
+        else:
+            graph += f"[fit]loop=loop={n_frames}:size=1,fps={fps},"
+    elif punch:
+        graph += (f"[fit]fps={fps},scale={w * 2}:{h * 2},zoompan=z='1{punch}':d=1:"
+                  f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}:fps={fps},")
     else:
         graph += f"[fit]fps={fps},"
-    graph += f"setsar=1,format=yuv420p,trim=end_frame={n_frames},setpts=PTS-STARTPTS[v];"
+    graph += f"setsar=1,format=yuv420p,trim=end_frame={n_frames},setpts=PTS-STARTPTS"
+    # Whip: horizontal motion blur on both sides of the slide.
+    if seg.get("whip_out"):
+        graph += f",avgblur=sizeX=48:sizeY=1:enable='gte(t,{length - seg['whip_out']:.3f})'"
+    if seg.get("whip_in"):
+        graph += f",avgblur=sizeX=48:sizeY=1:enable='lte(t,{seg['whip_in']:.3f})'"
+    graph += "[v];"
     graph += (f"[{a_in}]aformat=sample_rates=48000:channel_layouts=stereo,apad,"
               f"atrim=0:{length:.4f},asetpts=PTS-STARTPTS,"
               f"afade=t=in:d={EDGE_FADE},"
@@ -522,8 +565,9 @@ def main():
         where = "hold" if seg["kind"] == "image" else f"from {fmt(seg['start'])}"
         print(f"  {fmt(t):>7}  r{seg['round']}  {seg['label']:<16} {where:<12} {seg['length']:.2f}s")
         if seg["t_after"]:
-            friendly = {v: k for k, v in TRANSITIONS.items()}.get(seg["t_after"], seg["t_after"])
-            print(f"  {'':>7}      ~ {friendly} {seg['d_after']:.2f}s")
+            print(f"  {'':>7}      ~ {seg['label_after']} {seg['d_after']:.2f}s")
+        elif seg["label_after"]:
+            print(f"  {'':>7}      ~ {seg['label_after']}")
         t += seg["length"]
     for w in warnings:
         print(f"  ! {w}")

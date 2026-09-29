@@ -1,6 +1,6 @@
 <template>
   <div class="frame-stage" ref="stage" :style="{ height: `${box.h}px` }">
-    <div class="box" :style="{ width: `${box.w}px`, height: `${box.h}px`, background: backdrop }">
+    <div class="box" :class="fxClass" :style="{ width: `${box.w}px`, height: `${box.h}px`, background: backdrop }">
       <img
         v-if="mode === 'fit' && fit === 'blur'" class="blurbg" alt=""
         :src="api.thumb(media.folder, media.file, posterTime, 320)"
@@ -9,6 +9,7 @@
         <video
           v-if="media.kind === 'video'" :ref="bindVideo" :src="api.media(media.folder, media.file)"
           preload="auto" playsinline :muted="muted" @loadedmetadata="onMeta" @play="$emit('play')" @pause="$emit('pause')"
+          @playing="firePending"
           @error="$emit('error')" @click="$emit('toggle')"
         ></video>
         <img v-else :src="api.thumb(media.folder, media.file, 0, 1080)" alt="" @load="onImg" />
@@ -29,7 +30,7 @@
 </template>
 
 <script setup>
-import { computed, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { api } from '../api'
 import { clamp } from '../time'
 
@@ -43,7 +44,8 @@ const props = defineProps({
   focusY: { type: Number, default: 0.5 },
   guides: Boolean,                                  // show where Instagram's UI covers
   muted: Boolean,
-  cropped: Boolean,                                 // show only what the reel shows (while playing it)                                   // matches whether the reel keeps clip audio
+  cropped: Boolean,
+  effect: { type: Object, default: null },          // { type, at }: a transition to play into this shot                                 // show only what the reel shows (while playing it)                                   // matches whether the reel keeps clip audio
   posterTime: { type: Number, default: 0 },
   bindVideo: { type: Function, default: () => {} },
 })
@@ -78,6 +80,32 @@ const mode = computed(() => (props.fit === 'fill' ? 'crop' : 'fit'))
 const boxAspect = computed(() => (mode.value === 'crop' && !props.cropped ? aspect.value : OUT))
 
 const stage = ref(null)
+
+// A rough, in-browser version of the transition into this shot, so playing
+// the reel shows the flow. The render does the real thing.
+const fxClass = ref('')
+let pending = null
+let fxTimer
+function fire(type) {
+  fxClass.value = ''
+  clearTimeout(fxTimer)
+  nextTick(() => {
+    fxClass.value = `fx-${type}`
+    fxTimer = setTimeout(() => { fxClass.value = '' }, 500)
+  })
+}
+function firePending() {
+  if (pending) fire(pending)
+  pending = null
+}
+watch(() => props.effect, (fx) => {
+  if (!fx || performance.now() - fx.at > 1500) return
+  const v = stage.value?.querySelector('video')
+  // A clip that's still loading gets its transition when it starts playing.
+  if (props.media.kind === 'video' && (!v || v.paused)) pending = fx.type
+  else fire(fx.type)
+}, { immediate: true })
+
 // The frame fills the column's width, up to a height that fits the window;
 // the stage wraps it, so there are no empty bands above or below.
 const width = ref(0)
@@ -91,6 +119,7 @@ onMounted(() => {
   observer.observe(stage.value)
 })
 onBeforeUnmount(() => {
+  clearTimeout(fxTimer)
   observer?.disconnect()
   window.removeEventListener('resize', measureCap)
 })
@@ -107,6 +136,7 @@ const mediaStyle = computed(() => {
     return {
       width: `${(100 / w.w) * 100}%`, height: `${(100 / w.h) * 100}%`,
       left: `${(-w.left / w.w) * 100}%`, top: `${(-w.top / w.h) * 100}%`,
+      transformOrigin: `${w.left + w.w / 2}% ${w.top + w.h / 2}%`,
     }
   }
   if (mode.value === 'crop') return { inset: 0 }
@@ -188,6 +218,23 @@ const round = (v) => Math.round(v * 1000) / 1000
   font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgb(31 42 31 / 70%); color: var(--cream);
   pointer-events: none;
 }
+/* transition previews */
+.box.fx-flash::after, .box.fx-dip::after {
+  content: ''; position: absolute; inset: 0; z-index: 3; pointer-events: none;
+  animation: fx-fade 0.22s ease-out forwards;
+}
+.box.fx-flash::after { background: #fff; }
+.box.fx-dip::after { background: #000; animation-duration: 0.35s; }
+@keyframes fx-fade { from { opacity: 0.95; } to { opacity: 0; } }
+.box.fx-whip .media { animation: fx-whip 0.22s ease-out; }
+@keyframes fx-whip {
+  from { transform: translateX(45%); filter: blur(10px); }
+  to { transform: none; filter: none; }
+}
+.box.fx-zoom .media { animation: fx-zoom 0.3s cubic-bezier(0.2, 0.7, 0.3, 1); }
+@keyframes fx-zoom { from { transform: scale(1.18); } to { transform: scale(1); } }
+.box.fx-dissolve .media { animation: fx-in 0.3s ease-out; }
+@keyframes fx-in { from { opacity: 0.2; } to { opacity: 1; } }
 :deep(.guides) { position: absolute; inset: 0; pointer-events: none; }
 :deep(.g-caption), :deep(.g-buttons) {
   position: absolute; display: grid; place-items: center; font-size: 10px; letter-spacing: 0.06em;

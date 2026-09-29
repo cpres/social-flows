@@ -80,6 +80,16 @@
         <input type="number" min="0" max="1" step="0.05" v-model.number="settings.originalVolume" />
       </label>
       <label class="field">
+        Default transition
+        <select v-model="settings.transition">
+          <option v-for="t in TRANSITIONS" :key="t.v" :value="t.v">{{ t.label }}</option>
+        </select>
+      </label>
+      <div class="field">
+        &nbsp;
+        <button class="btn small" @click="useDefaultEverywhere">Use {{ label(settings.transition || 'cut') }} between every part</button>
+      </div>
+      <label class="field">
         Default cut length (s)
         <input type="number" min="0.2" step="0.1" v-model.number="settings.defaultLength" />
       </label>
@@ -141,6 +151,11 @@
               :title="p.keep ? 'In the cut — click to skip (X)' : 'Skipped — click to keep (X)'"
             >{{ p.keep ? '✓' : '–' }}</button>
           </ClipCard>
+          <button
+            v-if="hasNext(p)" class="tpill" :class="`t-${effective(p)}`"
+            :title="`Transition into the next part: ${label(effective(p))}. Click to change (T).`"
+            @click.stop="cycle(p)"
+          >{{ icon(effective(p)) }} {{ label(effective(p)) }}</button>
         </div>
       </aside>
 
@@ -154,7 +169,7 @@
           </div>
           <ReelFrame
             v-else :key="current.mediaId" :media="current.media" :fit="settings.fit || 'fill'" :guides="guides"
-            :muted="!settings.originalAudio" :cropped="reelOn"
+            :muted="!settings.originalAudio" :cropped="reelOn" :effect="effect"
             :focus-x="current.focusX" :focus-y="current.focusY" :poster-time="current.start"
             :bind-video="(el) => (player.video.value = el)"
             @loaded="onFrameLoaded" @play="player.events.onPlay" @pause="player.events.onPause"
@@ -198,6 +213,15 @@
           <label class="field check">
             <span><input type="checkbox" :checked="current.keep" @change="setKeep(current, $event.target.checked)" /> In the cut <kbd>X</kbd></span>
           </label>
+          <div class="tpick" v-if="hasNext(current)">
+            <span class="muted">Into next part <kbd>T</kbd></span>
+            <div>
+              <button
+                v-for="t in TRANSITIONS" :key="t.v" class="btn small" :class="{ active: effective(current) === t.v }"
+                @click="setTransition(current, t.v)" :title="t.hint"
+              >{{ t.icon }} {{ t.label }}</button>
+            </div>
+          </div>
           <button class="btn small" @click="duplicate(current)" v-if="current.media.kind === 'video'">Use another part of this clip</button>
           <button class="btn small" @click="remove(current)">Remove from reel</button>
         </TimingFields>
@@ -209,7 +233,7 @@
         <p class="muted keys">
           <kbd>Space</kbd> play/pause the whole reel · <kbd>Enter</kbd> play just this part · <kbd>I</kbd>/<kbd>O</kbd> start/end at playhead ·
           <kbd>←</kbd>/<kbd>→</kbd> nudge 0.1s · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next · <kbd>X</kbd> keep/skip ·
-          <kbd>G</kbd> Instagram overlays · drag the list to reorder
+          <kbd>T</kbd> change transition · <kbd>G</kbd> Instagram overlays · drag the list to reorder
         </p>
         </div>
       </section>
@@ -466,6 +490,35 @@ async function doExport() {
   }
 }
 
+// ---------------------------------------------------------------- transitions
+
+const TRANSITIONS = [
+  { v: 'cut', label: 'Cut', icon: '│', hint: 'Straight cut' },
+  { v: 'flash', label: 'Flash', icon: '⚡', hint: 'Quick white flash' },
+  { v: 'whip', label: 'Whip', icon: '⇆', hint: 'Fast blurred slide' },
+  { v: 'zoom', label: 'Zoom', icon: '⊕', hint: 'Cut, next shot punches in' },
+  { v: 'dissolve', label: 'Dissolve', icon: '◐', hint: 'Soft crossfade' },
+  { v: 'dip', label: 'Dip', icon: '●', hint: 'Through black' },
+]
+const QUICK = ['cut', 'flash', 'whip', 'zoom']   // what clicking the pill cycles through
+const info = (v) => TRANSITIONS.find((t) => t.v === v) || TRANSITIONS[0]
+const label = (v) => info(v).label
+const icon = (v) => info(v).icon
+const effective = (p) => p.transition || settings.transition || 'cut'
+const hasNext = (p) => { const k = kept.value.indexOf(p); return k >= 0 && k < kept.value.length - 1 }
+
+function setTransition(p, v) {
+  p.transition = v
+  saver.queue(p.id, { transition: v })
+}
+function cycle(p) {
+  const i = QUICK.indexOf(effective(p))
+  setTransition(p, QUICK[(i + 1) % QUICK.length])
+}
+function useDefaultEverywhere() {
+  for (const p of items.value) if (p.transition) setTransition(p, '')
+}
+
 // ---------------------------------------------------------------- play the reel
 
 // Plays every kept part in order, cropped to the reel, so you can see how the
@@ -473,6 +526,7 @@ async function doExport() {
 const reelOn = ref(false)
 const reelIdx = ref(0)
 const photoT = ref(0)
+const effect = ref(null)   // the transition to preview into the part now playing
 let photoTimer, photoTick, restart = false
 
 const offsetOf = (k) => kept.value.slice(0, k).reduce((a, p) => a + p.length, 0)
@@ -509,6 +563,8 @@ function startPart(k) {
   }
   reelIdx.value = k
   const p = list[k]
+  const into = k > 0 ? effective(list[k - 1]) : 'cut'
+  effect.value = into === 'cut' ? null : { type: into, at: performance.now() }
   const sameClip = current.value?.mediaId === p.mediaId
   const v = player.video.value
   if (v && !sameClip) v.pause()
@@ -633,6 +689,7 @@ function onKey(e) {
   else if (k === 'ArrowRight' && video) { setRange({ ...current.value, start: current.value.start + (e.shiftKey ? 1 : 0.1) }); player.seek(current.value.start) }
   else if (k === 'Escape') exportResult.value = null
   else if (k === 'g' || k === 'G') guides.value = !guides.value
+  else if ((k === 't' || k === 'T') && hasNext(current.value)) cycle(current.value)
   else return
   e.preventDefault()
 }
@@ -664,6 +721,15 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .row.playing :deep(.clip) { border-color: var(--forest); box-shadow: 0 0 0 2px var(--forest); }
 .row.playing .num { color: var(--forest); font-size: 13px; }
 .preload { display: none; }
+.row { flex-wrap: wrap; }
+.tpill {
+  margin: 2px 0 4px 64px; padding: 1px 10px; font-size: 11px; font-weight: 600; cursor: pointer;
+  border: 1px dashed var(--line); border-radius: 999px; background: transparent; color: var(--muted);
+}
+.tpill:hover { border-color: var(--forest); color: var(--forest); }
+.tpill:not(.t-cut) { border-style: solid; border-color: var(--sage); background: var(--sage-soft); color: var(--forest); }
+.tpick { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.tpick div { display: flex; gap: 4px; flex-wrap: wrap; }
 .seg {
   flex-basis: 0; min-width: 6px; border: 0; border-radius: 4px; cursor: pointer; padding: 0;
   background: var(--sage); color: var(--forest); font-size: 10px; font-weight: 700; overflow: hidden;
@@ -673,7 +739,7 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .empty { font-size: 15px; }
 .row { display: flex; align-items: center; gap: 4px; border-top: 2px solid transparent; }
 .row.over { border-top-color: var(--forest); }
-.row > :last-child { flex: 1; min-width: 0; }
+.row > .clip { flex: 1 1 calc(100% - 30px); min-width: 0; }
 .num { width: 18px; text-align: right; font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
 .keep {
   width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--line);
