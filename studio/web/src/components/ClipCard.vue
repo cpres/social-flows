@@ -1,6 +1,6 @@
 <template>
   <div
-    class="clip" :class="{ selected, dim: dim || media.missing }" @click="$emit('select')"
+    class="clip" :class="{ selected, used, dim: dim || media.missing }" @click="$emit('select')"
   >
     <div class="thumb">
       <img v-if="!media.missing" :src="thumbSrc" loading="lazy" alt="" draggable="false" />
@@ -33,6 +33,8 @@ const props = defineProps({
   dots: { type: Array, default: () => [] },
   selected: Boolean,
   dim: Boolean,
+  used: Boolean,   // already in a reel: a light border, so unused (newer) clips stand out
+
 })
 defineEmits(['select'])
 
@@ -53,6 +55,7 @@ watch(() => props.thumbTime, (t) => {
   padding: 8px; border-radius: 10px; cursor: pointer; border: 1px solid transparent;
 }
 .clip:hover { background: var(--paper); }
+.clip.used { border-color: #c5d3b8; }
 .clip.selected { background: var(--paper); border-color: var(--sage); box-shadow: var(--shadow); }
 .clip.dim .thumb, .clip.dim .info { opacity: 0.4; }
 .thumb { position: relative; aspect-ratio: 3 / 4; border-radius: 6px; overflow: hidden; background: var(--forest); }

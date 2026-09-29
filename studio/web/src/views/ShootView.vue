@@ -26,7 +26,7 @@
           :thumb-time="m.kind === 'video' ? draftOf(m).start : 0"
           :sub="clockTime(m.capturedAt)"
           :dots="partsOf(m.id).map((p) => ({ color: reelColor(p.reelId), label: reelName(p.reelId) }))"
-          :selected="i === selected" @select="select(i)"
+          :selected="i === selected" :used="partsOf(m.id).length > 0" @select="select(i)"
         />
         <button class="refresh" @click="reload" :disabled="refreshing" title="Look for new clips in this folder">
           ↻ {{ refreshing ? 'Checking…' : 'Check for new clips' }}
