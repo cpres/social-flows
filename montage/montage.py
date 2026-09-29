@@ -345,11 +345,16 @@ def build_plan(cfg, base_dir, beats):
 # ---------------------------------------------------------------- rendering
 
 def video_codec(cfg):
-    """x264 by default; Apple hardware encoder when encoder: videotoolbox."""
+    """x264 by default; Apple hardware encoder when encoder: videotoolbox.
+
+    Always 8-bit 4:2:0 — filters like xfade can negotiate yuv444p, which
+    QuickTime/iOS can't decode (audio plays, video is black).
+    """
+    pix = ["-pix_fmt", "yuv420p"]
     if cfg.get("encoder") == "videotoolbox":
-        return ["-c:v", "h264_videotoolbox", "-b:v", str(cfg.get("bitrate", "12M"))]
+        return ["-c:v", "h264_videotoolbox", "-b:v", str(cfg.get("bitrate", "12M")), *pix]
     return ["-c:v", "libx264", "-preset", cfg.get("preset", "veryfast"),
-            "-crf", str(cfg.get("crf", 18))]
+            "-crf", str(cfg.get("crf", 18)), "-profile:v", "high", *pix]
 
 
 def fit_filter(cfg, src_label, out_label, focus=(0.5, 0.5)):
