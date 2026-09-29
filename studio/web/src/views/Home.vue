@@ -32,6 +32,9 @@
         <p class="muted" v-if="folders.length">
           {{ folders.length }} folders · {{ fmtDuration(totalFootage) }} of video
         </p>
+        <button class="refresh inline" @click="load" :disabled="refreshing">
+          ↻ {{ refreshing ? 'Checking…' : 'Refresh' }}
+        </button>
       </div>
       <p v-if="!folders.length" class="notice">
         No folders in <code>{{ root }}</code> yet. Make one per shoot (e.g. <code>2026-09-24</code>)
@@ -58,6 +61,9 @@
           </div>
         </RouterLink>
       </div>
+      <button class="refresh bottom" @click="load" :disabled="refreshing">
+        ↻ {{ refreshing ? 'Checking for new footage…' : 'Check for new footage' }}
+      </button>
     </template>
   </main>
 </template>
@@ -66,6 +72,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
+import { useRefreshOnFocus } from '../refresh'
 import { fmtDuration, fmtTime, folderTitle, reelColor } from '../time'
 
 const emit = defineEmits(['root'])
@@ -77,7 +84,11 @@ const error = ref('')
 const loading = ref(true)
 const totalFootage = computed(() => folders.value.reduce((a, f) => a + f.totalDuration, 0))
 
-onMounted(async () => {
+const refreshing = ref(false)
+
+async function load() {
+  if (refreshing.value) return
+  refreshing.value = true
   try {
     const data = await api.home()
     folders.value = data.folders
@@ -89,8 +100,11 @@ onMounted(async () => {
     error.value = `Couldn't reach the server: ${e.message}`
   } finally {
     loading.value = false
+    refreshing.value = false
   }
-})
+}
+onMounted(load)
+useRefreshOnFocus(load)
 
 async function newReel() {
   const name = window.prompt('Name the new reel')
@@ -108,6 +122,8 @@ async function newReel() {
 .page { max-width: 1280px; margin: 0 auto; padding: 32px 24px 64px; }
 .head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
 .head.shoots { margin-top: 44px; }
+.refresh.inline { width: auto; margin-left: auto; }
+.refresh.bottom { margin-top: 20px; }
 h1 { margin: 0; font-size: 26px; color: var(--forest); }
 .head p { margin: 0; }
 .notice { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }

@@ -17,6 +17,10 @@
 
     <div class="workspace" v-if="media.length">
       <aside class="cliplist" ref="listEl">
+        <button class="refresh" @click="reload" :disabled="refreshing" title="Look for new clips in this folder">
+          ↻ {{ refreshing ? 'Checking…' : 'Check for new clips' }}
+          <span v-if="newCount" class="new">+{{ newCount }} new</span>
+        </button>
         <ClipCard
           v-for="(m, i) in media" :key="m.id" :media="m"
           :thumb-time="m.kind === 'video' ? draftOf(m).start : 0"
@@ -24,6 +28,9 @@
           :dots="partsOf(m.id).map((p) => ({ color: reelColor(p.reelId), label: reelName(p.reelId) }))"
           :selected="i === selected" @select="select(i)"
         />
+        <button class="refresh" @click="reload" :disabled="refreshing" title="Look for new clips in this folder">
+          ↻ {{ refreshing ? 'Checking…' : 'Check for new clips' }}
+        </button>
       </aside>
 
       <section class="editor" v-if="current">
@@ -123,6 +130,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
+import { useRefreshOnFocus } from '../refresh'
 import { clockTime, defaultStart, fitRange, fmtTime, folderTitle, reelColor } from '../time'
 import ClipCard from '../components/ClipCard.vue'
 import ReelFrame from '../components/ReelFrame.vue'
@@ -171,14 +179,21 @@ const guides = ref(false)
 
 const saver = debouncedSaver((id, patch) => api.updateItem(id, patch))
 
+const refreshing = ref(false)
+const newCount = ref(0)
+
+function apply(data) {
+  data.media.forEach((m) => { if (!drafts[m.id]) initDraft(m) })
+  media.value = data.media
+  items.value = data.items
+  reels.value = [...data.reels].sort((a, b) => a.id - b.id)   // stable, so 1–9 keys don't move
+  hasSidecar.value = data.hasSidecar
+}
+
 onMounted(async () => {
   try {
     const data = await api.folder(props.name)
-    media.value = data.media
-    data.media.forEach(initDraft)
-    items.value = data.items
-    reels.value = [...data.reels].sort((a, b) => a.id - b.id)   // stable, so 1–9 keys don't move
-    hasSidecar.value = data.hasSidecar
+    apply(data)
     emit('root', data.path)
   } catch (e) {
     error.value = e.message
@@ -186,6 +201,28 @@ onMounted(async () => {
     loading.value = false
   }
 })
+
+// Pick up clips added to the folder since the page opened, keeping your place.
+async function reload() {
+  if (refreshing.value || loading.value) return
+  refreshing.value = true
+  try {
+    await saver.flushAll()
+    const keep = current.value?.id
+    const before = new Set(media.value.map((m) => m.id))
+    const data = await api.folder(props.name)
+    apply(data)
+    newCount.value = data.media.filter((m) => !before.has(m.id)).length
+    const i = media.value.findIndex((m) => m.id === keep)
+    selected.value = i >= 0 ? i : 0
+    if (newCount.value) setTimeout(() => { newCount.value = 0 }, 4000)
+  } catch (e) {
+    showFlash(e.message)
+  } finally {
+    refreshing.value = false
+  }
+}
+useRefreshOnFocus(reload)
 onBeforeUnmount(() => saver.flushAll())
 
 // ---------------------------------------------------------------- selection
@@ -196,7 +233,7 @@ function select(i) {
   activeId.value = null
   player.reset()
   player.playhead.value = range.value.start
-  const el = listEl.value?.children[i]
+  const el = listEl.value?.querySelectorAll(':scope > .clip')[i]
   const list = listEl.value
   if (el && list) {
     if (el.offsetTop < list.scrollTop) list.scrollTop = el.offsetTop
