@@ -150,7 +150,7 @@
 
     <!-- the reel at a glance: one block per kept part, sized by its length -->
     <section class="transport" v-if="kept.length">
-      <button class="btn primary playreel" @click="toggleReel" :title="reelOn ? 'Pause (Space)' : 'Play the whole reel (Space)'">
+      <button class="btn primary playreel" @click="toggleReel" :title="reelOn ? 'Pause (Space) · Shift+Space: from the start' : 'Play the reel (Space) · Shift+Space: from the start'">
         {{ reelOn ? '❚❚ Pause' : '▶ Play reel' }} <kbd>Space</kbd>
       </button>
       <span class="mono clock">{{ fmtTime(reelTime ?? 0) }} / {{ fmtTime(reelLength) }}</span>
@@ -300,7 +300,7 @@
           <span v-for="s in segments" :key="s.id" class="lg"><span class="sw" :style="{ background: s.color }"></span>{{ s.label }}</span>
         </p>
         <p class="muted keys">
-          <kbd>Space</kbd> play/pause the whole reel · <kbd>Enter</kbd> play just this part · <kbd>I</kbd>/<kbd>O</kbd> start/end at playhead ·
+          <kbd>Space</kbd> play/pause the whole reel · <kbd>Shift</kbd>+<kbd>Space</kbd> play from the start · <kbd>Enter</kbd> play just this part · <kbd>I</kbd>/<kbd>O</kbd> start/end at playhead ·
           <kbd>←</kbd>/<kbd>→</kbd> nudge 0.1s · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next · <kbd>X</kbd> keep/skip ·
           <kbd>T</kbd> change transition · <kbd>L</kbd> lighten · <kbd>G</kbd> Instagram overlays · drag the list to reorder
         </p>
@@ -869,6 +869,13 @@ function stopReel() {
 
 const toggleReel = () => (reelOn.value ? stopReel() : playReel())
 
+// Shift+Space: back to the first part and play, even mid-play.
+function playFromTop() {
+  stopReel()
+  restart = true
+  playReel()
+}
+
 function jumpTo(p) {
   if (reelOn.value) {
     const k = kept.value.indexOf(p)
@@ -938,7 +945,8 @@ function onKey(e) {
   if (e.target.closest('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey || !current.value) return
   const k = e.key
   const video = current.value.media.kind === 'video'
-  if (k === ' ') toggleReel()
+  if (k === ' ' && e.shiftKey) playFromTop()
+  else if (k === ' ') toggleReel()
   else if (k === 'Enter') playThisPart()
   else if ((k === 'i' || k === 'I') && video) setIn()
   else if ((k === 'o' || k === 'O') && video) setOut()

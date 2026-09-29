@@ -105,7 +105,7 @@ Keys in a shoot: `Space` play the selection (stops at its end) · `Enter` play/p
 the whole clip · `I`/`O` start/end at playhead · `←`/`→` nudge start (Shift = 1s) ·
 `↑`/`↓` previous/next · `1`–`9` add to reel · `G` Instagram overlays.
 
-Keys in a reel: `Space` play/pause the whole reel · `Enter` play just this part ·
+Keys in a reel: `Space` play/pause the whole reel · `Shift`+`Space` play from the start · `Enter` play just this part ·
 `I`/`O`, `←`/`→`, `↑`/`↓` as above · `X` keep/skip · `T` transition · `L` lighten · `G` Instagram overlays.
 
 **Lengths and beat sync.** With no music, or beat sync off (the default), your
