@@ -141,9 +141,9 @@
           <ClipCard
             :media="p.media" :thumb-time="p.start" :selected="i === selected" :dim="!p.keep"
             :sub="folderTitle(p.media.folder)"
-            :chip="p.media.kind === 'video'
+            :chip="(p.media.kind === 'video'
               ? `${fmtTime(p.start)} → ${fmtTime(p.start + p.length)}  ${p.length.toFixed(1)}s`
-              : `hold ${p.length.toFixed(1)}s`"
+              : `hold ${p.length.toFixed(1)}s`) + (p.lighten ? '  ☀' : '')"
             @select="select(i)"
           >
             <button
@@ -169,7 +169,7 @@
           </div>
           <ReelFrame
             v-else :key="current.mediaId" :media="current.media" :fit="settings.fit || 'fill'" :guides="guides"
-            :muted="!settings.originalAudio" :cropped="reelOn" :effect="effect"
+            :muted="!settings.originalAudio" :cropped="reelOn" :effect="effect" :lighten="current.lighten"
             :focus-x="current.focusX" :focus-y="current.focusY" :poster-time="current.start"
             :bind-video="(el) => (player.video.value = el)"
             @loaded="onFrameLoaded" @play="player.events.onPlay" @pause="player.events.onPause"
@@ -213,6 +213,16 @@
           <label class="field check">
             <span><input type="checkbox" :checked="current.keep" @change="setKeep(current, $event.target.checked)" /> In the cut <kbd>X</kbd></span>
           </label>
+          <div class="tpick">
+            <span class="muted">Lighten <kbd>L</kbd></span>
+            <div>
+              <button
+                v-for="l in LIGHTEN" :key="l.v" class="btn small" :class="{ active: Math.abs(current.lighten - l.v) < 0.01 }"
+                @click="setLighten(current, l.v)"
+              >{{ l.label }}</button>
+              <button class="btn small" @click="lightenAll(current.lighten)" :title="`Set every part to ${lightenLabel(current.lighten)}`">Use on every part</button>
+            </div>
+          </div>
           <div class="tpick" v-if="hasNext(current)">
             <span class="muted">Into next part <kbd>T</kbd></span>
             <div>
@@ -233,7 +243,7 @@
         <p class="muted keys">
           <kbd>Space</kbd> play/pause the whole reel · <kbd>Enter</kbd> play just this part · <kbd>I</kbd>/<kbd>O</kbd> start/end at playhead ·
           <kbd>←</kbd>/<kbd>→</kbd> nudge 0.1s · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next · <kbd>X</kbd> keep/skip ·
-          <kbd>T</kbd> change transition · <kbd>G</kbd> Instagram overlays · drag the list to reorder
+          <kbd>T</kbd> change transition · <kbd>L</kbd> lighten · <kbd>G</kbd> Instagram overlays · drag the list to reorder
         </p>
         </div>
       </section>
@@ -430,7 +440,7 @@ async function remove(p) {
 // A second part of the same clip, starting just after this one.
 async function duplicate(p) {
   const r = fitRange(p.start + p.length, p.length, p.media.duration)
-  const item = await api.addItem(id, { mediaId: p.mediaId, ...r, focusX: p.focusX, focusY: p.focusY })
+  const item = await api.addItem(id, { mediaId: p.mediaId, ...r, focusX: p.focusX, focusY: p.focusY, lighten: p.lighten })
   const i = items.value.indexOf(p) + 1
   items.value.splice(i, 0, { ...item, media: p.media })
   await saveOrder()
@@ -520,6 +530,24 @@ function cycle(p) {
 }
 function useDefaultEverywhere() {
   for (const p of items.value) if (p.transition) setTransition(p, '')
+}
+
+// ---------------------------------------------------------------- lighten
+
+const LIGHTEN = [
+  { v: 0, label: 'Off' }, { v: 0.33, label: 'Low' }, { v: 0.66, label: 'Medium' }, { v: 1, label: 'High' },
+]
+const lightenLabel = (v) => (LIGHTEN.find((l) => Math.abs(l.v - v) < 0.01) || { label: `${Math.round(v * 100)}%` }).label
+function setLighten(p, v) {
+  p.lighten = v
+  saver.queue(p.id, { lighten: v })
+}
+function cycleLighten(p) {
+  const i = LIGHTEN.findIndex((l) => Math.abs(l.v - p.lighten) < 0.01)
+  setLighten(p, LIGHTEN[(i + 1) % LIGHTEN.length].v)
+}
+function lightenAll(v) {
+  for (const p of items.value) if (p.lighten !== v) setLighten(p, v)
 }
 
 // ---------------------------------------------------------------- play the reel
@@ -699,6 +727,7 @@ function onKey(e) {
   else if (k === 'Escape') exportResult.value = null
   else if (k === 'g' || k === 'G') guides.value = !guides.value
   else if ((k === 't' || k === 'T') && hasNext(current.value)) cycle(current.value)
+  else if (k === 'l' || k === 'L') cycleLighten(current.value)
   else return
   e.preventDefault()
 }

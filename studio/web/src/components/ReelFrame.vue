@@ -5,7 +5,17 @@
         v-if="mode === 'fit' && fit === 'blur'" class="blurbg" alt=""
         :src="api.thumb(media.folder, media.file, posterTime, 320)"
       />
-      <div class="media" :style="mediaStyle">
+      <!-- same gamma curve the render uses, so the preview matches -->
+      <svg v-if="lighten" class="defs" aria-hidden="true">
+        <filter :id="filterId" color-interpolation-filters="sRGB">
+          <feComponentTransfer>
+            <feFuncR type="gamma" :exponent="liftExponent" />
+            <feFuncG type="gamma" :exponent="liftExponent" />
+            <feFuncB type="gamma" :exponent="liftExponent" />
+          </feComponentTransfer>
+        </filter>
+      </svg>
+      <div class="media" :style="[mediaStyle, liftStyle]">
         <video
           v-if="media.kind === 'video'" :ref="bindVideo" :src="api.media(media.folder, media.file)"
           preload="auto" playsinline :muted="muted" @loadedmetadata="onMeta" @play="$emit('play')" @pause="$emit('pause')"
@@ -45,7 +55,8 @@ const props = defineProps({
   guides: Boolean,                                  // show where Instagram's UI covers
   muted: Boolean,
   cropped: Boolean,
-  effect: { type: Object, default: null },          // { type, at }: a transition to play into this shot                                 // show only what the reel shows (while playing it)                                   // matches whether the reel keeps clip audio
+  effect: { type: Object, default: null },
+  lighten: { type: Number, default: 0 },           // 0..1, as the engine's `lighten`          // { type, at }: a transition to play into this shot                                 // show only what the reel shows (while playing it)                                   // matches whether the reel keeps clip audio
   posterTime: { type: Number, default: 0 },
   bindVideo: { type: Function, default: () => {} },
 })
@@ -80,6 +91,12 @@ const mode = computed(() => (props.fit === 'fill' ? 'crop' : 'fit'))
 const boxAspect = computed(() => (mode.value === 'crop' && !props.cropped ? aspect.value : OUT))
 
 const stage = ref(null)
+
+// Lighten: engine uses eq gamma = 1 + 0.6 × lighten, i.e. out = in^(1/gamma).
+const filterId = `lift-${Math.random().toString(36).slice(2, 8)}`
+const liftExponent = computed(() => 1 / (1 + 0.6 * props.lighten))
+const liftStyle = computed(() => (props.lighten
+  ? { filter: `url(#${filterId}) saturate(${1 + 0.08 * props.lighten})` } : {}))
 
 // A rough, in-browser version of the transition into this shot, so playing
 // the reel shows the flow. The render does the real thing.
@@ -218,6 +235,7 @@ const round = (v) => Math.round(v * 1000) / 1000
   font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgb(31 42 31 / 70%); color: var(--cream);
   pointer-events: none;
 }
+.defs { position: absolute; width: 0; height: 0; }
 /* transition previews */
 .box.fx-flash::after, .box.fx-dip::after {
   content: ''; position: absolute; inset: 0; z-index: 3; pointer-events: none;

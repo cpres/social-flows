@@ -51,6 +51,10 @@ python3 studio/server.py --open
   *Whip* a fast blurred slide, *Zoom* a cut where the next shot punches in and
   settles. Set a reel-wide default under *Settings*. Playing the reel shows a
   rough preview of each one; the render does the real thing.
+- **Lighten:** each part can be lightened (Off / Low / Medium / High, or `L`),
+  with *Use on every part* to match the rest. It lifts shadows and midtones
+  rather than flat brightness, so shade opens up without blowing out the sky.
+  The preview shows it live; parts with it on get a ☀ in the list.
 - **Open a reel** to see its parts from every shoot. Drag to reorder (or *Sort by
   shot time*), fine-tune each part's start and length, skip parts without
   removing them, and set music, beat sync and framing under *Settings*.
@@ -83,7 +87,7 @@ the whole clip · `I`/`O` start/end at playhead · `←`/`→` nudge start (Shif
 `↑`/`↓` previous/next · `1`–`9` add to reel · `G` Instagram overlays.
 
 Keys in a reel: `Space` play/pause the whole reel · `Enter` play just this part ·
-`I`/`O`, `←`/`→`, `↑`/`↓` as above · `X` keep/skip · `G` Instagram overlays.
+`I`/`O`, `←`/`→`, `↑`/`↓` as above · `X` keep/skip · `T` transition · `L` lighten · `G` Instagram overlays.
 
 **Lengths and beat sync.** With no music, or beat sync off (the default), your
 lengths are used exactly. Turn beat sync on in *Settings* and the engine

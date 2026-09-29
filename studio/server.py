@@ -81,7 +81,7 @@ def item_dict(row):
     return {"id": row["item_id"], "reelId": row["reel_id"], "mediaId": row["media_id"],
             "position": row["position"], "start": row["start"], "length": row["length"],
             "keep": bool(row["keep"]), "focusX": row["focus_x"], "focusY": row["focus_y"],
-            "transition": row["transition"]}
+            "transition": row["transition"], "lighten": row["lighten"]}
 
 
 def reel_row(db, reel_id):
@@ -319,11 +319,12 @@ def add_item(reel_id: int, body: dict = Body(...)):
         else:
             length, start = float(body.get("length") or s["defaultHold"]), 0.0
         fx, fy = unit(body.get("focusX", 0.5)), unit(body.get("focusY", 0.5))
+        lighten = unit(body.get("lighten", 0))
         pos = db.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM reel_items "
                          "WHERE reel_id = ?", (reel_id,)).fetchone()[0]
         cur = db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length, "
-                         "focus_x, focus_y) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                         (reel_id, m["id"], pos, start, length, fx, fy))
+                         "focus_x, focus_y, lighten) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                         (reel_id, m["id"], pos, start, length, fx, fy, lighten))
         touch(db, reel_id)
         row = db.execute("SELECT id AS item_id, * FROM reel_items WHERE id = ?",
                          (cur.lastrowid,)).fetchone()
@@ -337,6 +338,8 @@ def update_item(item_id: int, body: dict = Body(...)):
         if body["transition"] not in TRANSITIONS:
             raise HTTPException(400, f"Unknown transition: {body['transition']}")
         fields["transition"] = body["transition"]
+    if "lighten" in body:
+        fields["lighten"] = unit(body["lighten"])
     for key, col in (("focusX", "focus_x"), ("focusY", "focus_y")):
         if key in body:
             fields[col] = unit(body[key])
@@ -381,6 +384,8 @@ def build_config(reel, rows):
                  "file": str(ROOT / row["path"])}
         if (row["focus_x"], row["focus_y"]) != (0.5, 0.5):
             entry["focus"] = [round(row["focus_x"], 3), round(row["focus_y"], 3)]
+        if row["lighten"]:
+            entry["lighten"] = round(row["lighten"], 2)
         if row["kind"] == "video":
             entry["times"] = [round(row["start"], 2)]
             entry["length"] = round(row["length"], 2)

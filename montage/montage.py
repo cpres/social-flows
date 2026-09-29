@@ -54,6 +54,8 @@ WHIP_D = 0.22     # fast slide with horizontal motion blur either side of the jo
 PUNCH_D = 0.30    # incoming shot starts zoomed in and snaps back
 PUNCH_ZOOM = 0.18
 
+LIGHTEN_GAMMA = 0.6   # per-source `lighten:` 0..1; 1 = gamma 1.6
+
 EDGE_FADE = 0.03  # tiny audio fade on every cut so hard cuts never click
 
 
@@ -289,6 +291,7 @@ def build_plan(cfg, base_dir, beats):
                     plan.append({"kind": "image", "path": src["_path"], "label": label,
                                  "round": r, "start": 0.0, "focus": src.get("focus", (0.5, 0.5)),
                                  "transition": src.get("transition"),
+                                 "lighten": float(src.get("lighten", 0) or 0),
                                  "seconds": float(src.get("hold", default_hold)),
                                  "beats": int(src.get("hold_beats", beats_per_cut * 2))})
                 continue
@@ -306,6 +309,7 @@ def build_plan(cfg, base_dir, beats):
                          "round": r, "start": start, "src_duration": src["_duration"],
                          "focus": src.get("focus", (0.5, 0.5)),
                          "transition": src.get("transition"),
+                         "lighten": float(src.get("lighten", 0) or 0),
                          "has_audio": src["_has_audio"],
                          "seconds": float(src.get("length", default_len)),
                          "beats": int(src.get("beats", beats_per_cut))})
@@ -424,7 +428,14 @@ def render_segment(seg, idx, cfg, workdir, keep_audio):
         cmd += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
     a_in = "0:a:0" if use_source_audio else "1:a"
 
-    graph = fit_filter(cfg, "0:v", "fit", seg.get("focus", (0.5, 0.5))) + ";"
+    lift = min(max(seg.get("lighten", 0), 0.0), 1.0)
+    if lift:
+        # Lift shadows and midtones (gamma) rather than flat brightness, so
+        # shade opens up without blowing out the sky.
+        graph = (fit_filter(cfg, "0:v", "fit0", seg.get("focus", (0.5, 0.5))) +
+                 f";[fit0]eq=gamma={1 + LIGHTEN_GAMMA * lift:.3f}:saturation={1 + 0.08 * lift:.3f}[fit];")
+    else:
+        graph = fit_filter(cfg, "0:v", "fit", seg.get("focus", (0.5, 0.5))) + ";"
     # Zoom punch-in: start PUNCH_ZOOM larger and ease back to normal.
     punch_frames = round(seg.get("punch_in", 0) * fps)
     punch = (f"+{PUNCH_ZOOM}*pow(max(0,1-on/{punch_frames}),2)" if punch_frames else "")
@@ -492,6 +503,9 @@ def assemble(segs, plan, cfg, workdir):
             acc += plan[k]["render_length"] - d
         vcur, acur = f"[vc{k}]", f"[ac{k}]"
 
+    # A one-cut reel never enters the loop: its audio is the input stream itself.
+    if acur == "[0:a]":
+        acur = "0:a"
     cmd += ["-filter_complex", ";".join(graph), "-map", vcur, "-map", acur,
             *video_codec(cfg), "-r", str(fps),
             "-c:a", "pcm_s16le", str(out)]

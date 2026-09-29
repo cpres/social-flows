@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS reel_items (
     keep     INTEGER NOT NULL DEFAULT 1,
     focus_x  REAL NOT NULL DEFAULT 0.5,     -- where the 9:16 window sits in the frame
     focus_y  REAL NOT NULL DEFAULT 0.5,     -- (0 = left/top, 1 = right/bottom)
-    transition TEXT NOT NULL DEFAULT ''     -- into the next part; '' = reel default
+    transition TEXT NOT NULL DEFAULT '',    -- into the next part; '' = reel default
+    lighten  REAL NOT NULL DEFAULT 0        -- 0..1, lifts shadows and midtones
 );
 CREATE INDEX IF NOT EXISTS items_reel ON reel_items(reel_id, position);
 CREATE INDEX IF NOT EXISTS items_media ON reel_items(media_id);
@@ -200,7 +201,8 @@ def migrate(db):
                              ("media", "height", "INTEGER NOT NULL DEFAULT 0"),
                              ("reel_items", "focus_x", "REAL NOT NULL DEFAULT 0.5"),
                              ("reel_items", "focus_y", "REAL NOT NULL DEFAULT 0.5"),
-                             ("reel_items", "transition", "TEXT NOT NULL DEFAULT ''")]:
+                             ("reel_items", "transition", "TEXT NOT NULL DEFAULT ''"),
+                             ("reel_items", "lighten", "REAL NOT NULL DEFAULT 0")]:
         if col not in have[table]:
             db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
