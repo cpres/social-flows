@@ -28,9 +28,15 @@
       <!-- the part of the frame the reel keeps -->
       <div
         v-if="mode === 'crop' && !cropped" class="window" :class="{ movable, dragging }" :style="windowStyle"
-        @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="up"
+        @pointerdown="down($event, 'move')" @pointermove="move" @pointerup="up" @pointercancel="up"
+        @dblclick="resetZoom" :title="zoom > 1 ? 'Double-click to zoom back out' : ''"
       >
-        <span class="hint" v-if="movable">drag to reframe</span>
+        <span class="hint">{{ movable ? 'drag to reframe · corners to zoom' : 'drag a corner to zoom' }}</span>
+        <span class="zoomtag" v-if="zoom > 1.005">{{ zoom.toFixed(1) }}×</span>
+        <span
+          v-for="c in CORNERS" :key="c" class="corner" :class="c"
+          @pointerdown.stop="down($event, c)" @pointermove.stop="move" @pointerup.stop="up" @pointercancel.stop="up"
+        ></span>
         <Guides v-if="guides" />
       </div>
       <Guides v-else-if="guides" />
@@ -56,7 +62,8 @@ const props = defineProps({
   muted: Boolean,
   cropped: Boolean,
   effect: { type: Object, default: null },
-  lighten: { type: Number, default: 0 },           // 0..1, as the engine's `lighten`          // { type, at }: a transition to play into this shot                                 // show only what the reel shows (while playing it)                                   // matches whether the reel keeps clip audio
+  lighten: { type: Number, default: 0 },
+  zoom: { type: Number, default: 1 },              // >1 = crop tighter than the full 9:16 window           // 0..1, as the engine's `lighten`          // { type, at }: a transition to play into this shot                                 // show only what the reel shows (while playing it)                                   // matches whether the reel keeps clip audio
   posterTime: { type: Number, default: 0 },
   bindVideo: { type: Function, default: () => {} },
 })
@@ -171,19 +178,22 @@ const backdrop = computed(() =>
   props.fit === 'pad' ? BRAND.forest : mode.value === 'fit' ? '#121812' : 'transparent')
 
 // The 9:16 window, as percentages of the source.
+// The 9:16 window as percentages of the source: the largest one that fits,
+// shrunk by the zoom, placed by focus (0 = left/top edge, 1 = right/bottom).
+const MAX_ZOOM = 3
+const CORNERS = ['nw', 'ne', 'sw', 'se']
+const zoom = computed(() => clamp(props.zoom || 1, 1, MAX_ZOOM))
 const win = computed(() => {
   const a = aspect.value
-  if (a > OUT * 1.005) {
-    const w = (OUT / a) * 100
-    return { w, h: 100, left: (100 - w) * props.focusX, top: 0, axis: 'x' }
-  }
-  if (a < OUT * 0.995) {
-    const hgt = (a / OUT) * 100
-    return { w: 100, h: hgt, left: 0, top: (100 - hgt) * props.focusY, axis: 'y' }
-  }
-  return { w: 100, h: 100, left: 0, top: 0, axis: null }
+  let w = 100
+  let h = 100
+  if (a > OUT) w = (OUT / a) * 100
+  else h = (a / OUT) * 100
+  w /= zoom.value
+  h /= zoom.value
+  return { w, h, left: (100 - w) * props.focusX, top: (100 - h) * props.focusY }
 })
-const movable = computed(() => win.value.axis !== null)
+const movable = computed(() => win.value.w < 99.5 || win.value.h < 99.5)
 const windowStyle = computed(() => ({
   left: `${win.value.left}%`, top: `${win.value.top}%`,
   width: `${win.value.w}%`, height: `${win.value.h}%`,
@@ -191,25 +201,60 @@ const windowStyle = computed(() => ({
 
 const dragging = ref(false)
 let origin = null
-function down(e) {
-  if (!movable.value) return
+function down(e, what) {
   e.currentTarget.setPointerCapture(e.pointerId)
   dragging.value = true
-  origin = { x: e.clientX, y: e.clientY, fx: props.focusX, fy: props.focusY }
+  const w = win.value
+  const bw = box.value.w
+  const bh = box.value.h
+  const px = { l: (w.left / 100) * bw, t: (w.top / 100) * bh, w: (w.w / 100) * bw, h: (w.h / 100) * bh }
+  // The corner opposite the one grabbed stays put while resizing.
+  const anchor = {
+    x: what.includes('w') ? px.l + px.w : px.l,
+    y: what.includes('n') ? px.t + px.h : px.t,
+  }
+  origin = { what, x: e.clientX, y: e.clientY, fx: props.focusX, fy: props.focusY, anchor,
+             fullW: px.w * zoom.value, rect: stage.value.querySelector('.box').getBoundingClientRect() }
 }
 function move(e) {
   if (!dragging.value) return
+  if (Math.abs(e.clientX - origin.x) + Math.abs(e.clientY - origin.y) > 3) origin.moved = true
+  if (!origin.moved) return
+  const bw = box.value.w
+  const bh = box.value.h
   const w = win.value
-  if (w.axis === 'x') {
-    const travel = box.value.w * (1 - w.w / 100)
-    emit('focus', { x: round(clamp(origin.fx + (e.clientX - origin.x) / travel, 0, 1)), y: props.focusY })
-  } else {
-    const travel = box.value.h * (1 - w.h / 100)
-    emit('focus', { x: props.focusX, y: round(clamp(origin.fy + (e.clientY - origin.y) / travel, 0, 1)) })
+  if (origin.what === 'move') {
+    const tx = bw * (1 - w.w / 100)
+    const ty = bh * (1 - w.h / 100)
+    emit('focus', {
+      x: tx > 0.5 ? round(clamp(origin.fx + (e.clientX - origin.x) / tx, 0, 1)) : props.focusX,
+      y: ty > 0.5 ? round(clamp(origin.fy + (e.clientY - origin.y) / ty, 0, 1)) : props.focusY,
+      zoom: zoom.value,
+    })
+    return
   }
+  // Corner: the new width follows the pointer's distance from the anchor; the
+  // window stays 9:16 on screen.
+  const px = e.clientX - origin.rect.left
+  const py = e.clientY - origin.rect.top
+  let nw = Math.max(Math.abs(px - origin.anchor.x), Math.abs(py - origin.anchor.y) * OUT)
+  nw = clamp(nw, origin.fullW / MAX_ZOOM, origin.fullW)
+  const nh = nw / OUT
+  const left = clamp(origin.what.includes('w') ? origin.anchor.x - nw : origin.anchor.x, 0, bw - nw)
+  const top = clamp(origin.what.includes('n') ? origin.anchor.y - nh : origin.anchor.y, 0, bh - nh)
+  emit('focus', {
+    x: bw - nw > 0.5 ? round(left / (bw - nw)) : 0.5,
+    y: bh - nh > 0.5 ? round(top / (bh - nh)) : 0.5,
+    zoom: Math.round((origin.fullW / nw) * 100) / 100,
+  })
 }
 function up() {
+  // A click on the window (no drag) plays/pauses, like clicking the video.
+  if (dragging.value && origin && !origin.moved && origin.what === 'move') emit('toggle')
   dragging.value = false
+}
+function resetZoom() {
+  if (zoom.value > 1) emit('focus', { x: props.focusX, y: props.focusY, zoom: 1 })
 }
 const round = (v) => Math.round(v * 1000) / 1000
 </script>
@@ -226,7 +271,20 @@ const round = (v) => Math.round(v * 1000) / 1000
 .blurbg { position: absolute; inset: -10%; width: 120%; height: 120%; object-fit: cover; filter: blur(18px) brightness(0.8); }
 .window {
   position: absolute; box-shadow: 0 0 0 9999px rgb(10 14 10 / 62%);
-  outline: 2px solid var(--sage); pointer-events: none;
+  outline: 2px solid var(--sage); touch-action: none;
+}
+.corner {
+  position: absolute; width: 18px; height: 18px; background: var(--sage);
+  border: 2px solid var(--paper); border-radius: 3px; z-index: 2; touch-action: none;
+}
+/* inside the window, so they stay grabbable when it touches the frame's edge */
+.corner.nw { left: 2px; top: 2px; cursor: nwse-resize; }
+.corner.se { right: 2px; bottom: 2px; cursor: nwse-resize; }
+.corner.ne { right: 2px; top: 2px; cursor: nesw-resize; }
+.corner.sw { left: 2px; bottom: 2px; cursor: nesw-resize; }
+.zoomtag {
+  position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); font-size: 11px; font-weight: 700; pointer-events: none;
+  padding: 1px 7px; border-radius: 999px; background: var(--sage); color: var(--forest);
 }
 .window.movable { pointer-events: auto; cursor: grab; touch-action: none; }
 .window.dragging { cursor: grabbing; }

@@ -21,6 +21,7 @@ librosa detects the beat automatically. If you skip it, set `bpm:` in the config
 ## Tuning the feel
 
 - **Pace:** `beats_per_cut` (1 = frantic, 2 = lively, 4 = calm). Give single clips `beats: 4` to let them breathe.
+- **Framing:** `focus: [x, y]` (0–1) picks which part of the frame a fill crop keeps; `zoom: 1.5` (1–3) crops tighter.
 - **Lighten:** give a source `lighten: 0.5` (0–1) to lift shadows and midtones for footage shot in shade.
 - **Per-cut transitions:** give any source `transition: flash | whip | zoom | dissolve | dip | cut` to choose how it leads into the next one. Flash is a 0.16s white flash, whip a 0.22s blurred slide, zoom a cut where the next shot punches in from 118%.
 - **Softness:** set `within_round: dissolve` for a dreamier piece, or `between_rounds: dip` for a breath through black.

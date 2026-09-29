@@ -218,7 +218,7 @@
           <ReelFrame
             v-else :key="current.mediaId" :media="current.media" :fit="settings.fit || 'fill'" :guides="guides"
             :muted="!settings.originalAudio" :cropped="reelOn" :effect="effect" :lighten="current.lighten"
-            :focus-x="current.focusX" :focus-y="current.focusY" :poster-time="current.start"
+            :focus-x="current.focusX" :focus-y="current.focusY" :zoom="current.zoom || 1" :poster-time="current.start"
             :bind-video="(el) => (player.video.value = el)"
             @loaded="onFrameLoaded" @play="player.events.onPlay" @pause="player.events.onPause"
             @error="player.events.onError" @toggle="player.toggle" @focus="setFocus"
@@ -471,11 +471,12 @@ function setOut() {
   if (player.playhead.value - p.start >= 0.2) setRange({ start: p.start, length: player.playhead.value - p.start })
 }
 
-function setFocus({ x, y }) {
+function setFocus({ x, y, zoom }) {
   const p = current.value
-  p.focusX = x
-  p.focusY = y
-  saver.queue(p.id, { focusX: x, focusY: y })
+  const patch = { focusX: x, focusY: y }
+  if (zoom !== undefined) patch.zoom = zoom
+  Object.assign(p, patch)
+  saver.queue(p.id, patch)
 }
 
 function setKeep(p, keep) {
@@ -504,7 +505,7 @@ async function remove(p) {
 // A second part of the same clip, starting just after this one.
 async function duplicate(p) {
   const r = fitRange(p.start + len(p), p.length, p.media.duration)
-  const item = await api.addItem(id, { mediaId: p.mediaId, ...r, focusX: p.focusX, focusY: p.focusY, lighten: p.lighten })
+  const item = await api.addItem(id, { mediaId: p.mediaId, ...r, focusX: p.focusX, focusY: p.focusY, zoom: p.zoom, lighten: p.lighten })
   const i = items.value.indexOf(p) + 1
   items.value.splice(i, 0, { ...item, media: p.media })
   await saveOrder()

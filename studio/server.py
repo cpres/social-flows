@@ -59,7 +59,7 @@ TRANSITIONS = ("", "cut", "flash", "whip", "zoom", "dissolve", "dip")   # per-fo
 lib = Library(ROOT)
 shelf = Shelf(os.environ.get("MUSIC_DIR", "~/Music/Reels"), lib.home / "music")
 ITEM_COLUMNS = ("media_id", "position", "start", "length", "keep", "focus_x", "focus_y",
-                "transition", "lighten", "beats")
+                "transition", "lighten", "beats", "zoom")
 app = FastAPI(title="Footage Studio")
 
 
@@ -85,7 +85,8 @@ def item_dict(row):
     return {"id": row["item_id"], "reelId": row["reel_id"], "mediaId": row["media_id"],
             "position": row["position"], "start": row["start"], "length": row["length"],
             "keep": bool(row["keep"]), "focusX": row["focus_x"], "focusY": row["focus_y"],
-            "transition": row["transition"], "lighten": row["lighten"], "beats": row["beats"]}
+            "transition": row["transition"], "lighten": row["lighten"], "beats": row["beats"],
+            "zoom": row["zoom"]}
 
 
 def reel_row(db, reel_id):
@@ -106,6 +107,10 @@ def fit(start, length, duration):
     length = min(max(0.2, length), duration)
     start = min(max(0.0, start), duration - length)
     return round(start, 3), round(length, 3)
+
+
+def zoom_of(v):
+    return round(min(max(float(v or 1), 1.0), 3.0), 3)
 
 
 def unit(v):
@@ -325,11 +330,12 @@ def add_item(reel_id: int, body: dict = Body(...)):
         fx, fy = unit(body.get("focusX", 0.5)), unit(body.get("focusY", 0.5))
         lighten = unit(body.get("lighten", 0))
         beats = max(0, min(int(body.get("beats") or 0), 64))
+        zoom = zoom_of(body.get("zoom", 1))
         pos = db.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM reel_items "
                          "WHERE reel_id = ?", (reel_id,)).fetchone()[0]
         cur = db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length, "
-                         "focus_x, focus_y, lighten, beats) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                         (reel_id, m["id"], pos, start, length, fx, fy, lighten, beats))
+                         "focus_x, focus_y, lighten, beats, zoom) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (reel_id, m["id"], pos, start, length, fx, fy, lighten, beats, zoom))
         touch(db, reel_id)
         row = db.execute("SELECT id AS item_id, * FROM reel_items WHERE id = ?",
                          (cur.lastrowid,)).fetchone()
@@ -347,6 +353,8 @@ def update_item(item_id: int, body: dict = Body(...)):
         fields["lighten"] = unit(body["lighten"])
     if "beats" in body:
         fields["beats"] = max(0, min(int(body["beats"]), 64))
+    if "zoom" in body:
+        fields["zoom"] = zoom_of(body["zoom"])
     for key, col in (("focusX", "focus_x"), ("focusY", "focus_y")):
         if key in body:
             fields[col] = unit(body[key])
@@ -450,6 +458,8 @@ def build_config(reel, rows):
             entry["focus"] = [round(row["focus_x"], 3), round(row["focus_y"], 3)]
         if row["lighten"]:
             entry["lighten"] = round(row["lighten"], 2)
+        if row["zoom"] > 1.001:
+            entry["zoom"] = round(row["zoom"], 3)
         if row["kind"] == "video":
             entry["times"] = [round(row["start"], 2)]
             entry["length"] = round(row["length"], 2)

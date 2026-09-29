@@ -86,7 +86,7 @@ python3 studio/server.py --open
 as it will appear in the reel. When a clip isn't exactly 9:16 (glasses footage
 is often 3:4), the part the reel keeps is outlined and the rest dimmed. Drag
 that window to keep the subject in frame; it's saved per part, so the same clip
-can be framed differently in different reels. Press `G` to see where Instagram's
+can be framed differently in different reels. Drag a corner of the window to zoom in (up to 3×; also works on clips that are already 9:16), then drag the window to place it; double-click it to zoom back out. Press `G` to see where Instagram's
 caption and buttons will cover the picture. Files stored sideways with a
 rotation flag (common from phones) are handled.
 

@@ -37,7 +37,7 @@
         <div class="preview-col">
           <ReelFrame
             :key="current.id" :media="current" fit="fill" :guides="guides" muted
-            :focus-x="range.focusX ?? 0.5" :focus-y="range.focusY ?? 0.5" :poster-time="range.start"
+            :focus-x="range.focusX ?? 0.5" :focus-y="range.focusY ?? 0.5" :zoom="range.zoom || 1" :poster-time="range.start"
             :bind-video="(el) => (player.video.value = el)"
             @loaded="onLoaded" @play="player.events.onPlay" @pause="player.events.onPause"
             @error="player.events.onError" @toggle="player.toggle" @focus="setFocus"
@@ -172,9 +172,9 @@ const DEFAULT_LENGTH = 2   // seconds, for a new selection on a video
 // A fresh selection per clip, where the engine would cut by default.
 function initDraft(m) {
   const length = m.kind === 'video' ? Math.min(DEFAULT_LENGTH, m.duration || DEFAULT_LENGTH) : 1.6
-  drafts[m.id] = { start: m.kind === 'video' ? defaultStart(m.duration, length) : 0, length, focusX: 0.5, focusY: 0.5 }
+  drafts[m.id] = { start: m.kind === 'video' ? defaultStart(m.duration, length) : 0, length, focusX: 0.5, focusY: 0.5, zoom: 1 }
 }
-const draftOf = (m) => (m && drafts[m.id]) || { start: 0, length: DEFAULT_LENGTH, focusX: 0.5, focusY: 0.5 }
+const draftOf = (m) => (m && drafts[m.id]) || { start: 0, length: DEFAULT_LENGTH, focusX: 0.5, focusY: 0.5, zoom: 1 }
 const guides = ref(false)
 
 const saver = debouncedSaver((id, patch) => api.updateItem(id, patch))
@@ -263,8 +263,9 @@ function setRange({ start, length }) {
 }
 
 // Where the 9:16 window sits in a frame that isn't 9:16.
-function setFocus({ x, y }) {
+function setFocus({ x, y, zoom }) {
   const patch = { focusX: x, focusY: y }
+  if (zoom !== undefined) patch.zoom = zoom
   if (active.value) {
     Object.assign(active.value, patch)
     saver.queue(active.value.id, patch)
@@ -297,7 +298,7 @@ async function tag(reel) {
   const r = draftOf(m)
   try {
     const item = await api.addItem(reel.id, {
-      mediaId: m.id, start: r.start, length: r.length, focusX: r.focusX, focusY: r.focusY,
+      mediaId: m.id, start: r.start, length: r.length, focusX: r.focusX, focusY: r.focusY, zoom: r.zoom || 1,
     })
     items.value.push(item)
     showFlash(`Added to ${reel.name}`)

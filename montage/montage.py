@@ -321,6 +321,7 @@ def build_plan(cfg, base_dir, beats):
                                  "round": r, "start": 0.0, "focus": src.get("focus", (0.5, 0.5)),
                                  "transition": src.get("transition"),
                                  "lighten": float(src.get("lighten", 0) or 0),
+                                 "zoom": float(src.get("zoom", 1) or 1),
                                  "seconds": float(src.get("hold", default_hold)),
                                  "beats": int(src.get("hold_beats", beats_per_cut * 2))})
                 continue
@@ -339,6 +340,7 @@ def build_plan(cfg, base_dir, beats):
                          "focus": src.get("focus", (0.5, 0.5)),
                          "transition": src.get("transition"),
                          "lighten": float(src.get("lighten", 0) or 0),
+                         "zoom": float(src.get("zoom", 1) or 1),
                          "has_audio": src["_has_audio"],
                          "seconds": float(src.get("length", default_len)),
                          "beats": int(src.get("beats", beats_per_cut))})
@@ -416,15 +418,18 @@ def video_codec(cfg):
             "-crf", str(cfg.get("crf", 18)), "-profile:v", "high", *pix]
 
 
-def fit_filter(cfg, src_label, out_label, focus=(0.5, 0.5)):
+def fit_filter(cfg, src_label, out_label, focus=(0.5, 0.5), zoom=1.0):
     """Frame a source to the output size. `focus` picks which part of a
-    too-wide or too-tall source the crop keeps: 0 = left/top, 1 = right/bottom."""
+    too-wide or too-tall source the crop keeps: 0 = left/top, 1 = right/bottom.
+    `zoom` > 1 (fill only) crops tighter: the source is scaled up first."""
     w, h = cfg["width"], cfg["height"]
     fx, fy = (min(max(float(v), 0.0), 1.0) for v in focus)
     crop = f"crop={w}:{h}:(iw-{w})*{fx:.4f}:(ih-{h})*{fy:.4f}"
     fit = cfg.get("fit", "fill")
     if fit == "fill":
-        return (f"[{src_label}]scale={w}:{h}:force_original_aspect_ratio=increase,"
+        z = min(max(float(zoom or 1), 1.0), 3.0)
+        zw, zh = round(w * z / 2) * 2, round(h * z / 2) * 2
+        return (f"[{src_label}]scale={zw}:{zh}:force_original_aspect_ratio=increase,"
                 f"{crop}[{out_label}]")
     if fit == "blur":
         return (f"[{src_label}]split[fa][fb];"
@@ -461,10 +466,10 @@ def render_segment(seg, idx, cfg, workdir, keep_audio):
     if lift:
         # Lift shadows and midtones (gamma) rather than flat brightness, so
         # shade opens up without blowing out the sky.
-        graph = (fit_filter(cfg, "0:v", "fit0", seg.get("focus", (0.5, 0.5))) +
+        graph = (fit_filter(cfg, "0:v", "fit0", seg.get("focus", (0.5, 0.5)), seg.get("zoom", 1)) +
                  f";[fit0]eq=gamma={1 + LIGHTEN_GAMMA * lift:.3f}:saturation={1 + 0.08 * lift:.3f}[fit];")
     else:
-        graph = fit_filter(cfg, "0:v", "fit", seg.get("focus", (0.5, 0.5))) + ";"
+        graph = fit_filter(cfg, "0:v", "fit", seg.get("focus", (0.5, 0.5)), seg.get("zoom", 1)) + ";"
     # Zoom punch-in: start PUNCH_ZOOM larger and ease back to normal.
     punch_frames = round(seg.get("punch_in", 0) * fps)
     punch = (f"+{PUNCH_ZOOM}*pow(max(0,1-on/{punch_frames}),2)" if punch_frames else "")
