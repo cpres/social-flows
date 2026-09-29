@@ -1,5 +1,5 @@
 <template>
-  <div class="frame-stage" ref="stage">
+  <div class="frame-stage" ref="stage" :style="{ height: `${box.h}px` }">
     <div class="box" :style="{ width: `${box.w}px`, height: `${box.h}px`, background: backdrop }">
       <img
         v-if="mode === 'fit' && fit === 'blur'" class="blurbg" alt=""
@@ -77,22 +77,26 @@ const mode = computed(() => (props.fit === 'fill' ? 'crop' : 'fit'))
 const boxAspect = computed(() => (mode.value === 'crop' ? aspect.value : OUT))
 
 const stage = ref(null)
-const space = reactive({ w: 0, h: 0 })
+// The frame fills the column's width, up to a height that fits the window;
+// the stage wraps it, so there are no empty bands above or below.
+const width = ref(0)
+const cap = ref(0)
+const measureCap = () => { cap.value = Math.max(360, Math.min(window.innerHeight - 150, 820)) }
 let observer
 onMounted(() => {
-  observer = new ResizeObserver(([entry]) => {
-    space.w = entry.contentRect.width
-    space.h = entry.contentRect.height
-  })
+  measureCap()
+  window.addEventListener('resize', measureCap)
+  observer = new ResizeObserver(([entry]) => { width.value = entry.contentRect.width })
   observer.observe(stage.value)
 })
-onBeforeUnmount(() => observer?.disconnect())
+onBeforeUnmount(() => {
+  observer?.disconnect()
+  window.removeEventListener('resize', measureCap)
+})
 
 const box = computed(() => {
-  let hgt = space.h
-  let w = hgt * boxAspect.value
-  if (w > space.w) { w = space.w; hgt = w / boxAspect.value }
-  return { w: Math.round(w), h: Math.round(hgt) }
+  const w = Math.min(width.value, cap.value * boxAspect.value)
+  return { w: Math.round(w), h: Math.round(w / boxAspect.value) }
 })
 
 const mediaStyle = computed(() => {
@@ -156,7 +160,7 @@ const round = (v) => Math.round(v * 1000) / 1000
 
 <style scoped>
 .frame-stage {
-  position: relative; display: grid; place-items: center; height: 100%;
+  position: relative; display: grid; place-items: center;
   background: #121812; border-radius: var(--radius); overflow: hidden;
 }
 .box { position: relative; overflow: hidden; }

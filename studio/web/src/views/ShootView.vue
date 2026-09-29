@@ -81,7 +81,9 @@
               @click="tag(r)"
             >
               <span class="sw" :style="{ background: reelColor(r.id) }"></span>
-              {{ r.name }} <kbd v-if="i < 9">{{ i + 1 }}</kbd>
+              {{ r.name }}
+              <span class="count" v-if="countIn(r.id)" :title="`${countIn(r.id)} part(s) of this clip already in ${r.name}`">{{ countIn(r.id) }} here</span>
+              <kbd v-if="i < 9" class="key" :title="`Press ${i + 1} to add`">{{ i + 1 }}</kbd>
             </button>
             <button class="reelchip" @click="newReelAndTag">+ New reel</button>
           </div>
@@ -149,6 +151,7 @@ const range = computed(() => active.value || draftOf(current.value))
 const player = usePlayer(() => range.value)
 
 const partsOf = (mediaId) => items.value.filter((p) => p.mediaId === mediaId).sort((a, b) => a.start - b.start)
+const countIn = (reelId) => partsOf(current.value.id).filter((p) => p.reelId === reelId).length
 const reelName = (id) => reels.value.find((r) => r.id === id)?.name ?? 'reel'
 const segments = computed(() =>
   partsOf(current.value.id)
@@ -328,6 +331,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 <style scoped>
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.count {
+  font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px;
+  background: var(--forest); color: var(--cream);
+}
+.key { opacity: 0.55; }
 .flash { margin: 10px 0 0; font-size: 13px; color: var(--forest); }
 .editing {
   margin: -16px 0 18px; padding: 8px 12px; border-left: 4px solid; background: var(--paper);

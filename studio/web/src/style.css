@@ -75,19 +75,18 @@ kbd {
   max-height: calc(100vh - 180px); overflow-y: auto; position: sticky; top: 12px; padding-right: 4px;
 }
 .editor {
-  min-width: 0; display: grid; grid-template-columns: minmax(240px, 380px) minmax(0, 1fr);
+  min-width: 0; display: grid; grid-template-columns: minmax(260px, 440px) minmax(0, 1fr);
   gap: 20px; align-items: start;
 }
 /* portrait preview: the reel is 9:16, so the stage is a tall column */
-.preview-col { position: sticky; top: 12px; height: min(calc(100vh - 150px), 820px); min-height: 420px; display: flex; flex-direction: column; gap: 6px; }
-.preview-col > :first-child { flex: 1; min-height: 0; }
+.preview-col { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 6px; }
 .edit-col { min-width: 0; }
 .guides-toggle { font-size: 12px; display: flex; align-items: center; gap: 6px; }
 .unplayable {
   position: absolute; left: 12px; right: 12px; bottom: 12px; margin: 0; padding: 10px 12px;
   background: var(--paper); border-radius: 8px; font-size: 13px; z-index: 2;
 }
-.frame-missing { position: relative; background: #121812; border-radius: var(--radius); }
+.frame-missing { position: relative; background: #121812; border-radius: var(--radius); height: 420px; }
 .controls { display: flex; align-items: center; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
 .spacer { flex: 1; }
 .keys { font-size: 12px; line-height: 2; }
@@ -110,6 +109,6 @@ kbd {
 @media (max-width: 860px) {
   .workspace { grid-template-columns: 1fr; }
   .editor { grid-template-columns: 1fr; }
-  .preview-col { position: static; height: 70vh; }
+  .preview-col { position: static; }
   .cliplist { position: static; max-height: 40vh; }
 }
