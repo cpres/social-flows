@@ -429,8 +429,8 @@ def music_beats(name: str):
     try:
         return shelf.analyze(path)
     except ImportError:
-        raise HTTPException(503, "Beat detection isn't installed: run "
-                                 "studio/.venv/bin/pip install librosa")
+        raise HTTPException(503, "Beat detection isn't installed: start the studio "
+                                 "with ./studio/run.sh --beat")
 
 
 # ---------------------------------------------------------------- export
@@ -479,8 +479,8 @@ def build_config(reel, rows):
                 shelf.analyze(track)
                 cfg["beat_file"] = str(shelf.cache_file(track))
             except ImportError:
-                raise HTTPException(400, "Beat sync needs the beat detector: run "
-                                         "studio/.venv/bin/pip install librosa")
+                raise HTTPException(400, "Cutting on the beat needs beat detection: "
+                                         "start the studio with ./studio/run.sh --beat")
     cfg.update({
         "clip_length": s["defaultLength"],
         "transitions": {"within_round": "cut", "between_rounds": "dissolve",

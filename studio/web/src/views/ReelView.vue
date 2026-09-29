@@ -87,7 +87,7 @@
         <div class="musicrow" v-if="settings.music">
           <label class="field check">
             <span><input type="checkbox" v-model="settings.beatSync" :disabled="!shelf.beatDetection" /> Cut on the beat</span>
-            <small v-if="!shelf.beatDetection">Needs beat detection: run <code>studio/.venv/bin/pip install librosa</code></small>
+            <small v-if="!shelf.beatDetection">Needs beat detection: start the studio with <code>./studio/run.sh --beat</code></small>
             <small v-else-if="settings.beatSync">Each part lasts whole beats; drag or pick beats per part.</small>
             <small v-else>Your lengths are used exactly; the song plays underneath.</small>
           </label>

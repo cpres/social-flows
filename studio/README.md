@@ -13,6 +13,10 @@ brew install ffmpeg node python@3.12   # once
 ./studio/run.sh                        # opens http://localhost:3009
 ```
 
+Beat detection (for *Cut on the beat*) is optional and fairly large:
+`./studio/run.sh --beat` installs it once. Plain `./studio/run.sh` skips it,
+and everything else works the same.
+
 Needs Python 3.9 or newer; `run.sh` looks for `python3.13` … `python3.9`
 before plain `python3`, so an old default `python3` (e.g. 3.7) is fine as long
 as a newer one is installed. The first run creates a Python environment in `studio/.venv`, installs the

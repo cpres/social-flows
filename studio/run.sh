@@ -2,8 +2,15 @@
 # One command to set up (first time) and start Footage Studio.
 #   ./studio/run.sh               # http://localhost:3009
 #   ./studio/run.sh --port 9000
+#   ./studio/run.sh --beat        # also install beat detection (for cutting on the beat)
 set -euo pipefail
 cd "$(dirname "$0")"
+
+BEAT=0
+ARGS=()
+for arg in "$@"; do
+  if [ "$arg" = "--beat" ]; then BEAT=1; else ARGS+=("$arg"); fi
+done
 
 if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
   echo "ffmpeg is not installed. Install it with:  brew install ffmpeg" >&2
@@ -40,13 +47,15 @@ if [ ! -f .venv/.installed ] || [ requirements.txt -nt .venv/.installed ]; then
   .venv/bin/python -m pip install --quiet -r requirements.txt
   touch .venv/.installed
 fi
-# Beat detection for music (large; optional, so a failure doesn't stop the studio).
-if [ ! -f .venv/.music-installed ] || [ requirements-music.txt -nt .venv/.music-installed ]; then
-  echo "Installing beat detection (librosa) ..."
-  if .venv/bin/python -m pip install --quiet -r requirements-music.txt; then
+# Beat detection (librosa) is optional and only installed with --beat. Ready-made
+# packages only: never try to compile (llvmlite would need a full LLVM install).
+if [ "$BEAT" = 1 ] && { [ ! -f .venv/.music-installed ] || [ requirements-music.txt -nt .venv/.music-installed ]; }; then
+  echo "Installing beat detection ..."
+  if .venv/bin/python -m pip install --only-binary=:all: -r requirements-music.txt > .venv/beat-install.log 2>&1; then
     touch .venv/.music-installed
   else
-    echo "  (beat detection didn't install; music still plays, but beat sync is off)" >&2
+    echo "  Beat detection isn't available for this Python on this Mac (details: studio/.venv/beat-install.log)." >&2
+    echo "  The studio works without it; cuts just won't snap to beats." >&2
   fi
 fi
 
@@ -60,4 +69,4 @@ if [ ! -f web/dist/index.html ] || [ -n "$(find web/src web/index.html web/packa
   (cd web && { [ -d node_modules ] && [ node_modules -nt package.json ] || npm install --silent; } && npm run build --silent)
 fi
 
-exec .venv/bin/python server.py --open "$@"
+exec .venv/bin/python server.py --open ${ARGS[@]+"${ARGS[@]}"}
