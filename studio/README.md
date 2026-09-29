@@ -7,19 +7,21 @@ it runs**. It writes the config `montage/montage.py` already reads.
 ## Run
 
 ```
-brew install ffmpeg node      # once
-./studio/run.sh               # opens http://localhost:3009
+brew install ffmpeg node python@3.12   # once
+./studio/run.sh                        # opens http://localhost:3009
 ```
 
-The first run creates a Python environment in `studio/.venv`, installs the
+Needs Python 3.9 or newer; `run.sh` looks for `python3.13` … `python3.9`
+before plain `python3`, so an old default `python3` (e.g. 3.7) is fine as long
+as a newer one is installed. The first run creates a Python environment in `studio/.venv`, installs the
 packages and builds the web app; later runs start straight away.
 `./studio/run.sh --port 9000` picks another port, and
 `FOOTAGE_DIR=/some/other/dir ./studio/run.sh` points it at another folder.
 
-Manual alternative:
+Manual alternative (delete any `.venv` made with an older Python first):
 
 ```
-python3 -m venv .venv && source .venv/bin/activate
+python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r studio/requirements.txt
 (cd studio/web && npm install && npm run build)
 python3 studio/server.py --open

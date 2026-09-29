@@ -10,10 +10,29 @@ if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
   exit 1
 fi
 
+new_enough() { "$1" -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null; }
+
+# A venv left over from an older Python (e.g. a failed first run) is rebuilt.
+if [ -e .venv ] && ! new_enough .venv/bin/python; then
+  echo "Removing studio/.venv (built with an older Python) ..."
+  rm -rf .venv
+fi
+
 # Python deps live in studio/.venv so they never touch the system Python.
 if [ ! -x .venv/bin/python ]; then
-  echo "Creating Python environment in studio/.venv ..."
-  python3 -m venv .venv
+  PY=""
+  for cand in python3.13 python3.12 python3.11 python3.10 python3.9 python3 \
+              /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+    if command -v "$cand" >/dev/null && new_enough "$cand"; then PY="$cand"; break; fi
+  done
+  if [ -z "$PY" ]; then
+    found="$(python3 --version 2>&1 || echo 'no python3')"
+    echo "Footage Studio needs Python 3.9+ (found: $found)." >&2
+    echo "Install it with:  brew install python@3.12   then run this again." >&2
+    exit 1
+  fi
+  echo "Creating Python environment in studio/.venv with $("$PY" --version) ..."
+  "$PY" -m venv .venv
 fi
 if [ ! -f .venv/.installed ] || [ requirements.txt -nt .venv/.installed ]; then
   echo "Installing Python packages ..."

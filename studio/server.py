@@ -20,6 +20,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+if sys.version_info < (3, 9):
+    sys.exit(f"Footage Studio needs Python 3.9+ (this is {sys.version.split()[0]}).\n\n"
+             f"Start it with  ./studio/run.sh  (it finds a newer Python), or install one:\n"
+             f"  brew install python@3.12")
+
 try:
     import uvicorn
     import yaml
