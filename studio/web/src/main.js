@@ -1,15 +1,17 @@
 import { createApp } from 'vue'
 import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
-import FolderGrid from './views/FolderGrid.vue'
-import FolderView from './views/FolderView.vue'
+import Home from './views/Home.vue'
+import ReelView from './views/ReelView.vue'
+import ShootView from './views/ShootView.vue'
 import './style.css'
 
 const router = createRouter({
   history: createWebHashHistory(),
   routes: [
-    { path: '/', component: FolderGrid },
-    { path: '/folder/:name', component: FolderView, props: true },
+    { path: '/', component: Home },
+    { path: '/shoot/:name', component: ShootView, props: true },
+    { path: '/reel/:id', component: ReelView, props: true },
   ],
 })
 

@@ -56,3 +56,55 @@ kbd {
   border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; background: var(--paper);
 }
 .field input[type='checkbox'] { width: auto; padding: 0; accent-color: var(--forest); }
+
+/* ---- shared by the shoot and reel screens ---- */
+.screen { max-width: 1440px; margin: 0 auto; padding: 16px 24px 48px; }
+.screen-msg { padding: 32px 24px; }
+.headbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.back {
+  display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%;
+  background: var(--paper); box-shadow: var(--shadow); font-size: 18px; flex: none;
+}
+.headbar .title { flex: 1; min-width: 220px; }
+.headbar h1 { margin: 0; font-size: 24px; color: var(--forest); }
+.headbar .title p { margin: 2px 0 0; font-size: 14px; }
+.mono { font-family: ui-monospace, monospace; font-size: 13px; }
+.workspace { display: grid; grid-template-columns: 340px 1fr; gap: 24px; margin-top: 14px; align-items: start; }
+.cliplist {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: calc(100vh - 180px); overflow-y: auto; position: sticky; top: 12px; padding-right: 4px;
+}
+.editor { min-width: 0; }
+.stage {
+  position: relative; background: #121812; border-radius: var(--radius); overflow: hidden;
+  display: grid; place-items: center; height: min(46vh, 560px); margin-bottom: 32px;
+}
+.stage video, .stage img { max-width: 100%; max-height: 100%; display: block; }
+.stage video { cursor: pointer; }
+.stage .unplayable {
+  position: absolute; left: 16px; right: 16px; bottom: 16px; margin: 0; padding: 10px 12px;
+  background: var(--paper); border-radius: 8px; font-size: 13px;
+}
+.controls { display: flex; align-items: center; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.spacer { flex: 1; }
+.keys { font-size: 12px; line-height: 2; }
+.reelchip {
+  display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line);
+  background: var(--paper); border-radius: 999px; padding: 4px 12px 4px 8px; cursor: pointer; font-size: 14px;
+}
+.reelchip:hover { border-color: var(--forest); }
+.reelchip .sw { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+.reelchip.on { background: var(--sage-soft); border-color: var(--sage); }
+.panel {
+  margin-top: 16px; padding: 14px 16px; background: var(--paper);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.panel h3 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.modal { position: fixed; inset: 0; background: rgb(20 28 20 / 50%); display: grid; place-items: center; z-index: 10; padding: 16px; }
+.dialog { background: var(--paper); border-radius: var(--radius); padding: 20px 24px; width: min(760px, 100%); max-height: 90vh; overflow: auto; }
+.dialog h2 { margin: 0 0 4px; color: var(--forest); }
+.dialog pre { background: var(--cream); padding: 12px; border-radius: 8px; font-size: 12px; overflow-x: auto; max-height: 50vh; white-space: pre-wrap; }
+@media (max-width: 860px) {
+  .workspace { grid-template-columns: 1fr; }
+  .cliplist { position: static; max-height: 40vh; }
+}

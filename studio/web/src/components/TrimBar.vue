@@ -23,6 +23,13 @@
       </div>
       <div class="playhead" :style="{ left: pct(playhead) }"></div>
     </div>
+    <div class="lane">
+      <button
+        v-for="seg in segments" :key="seg.id" class="part"
+        :style="{ left: pct(seg.start), width: pct(seg.length), background: seg.color }"
+        :title="seg.label" @click="$emit('pick', seg.id)"
+      ></button>
+    </div>
     <div class="ruler muted">
       <span>0:00</span><span>{{ fmtTime(duration / 2) }}</span><span>{{ fmtTime(duration) }}</span>
     </div>
@@ -41,8 +48,10 @@ const props = defineProps({
   length: { type: Number, required: true },
   playhead: { type: Number, default: 0 },
   thumbAt: { type: Function, required: true },
+  // Other parts of this clip (in any reel), drawn in a lane under the bar.
+  segments: { type: Array, default: () => [] },
 })
-const emit = defineEmits(['update', 'seek', 'dragend'])
+const emit = defineEmits(['update', 'seek', 'dragend', 'pick'])
 
 const bar = ref(null)
 let mode = null
@@ -136,5 +145,11 @@ function up() {
   position: absolute; top: -6px; bottom: -6px; width: 2px; margin-left: -1px;
   background: var(--cream); box-shadow: 0 0 0 1px var(--forest); pointer-events: none; z-index: 3;
 }
-.ruler { display: flex; justify-content: space-between; font-size: 11px; margin-top: 30px; font-family: ui-monospace, monospace; }
+.lane { position: relative; height: 10px; margin-top: 28px; }
+.part {
+  position: absolute; top: 0; bottom: 0; min-width: 4px; border: 0; padding: 0;
+  border-radius: 3px; cursor: pointer; opacity: 0.85;
+}
+.part:hover { opacity: 1; outline: 2px solid var(--paper); }
+.ruler { display: flex; justify-content: space-between; font-size: 11px; margin-top: 4px; font-family: ui-monospace, monospace; }
 </style>

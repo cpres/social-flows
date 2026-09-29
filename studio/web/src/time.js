@@ -43,3 +43,22 @@ export function clockTime(epochSeconds) {
 }
 
 export const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
+
+// Keep a part inside its clip: at least 0.2s, never past the end.
+export function fitRange(start, length, duration) {
+  if (!(duration > 0)) return { start: Math.max(0, start), length: Math.max(0.2, length) }
+  length = clamp(length, 0.2, duration)
+  start = clamp(start, 0, duration - length)
+  return { start: Math.round(start * 100) / 100, length: Math.round(length * 100) / 100 }
+}
+
+// Same rule as the engine: 30% in, not in the first 2s.
+export function defaultStart(duration, length) {
+  if (!(duration > 0)) return 0
+  let s = duration * 0.3
+  s = Math.max(Math.min(s, duration - 0.5), Math.min(2, duration / 3))
+  return Math.round(Math.max(0, Math.min(s, duration - length)) * 100) / 100
+}
+
+const REEL_COLORS = ['#c0703a', '#4f7fa8', '#9a5fa0', '#c9a227', '#3f8f7a', '#b84d5f', '#6b6fc4', '#7a8f3a']
+export const reelColor = (id) => REEL_COLORS[(id - 1) % REEL_COLORS.length]

@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """
-Footage Studio — a small local server for browsing ~/Footage and choosing
-where (and for how long) to cut each clip.
+Footage Studio — a small local server for browsing ~/Footage and building
+reels out of parts of clips and photos.
 
-Selections are saved next to the footage in `<folder>/.studio.json`. Export
-writes `<folder>/montage.yaml`, which montage.py renders on its own.
+Shoot folders stay as they are. Reels, and which part of which file each one
+uses, live in ~/Footage/.studio/studio.db (see db.py). Exporting a reel writes
+~/Footage/.studio/reels/<reel>.yaml, which montage.py renders on its own.
 
     ./studio/run.sh        # sets up on first run, then http://localhost:3009
 
 FOOTAGE_DIR overrides the footage root (default ~/Footage).
+RENDER_DIR sets where rendered videos go (default ~/Movies/Footage Studio).
 """
 
 import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -40,23 +43,15 @@ except ImportError as missing:
 HERE = Path(__file__).resolve().parent
 ENGINE = HERE.parent / "montage" / "montage.py"
 sys.path.insert(0, str(ENGINE.parent))
-import montage  # noqa: E402  (reuse the engine's probe / capture_time / exts)
+sys.path.insert(0, str(HERE))
+from db import DEFAULT_SETTINGS, Library, default_start, now, settings_of  # noqa: E402
 
 ROOT = Path(os.environ.get("FOOTAGE_DIR", "~/Footage")).expanduser().resolve()
+RENDERS = Path(os.environ.get("RENDER_DIR", "~/Movies/Footage Studio")).expanduser()
 CACHE = Path("~/.cache/footage-studio").expanduser()
-SIDECAR = ".studio.json"
-EXPORT_NAME = "montage.yaml"
+SIDECAR = ".studio.json"   # per-folder trims from the first version of the studio
 
-DEFAULT_SETTINGS = {
-    "defaultLength": 1.5,   # seconds per video cut
-    "defaultHold": 1.6,     # seconds per photo
-    "music": "",
-    "beatSync": False,      # when on, the engine uses beats and ignores lengths
-    "beatsPerCut": 2,
-    "fit": "fill",
-    "originalVolume": 0.35,
-}
-
+lib = Library(ROOT)
 app = FastAPI(title="Footage Studio")
 
 
@@ -72,149 +67,310 @@ def resolve(*parts):
     return path
 
 
-def kind_of(path):
-    ext = path.suffix.lower()
-    if ext in montage.VIDEO_EXTS:
-        return "video"
-    if ext in montage.IMAGE_EXTS:
-        return "photo"
-    return None
+def media_dict(row):
+    return {"id": row["id"], "folder": row["folder"], "file": row["name"], "kind": row["kind"],
+            "duration": row["duration"], "capturedAt": row["captured_at"],
+            "missing": bool(row["missing"])}
 
 
-def media_files(folder):
-    return [p for p in folder.iterdir()
-            if p.is_file() and not p.name.startswith(".") and kind_of(p)]
+def item_dict(row):
+    return {"id": row["item_id"], "reelId": row["reel_id"], "mediaId": row["media_id"],
+            "position": row["position"], "start": row["start"], "length": row["length"],
+            "keep": bool(row["keep"])}
 
 
-_meta_cache = {}
+def reel_row(db, reel_id):
+    row = db.execute("SELECT * FROM reels WHERE id = ?", (reel_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "No such reel")
+    return row
 
 
-def meta(path):
-    """Duration and capture time, cached on path + mtime."""
-    key = (str(path), path.stat().st_mtime)
-    if key not in _meta_cache:
-        duration = 0.0
-        if kind_of(path) == "video":
-            try:
-                duration, _ = montage.probe(path)
-            except Exception:
-                duration = 0.0
-        _meta_cache[key] = {"duration": round(duration, 3),
-                            "capturedAt": montage.capture_time(path)}
-    return _meta_cache[key]
+def touch(db, reel_id):
+    db.execute("UPDATE reels SET updated_at = ? WHERE id = ?", (now(), reel_id))
 
 
-def default_start(duration, length):
-    """Same rule the engine uses for folder sources: 30% in, not in the first 2s."""
-    start = duration * 0.3
-    start = max(min(start, duration - 0.5), min(2.0, duration / 3))
-    return round(max(0.0, min(start, duration - length)), 2)
+def fit(start, length, duration):
+    """Keep a part inside its clip: at least 0.2s, never past the end."""
+    if duration <= 0:
+        return max(0.0, start), max(0.2, length)
+    length = min(max(0.2, length), duration)
+    start = min(max(0.0, start), duration - length)
+    return round(start, 3), round(length, 3)
 
 
-def load_sidecar(folder):
-    path = folder / SIDECAR
-    data = {}
-    if path.exists():
-        try:
-            data = json.loads(path.read_text())
-        except ValueError:
-            data = {}
-    return {"settings": {**DEFAULT_SETTINGS, **data.get("settings", {})},
-            "clips": data.get("clips", {})}
+def slug(name):
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "reel"
 
 
-def folder_clips(folder):
-    side = load_sidecar(folder)
-    settings = side["settings"]
-    clips = []
-    for p in media_files(folder):
-        m = meta(p)
-        kind = kind_of(p)
-        saved = side["clips"].get(p.name, {})
-        if kind == "video":
-            length = float(saved.get("length", min(settings["defaultLength"], m["duration"])))
-            start = float(saved.get("start", default_start(m["duration"], length)))
-        else:
-            length = float(saved.get("length", settings["defaultHold"]))
-            start = 0.0
-        clips.append({"file": p.name, "kind": kind, "duration": m["duration"],
-                      "capturedAt": m["capturedAt"], "size": p.stat().st_size,
-                      "keep": bool(saved.get("keep", True)),
-                      "start": round(start, 3), "length": round(length, 3)})
-    clips.sort(key=lambda c: c["capturedAt"])
-    return clips, settings
+def reel_summaries(db):
+    rows = db.execute("""
+        SELECT r.*, COUNT(i.id) AS items,
+               COALESCE(SUM(CASE WHEN i.keep THEN i.length ELSE 0 END), 0) AS total
+        FROM reels r LEFT JOIN reel_items i ON i.reel_id = r.id
+        GROUP BY r.id ORDER BY r.updated_at DESC""").fetchall()
+    out = []
+    for r in rows:
+        cover = db.execute("""
+            SELECT m.folder, m.name, m.kind, i.start FROM reel_items i
+            JOIN media m ON m.id = i.media_id
+            WHERE i.reel_id = ? AND m.missing = 0 ORDER BY i.position LIMIT 1""",
+                           (r["id"],)).fetchone()
+        out.append({"id": r["id"], "name": r["name"], "itemCount": r["items"],
+                    "totalLength": round(r["total"], 2), "updatedAt": r["updated_at"],
+                    "cover": dict(cover) if cover else None})
+    return out
 
 
-# ---------------------------------------------------------------- API
+# ---------------------------------------------------------------- shoots
 
 @app.get("/api/folders")
 def list_folders():
     if not ROOT.is_dir():
-        return {"root": str(ROOT), "folders": [], "error": f"{ROOT} does not exist"}
+        return {"root": str(ROOT), "folders": [], "reels": [],
+                "error": f"{ROOT} does not exist"}
+    lib.scan()
     folders = []
-    for d in ROOT.iterdir():
-        if not d.is_dir() or d.name.startswith("."):
-            continue
-        files = media_files(d)
-        videos = [f for f in files if kind_of(f) == "video"]
-        ordered = sorted(files, key=lambda f: meta(f)["capturedAt"])
-        cover = next((f for f in ordered if kind_of(f) == "video"), ordered[0] if ordered else None)
-        cover_t = meta(cover)["duration"] * 0.3 if cover and kind_of(cover) == "video" else 0
-        side = load_sidecar(d)
-        folders.append({
-            "name": d.name,
-            "clipCount": len(videos),
-            "photoCount": len(files) - len(videos),
-            "totalDuration": round(sum(meta(f)["duration"] for f in videos), 1),
-            "lastModified": d.stat().st_mtime,
-            "cover": cover.name if cover else None,
-            "coverTime": round(cover_t, 2),
-            "edited": (d / SIDECAR).exists(),
-            "keptCount": sum(1 for f in files if side["clips"].get(f.name, {}).get("keep", True)),
-        })
+    with lib.connect() as db:
+        for d in lib.shoot_folders():
+            rows = db.execute("SELECT * FROM media WHERE folder = ? AND missing = 0 "
+                              "ORDER BY captured_at", (d.name,)).fetchall()
+            videos = [r for r in rows if r["kind"] == "video"]
+            cover = videos[0] if videos else (rows[0] if rows else None)
+            used = db.execute("""SELECT COUNT(DISTINCT i.media_id) FROM reel_items i
+                                 JOIN media m ON m.id = i.media_id WHERE m.folder = ?""",
+                              (d.name,)).fetchone()[0]
+            folders.append({
+                "name": d.name,
+                "clipCount": len(videos),
+                "photoCount": len(rows) - len(videos),
+                "totalDuration": round(sum(r["duration"] for r in videos), 1),
+                "lastModified": d.stat().st_mtime,
+                "cover": cover["name"] if cover else None,
+                "coverTime": round(cover["duration"] * 0.3, 2) if cover else 0,
+                "usedCount": used,
+            })
+        reels = reel_summaries(db)
     # Newest shoot first: date-named folders by name, the rest by last change.
     folders.sort(key=lambda f: (f["name"][:10] if f["name"][:4].isdigit() else "",
                                 f["lastModified"]), reverse=True)
-    return {"root": str(ROOT), "folders": folders}
+    return {"root": str(ROOT), "folders": folders, "reels": reels}
 
 
 @app.get("/api/folders/{name}")
 def get_folder(name: str):
     folder = resolve(name)
-    clips, settings = folder_clips(folder)
-    exported = folder / EXPORT_NAME
-    return {"name": name, "path": str(folder), "clips": clips, "settings": settings,
-            "exported": str(exported) if exported.exists() else None}
+    lib.scan([folder])
+    with lib.connect() as db:
+        media = [media_dict(r) for r in db.execute(
+            "SELECT * FROM media WHERE folder = ? AND missing = 0 ORDER BY captured_at", (name,))]
+        items = [item_dict(r) for r in db.execute("""
+            SELECT i.id AS item_id, i.* FROM reel_items i JOIN media m ON m.id = i.media_id
+            WHERE m.folder = ? ORDER BY i.start""", (name,))]
+        reels = reel_summaries(db)
+    return {"name": name, "path": str(folder), "media": media, "items": items, "reels": reels,
+            "hasSidecar": (folder / SIDECAR).exists()}
 
 
-@app.put("/api/folders/{name}/selections")
-def save_selections(name: str, body: dict = Body(...)):
+@app.post("/api/folders/{name}/to-reel")
+def folder_to_reel(name: str, body: dict = Body(default={})):
+    """Make a reel from a folder: its old studio trims if any, else every file.
+
+    Files that are copies of originals in another shoot folder point at the
+    original, so per-concept folders of copied files can be retired.
+    """
     folder = resolve(name)
-    clips = {c["file"]: {"keep": bool(c["keep"]),
-                         "start": round(float(c["start"]), 3),
-                         "length": round(float(c["length"]), 3)}
-             for c in body.get("clips", [])}
-    settings = {**DEFAULT_SETTINGS, **body.get("settings", {})}
-    (folder / SIDECAR).write_text(json.dumps({"settings": settings, "clips": clips}, indent=2))
-    return {"ok": True, "savedAt": datetime.now().isoformat(timespec="seconds")}
+    lib.scan()
+    side = {}
+    if (folder / SIDECAR).exists():
+        try:
+            side = json.loads((folder / SIDECAR).read_text())
+        except ValueError:
+            side = {}
+    saved = side.get("clips", {})
+    settings = {**DEFAULT_SETTINGS, **side.get("settings", {})}
+    reel_name = (body.get("name") or name).strip()
+    with lib.connect() as db:
+        if db.execute("SELECT 1 FROM reels WHERE name = ?", (reel_name,)).fetchone():
+            raise HTTPException(409, f"A reel called '{reel_name}' already exists")
+        cur = db.execute("INSERT INTO reels (name, settings, created_at, updated_at) "
+                         "VALUES (?, ?, ?, ?)", (reel_name, json.dumps(settings), now(), now()))
+        reel_id = cur.lastrowid
+        rows = db.execute("SELECT * FROM media WHERE folder = ? AND missing = 0 "
+                          "ORDER BY captured_at", (name,)).fetchall()
+        for pos, m in enumerate(rows):
+            s = saved.get(m["name"], {})
+            if not s.get("keep", True):
+                continue
+            if m["kind"] == "video":
+                length = float(s.get("length", min(settings["defaultLength"], m["duration"])))
+                start = float(s.get("start", default_start(m["duration"], length)))
+            else:
+                length, start = float(s.get("length", settings["defaultHold"])), 0.0
+            db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length) "
+                       "VALUES (?, ?, ?, ?, ?)",
+                       (reel_id, lib.original_of(db, m["id"]), pos, start, length))
+    return {"id": reel_id}
 
 
-def build_config(name, folder):
-    clips, s = folder_clips(folder)
-    sources = []
-    for c in clips:
-        if not c["keep"]:
-            continue
-        entry = {"id": Path(c["file"]).stem[:16], "file": c["file"]}
-        if c["kind"] == "video":
-            entry["times"] = [round(c["start"], 2)]
-            entry["length"] = round(c["length"], 2)
+# ---------------------------------------------------------------- reels
+
+@app.get("/api/reels")
+def list_reels():
+    with lib.connect() as db:
+        return reel_summaries(db)
+
+
+@app.post("/api/reels")
+def create_reel(body: dict = Body(...)):
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "A reel needs a name")
+    with lib.connect() as db:
+        if db.execute("SELECT 1 FROM reels WHERE name = ?", (name,)).fetchone():
+            raise HTTPException(409, f"A reel called '{name}' already exists")
+        cur = db.execute("INSERT INTO reels (name, settings, created_at, updated_at) "
+                         "VALUES (?, '{}', ?, ?)", (name, now(), now()))
+        return {"id": cur.lastrowid, "name": name}
+
+
+@app.get("/api/reels/{reel_id}")
+def get_reel(reel_id: int):
+    with lib.connect() as db:
+        r = reel_row(db, reel_id)
+        rows = db.execute("""
+            SELECT i.id AS item_id, i.*, m.* FROM reel_items i JOIN media m ON m.id = i.media_id
+            WHERE i.reel_id = ? ORDER BY i.position, i.id""", (reel_id,)).fetchall()
+        items = [{**item_dict(row), "media": media_dict({**dict(row), "id": row["media_id"]})}
+                 for row in rows]
+        # Other reels' parts of the same files, to show alongside on the trim bar.
+        others = [item_dict(row) for row in db.execute("""
+            SELECT i.id AS item_id, i.* FROM reel_items i
+            WHERE i.reel_id != ? AND i.media_id IN
+                  (SELECT media_id FROM reel_items WHERE reel_id = ?)""", (reel_id, reel_id))]
+        reels = reel_summaries(db)
+    return {"id": r["id"], "name": r["name"], "settings": settings_of(r), "items": items,
+            "otherItems": others, "reels": reels}
+
+
+@app.patch("/api/reels/{reel_id}")
+def update_reel(reel_id: int, body: dict = Body(...)):
+    with lib.connect() as db:
+        r = reel_row(db, reel_id)
+        if "name" in body:
+            name = body["name"].strip()
+            if not name:
+                raise HTTPException(400, "A reel needs a name")
+            clash = db.execute("SELECT 1 FROM reels WHERE name = ? AND id != ?",
+                               (name, reel_id)).fetchone()
+            if clash:
+                raise HTTPException(409, f"A reel called '{name}' already exists")
+            db.execute("UPDATE reels SET name = ? WHERE id = ?", (name, reel_id))
+        if "settings" in body:
+            settings = {**settings_of(r), **body["settings"]}
+            db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(settings), reel_id))
+        touch(db, reel_id)
+    return {"ok": True}
+
+
+@app.delete("/api/reels/{reel_id}")
+def delete_reel(reel_id: int):
+    with lib.connect() as db:
+        reel_row(db, reel_id)
+        db.execute("DELETE FROM reels WHERE id = ?", (reel_id,))
+    return {"ok": True}
+
+
+@app.put("/api/reels/{reel_id}/order")
+def reorder(reel_id: int, body: dict = Body(...)):
+    with lib.connect() as db:
+        reel_row(db, reel_id)
+        for pos, item_id in enumerate(body.get("itemIds", [])):
+            db.execute("UPDATE reel_items SET position = ? WHERE id = ? AND reel_id = ?",
+                       (pos, item_id, reel_id))
+        touch(db, reel_id)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- items
+
+@app.post("/api/reels/{reel_id}/items")
+def add_item(reel_id: int, body: dict = Body(...)):
+    with lib.connect() as db:
+        r = reel_row(db, reel_id)
+        s = settings_of(r)
+        m = db.execute("SELECT * FROM media WHERE id = ?", (body.get("mediaId"),)).fetchone()
+        if not m:
+            raise HTTPException(404, "No such clip")
+        if m["kind"] == "video":
+            length = float(body.get("length") or min(s["defaultLength"], m["duration"]))
+            start = body.get("start")
+            start = float(start) if start is not None else default_start(m["duration"], length)
+            start, length = fit(start, length, m["duration"])
         else:
-            entry["hold"] = round(c["length"], 2)
+            length, start = float(body.get("length") or s["defaultHold"]), 0.0
+        pos = db.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM reel_items "
+                         "WHERE reel_id = ?", (reel_id,)).fetchone()[0]
+        cur = db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length) "
+                         "VALUES (?, ?, ?, ?, ?)", (reel_id, m["id"], pos, start, length))
+        touch(db, reel_id)
+        row = db.execute("SELECT id AS item_id, * FROM reel_items WHERE id = ?",
+                         (cur.lastrowid,)).fetchone()
+        return item_dict(row)
+
+
+@app.patch("/api/items/{item_id}")
+def update_item(item_id: int, body: dict = Body(...)):
+    fields = {k: body[k] for k in ("start", "length", "keep", "position") if k in body}
+    if not fields:
+        return {"ok": True}
+    with lib.connect() as db:
+        row = db.execute("""SELECT i.reel_id, i.start, i.length, m.kind, m.duration
+                            FROM reel_items i JOIN media m ON m.id = i.media_id
+                            WHERE i.id = ?""", (item_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "No such item")
+        if row["kind"] == "video" and ("start" in fields or "length" in fields):
+            fields["start"], fields["length"] = fit(float(fields.get("start", row["start"])),
+                                                    float(fields.get("length", row["length"])),
+                                                    row["duration"])
+        sets = ", ".join(f"{k} = :{k}" for k in fields)
+        db.execute(f"UPDATE reel_items SET {sets} WHERE id = :id", {**fields, "id": item_id})
+        touch(db, row["reel_id"])
+    return {"ok": True}
+
+
+@app.delete("/api/items/{item_id}")
+def delete_item(item_id: int):
+    with lib.connect() as db:
+        row = db.execute("SELECT reel_id FROM reel_items WHERE id = ?", (item_id,)).fetchone()
+        if row:
+            db.execute("DELETE FROM reel_items WHERE id = ?", (item_id,))
+            touch(db, row["reel_id"])
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- export
+
+def build_config(reel, rows):
+    s = settings_of(reel)
+    sources, seen = [], {}
+    for row in rows:
+        if not row["keep"] or row["missing"]:
+            continue
+        stem = Path(row["name"]).stem[:14]
+        seen[stem] = seen.get(stem, 0) + 1
+        entry = {"id": stem if seen[stem] == 1 else f"{stem}-{seen[stem]}",
+                 "file": str(ROOT / row["path"])}
+        if row["kind"] == "video":
+            entry["times"] = [round(row["start"], 2)]
+            entry["length"] = round(row["length"], 2)
+        else:
+            entry["hold"] = round(row["length"], 2)
             entry["in_round"] = "all"
         sources.append(entry)
 
-    cfg = {"output": f"renders/{name}.mp4", "rounds": 1, "sources": sources}
+    cfg = {"output": str(RENDERS / f"{slug(reel['name'])}.mp4"), "rounds": 1, "sources": sources}
     if s.get("music"):
         cfg["music"] = s["music"]
         cfg["beat_sync"] = bool(s.get("beatSync"))
@@ -237,24 +393,33 @@ def build_config(name, folder):
     return cfg
 
 
-@app.post("/api/folders/{name}/export")
-def export(name: str):
-    folder = resolve(name)
-    cfg = build_config(name, folder)
+@app.post("/api/reels/{reel_id}/export")
+def export(reel_id: int):
+    with lib.connect() as db:
+        reel = reel_row(db, reel_id)
+        rows = db.execute("""SELECT i.*, m.path, m.name, m.kind, m.missing FROM reel_items i
+                             JOIN media m ON m.id = i.media_id
+                             WHERE i.reel_id = ? ORDER BY i.position, i.id""",
+                          (reel_id,)).fetchall()
+    cfg = build_config(reel, rows)
     if not cfg["sources"]:
-        raise HTTPException(400, "No clips are kept — nothing to export.")
-    header = (f"# Generated by Footage Studio from {SIDECAR} on "
+        raise HTTPException(400, "Nothing is kept in this reel yet.")
+    out_dir = lib.home / "reels"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"{slug(reel['name'])}.yaml"
+    header = (f"# Generated by Footage Studio for the reel '{reel['name']}' on "
               f"{datetime.now():%Y-%m-%d %H:%M}.\n"
-              f"# Edit clips in the studio; hand edits here are overwritten on export.\n"
-              f"#   python3 {ENGINE} {EXPORT_NAME} --dry-run\n\n")
-    out = folder / EXPORT_NAME
+              f"# Edit the reel in the studio; hand edits here are overwritten on export.\n\n")
     out.write_text(header + yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
     result = subprocess.run([sys.executable, str(ENGINE), str(out), "--dry-run"],
                             capture_output=True, text=True, timeout=300)
     return {"path": str(out), "ok": result.returncode == 0,
             "dryRun": (result.stdout + result.stderr).strip(),
-            "command": f"python3 {ENGINE} {out}"}
+            "output": cfg["output"],
+            "command": f'python3 "{ENGINE}" "{out}"'}
 
+
+# ---------------------------------------------------------------- files
 
 @app.get("/api/media/{name}/{file}")
 def media(name: str, file: str):
@@ -269,7 +434,7 @@ def thumb(name: str, file: str, t: float = 0.0, w: int = 480):
     out = CACHE / f"{key}.jpg"
     if not out.exists():
         CACHE.mkdir(parents=True, exist_ok=True)
-        seek = ["-ss", f"{max(t, 0):.2f}"] if kind_of(path) == "video" else []
+        seek = ["-ss", f"{max(t, 0):.2f}"] if Library.kind_of(path) == "video" else []
         subprocess.run(["ffmpeg", "-y", "-v", "error", *seek, "-i", str(path),
                         "-frames:v", "1", "-vf", f"scale={w}:-2", "-q:v", "4", str(out)],
                        capture_output=True, timeout=60)

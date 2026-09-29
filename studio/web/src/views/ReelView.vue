@@ -1,0 +1,460 @@
+<template>
+  <main v-if="error" class="screen-msg">{{ error }} · <RouterLink to="/">back</RouterLink></main>
+  <main v-else-if="loading" class="screen-msg muted">Loading reel…</main>
+  <main v-else class="screen">
+    <section class="headbar">
+      <RouterLink to="/" class="back" title="Home">←</RouterLink>
+      <div class="title">
+        <h1>
+          <span class="sw" :style="{ background: reelColor(id) }"></span>
+          <span class="rename" title="Rename" @click="rename">{{ reel.name }}</span>
+        </h1>
+        <p class="muted">
+          {{ kept.length }} of {{ items.length }} parts kept ·
+          reel <b class="mono total">{{ fmtTime(reelLength) }}</b>
+          <span class="save">{{ saveState }}</span>
+        </p>
+      </div>
+      <button class="btn" @click="sortByShotTime" :disabled="items.length < 2">Sort by shot time</button>
+      <button class="btn" :class="{ active: showSettings }" @click="showSettings = !showSettings">Settings</button>
+      <button class="btn primary" @click="doExport" :disabled="exporting || !kept.length">
+        {{ exporting ? 'Exporting…' : 'Export & preview cut list' }}
+      </button>
+    </section>
+
+    <section v-if="showSettings" class="panel settings">
+      <label class="field wide">
+        Music file (optional — absolute path, e.g. ~/Music/bed.mp3)
+        <input v-model.trim="settings.music" placeholder="~/Music/montage-bed.mp3" />
+      </label>
+      <label class="field check">
+        <span><input type="checkbox" v-model="settings.beatSync" :disabled="!settings.music" /> Beat sync</span>
+        <small v-if="settings.beatSync">Cuts snap to beats; your lengths become approximate ({{ settings.beatsPerCut }} beats per cut).</small>
+        <small v-else>Your lengths are used exactly.</small>
+      </label>
+      <label class="field" v-if="settings.beatSync">
+        Beats per cut
+        <input type="number" min="1" max="8" v-model.number="settings.beatsPerCut" />
+      </label>
+      <label class="field">
+        Framing
+        <select v-model="settings.fit">
+          <option value="fill">Fill (crop to 9:16)</option>
+          <option value="blur">Blurred background</option>
+          <option value="pad">Brand colour bars</option>
+        </select>
+      </label>
+      <label class="field">
+        Glasses audio volume
+        <input type="number" min="0" max="1" step="0.05" v-model.number="settings.originalVolume" />
+      </label>
+      <label class="field">
+        Default cut length (s)
+        <input type="number" min="0.2" step="0.1" v-model.number="settings.defaultLength" />
+      </label>
+      <label class="field">
+        Default photo hold (s)
+        <input type="number" min="0.2" step="0.1" v-model.number="settings.defaultHold" />
+      </label>
+      <div class="field">
+        &nbsp;
+        <button class="btn small" @click="applyLengthToAll">Set every kept cut to {{ settings.defaultLength }}s</button>
+      </div>
+      <div class="field">
+        &nbsp;
+        <button class="btn small danger" @click="removeReel">Delete this reel</button>
+      </div>
+    </section>
+
+    <!-- the reel at a glance: one block per kept part, sized by its length -->
+    <section class="strip" v-if="kept.length">
+      <button
+        v-for="p in kept" :key="p.id" class="seg"
+        :class="{ current: p === current, photo: p.media.kind === 'photo' }"
+        :style="{ flexGrow: p.length }" :title="`${p.media.file} · ${p.length.toFixed(1)}s`"
+        @click="select(items.indexOf(p))"
+      >{{ p.length.toFixed(1) }}</button>
+    </section>
+
+    <p v-if="!items.length" class="panel empty">
+      This reel is empty. Open a shoot from the <RouterLink to="/">home page</RouterLink>,
+      pick a clip, set a selection and add it to <b>{{ reel.name }}</b>.
+    </p>
+
+    <div class="workspace" v-else>
+      <aside class="cliplist" ref="listEl">
+        <div
+          v-for="(p, i) in items" :key="p.id" class="row"
+          :class="{ over: dragOver === i }"
+          draggable="true" @dragstart="dragFrom = i" @dragover.prevent="dragOver = i"
+          @dragleave="dragOver = null" @drop="drop(i)" @dragend="dragOver = null"
+        >
+          <span class="num">{{ i + 1 }}</span>
+          <ClipCard
+            :media="p.media" :thumb-time="p.start" :selected="i === selected" :dim="!p.keep"
+            :sub="folderTitle(p.media.folder)"
+            :chip="p.media.kind === 'video'
+              ? `${fmtTime(p.start)} → ${fmtTime(p.start + p.length)}  ${p.length.toFixed(1)}s`
+              : `hold ${p.length.toFixed(1)}s`"
+            @select="select(i)"
+          >
+            <button
+              class="keep" :class="{ on: p.keep }" @click.stop="setKeep(p, !p.keep)"
+              :title="p.keep ? 'In the cut — click to skip (X)' : 'Skipped — click to keep (X)'"
+            >{{ p.keep ? '✓' : '–' }}</button>
+          </ClipCard>
+        </div>
+      </aside>
+
+      <section class="editor" v-if="current">
+        <div class="stage">
+          <p v-if="current.media.missing" class="unplayable">
+            This file is missing from <code>{{ current.media.folder }}/{{ current.media.file }}</code>.
+            Put it back (or in any shoot folder) and it will relink.
+          </p>
+          <video
+            v-else-if="current.media.kind === 'video'" :ref="(el) => (player.video.value = el)"
+            :src="api.media(current.media.folder, current.media.file)" preload="auto" playsinline
+            @loadedmetadata="player.seek(current.start)" @play="player.events.onPlay"
+            @pause="player.events.onPause" @error="player.events.onError" @click="player.toggle"
+          ></video>
+          <img v-else :src="api.thumb(current.media.folder, current.media.file, 0, 1280)" alt="" />
+          <p v-if="player.failed.value" class="unplayable">
+            This browser can't play this file's codec (HEVC <code>.mov</code> often won't play in Chrome — try Safari).
+            Thumbnails and trimming still work.
+          </p>
+        </div>
+
+        <template v-if="current.media.kind === 'video' && !current.media.missing">
+          <TrimBar
+            :duration="current.media.duration" :start="current.start" :length="current.length"
+            :playhead="player.playhead.value" :segments="segments"
+            :thumb-at="(t) => api.thumb(current.media.folder, current.media.file, t, 160)"
+            @update="setRange" @seek="player.seek" @pick="pickSegment"
+          />
+          <div class="controls">
+            <button class="btn" @click="player.toggle">{{ player.playing.value ? 'Pause' : 'Play' }}</button>
+            <button class="btn" :class="{ active: player.looping.value }" @click="player.playPart">▶ Play part</button>
+            <span class="muted mono">{{ fmtTime(player.playhead.value) }}</span>
+            <span class="spacer"></span>
+            <button class="btn small" @click="setIn">Start here <kbd>I</kbd></button>
+            <button class="btn small" @click="setOut">End here <kbd>O</kbd></button>
+          </div>
+        </template>
+
+        <TimingFields
+          :kind="current.media.kind" :start="current.start" :length="current.length"
+          :duration="current.media.duration" @update="setRange"
+        >
+          <label class="field check">
+            <span><input type="checkbox" :checked="current.keep" @change="setKeep(current, $event.target.checked)" /> In the cut <kbd>X</kbd></span>
+          </label>
+          <button class="btn small" @click="duplicate(current)" v-if="current.media.kind === 'video'">Use another part of this clip</button>
+          <button class="btn small" @click="remove(current)">Remove from reel</button>
+        </TimingFields>
+
+        <p class="muted legend" v-if="segments.length">
+          Coloured marks under the filmstrip are other parts of this clip:
+          <span v-for="s in segments" :key="s.id" class="lg"><span class="sw" :style="{ background: s.color }"></span>{{ s.label }}</span>
+        </p>
+        <p class="muted keys">
+          <kbd>Space</kbd> play · <kbd>Enter</kbd> play part · <kbd>I</kbd>/<kbd>O</kbd> start/end at playhead ·
+          <kbd>←</kbd>/<kbd>→</kbd> nudge 0.1s · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next · <kbd>X</kbd> keep/skip ·
+          drag the list to reorder
+        </p>
+      </section>
+    </div>
+
+    <div class="modal" v-if="exportResult" @click.self="exportResult = null">
+      <div class="dialog">
+        <h2>{{ exportResult.ok ? 'Cut list' : 'Engine reported a problem' }}</h2>
+        <p class="muted" v-if="exportResult.path">Wrote <code>{{ exportResult.path }}</code></p>
+        <pre>{{ exportResult.dryRun }}</pre>
+        <template v-if="exportResult.command">
+          <p class="muted">Render it with this (the video lands in <code>{{ exportResult.output }}</code>):</p>
+          <pre>{{ exportResult.command }}</pre>
+        </template>
+        <button class="btn primary" @click="exportResult = null">Close</button>
+      </div>
+    </div>
+  </main>
+</template>
+
+<script setup>
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { api, debouncedSaver } from '../api'
+import { usePlayer } from '../player'
+import { fitRange, fmtTime, folderTitle, reelColor } from '../time'
+import ClipCard from '../components/ClipCard.vue'
+import TimingFields from '../components/TimingFields.vue'
+import TrimBar from '../components/TrimBar.vue'
+
+const props = defineProps({ id: { type: [String, Number], required: true } })
+const id = Number(props.id)
+const route = useRoute()
+const router = useRouter()
+
+const reel = ref({ name: '' })
+const items = ref([])
+const otherItems = ref([])
+const reels = ref([])
+const settings = reactive({})
+const selected = ref(0)
+const loading = ref(true)
+const error = ref('')
+const saveState = ref('')
+const showSettings = ref(false)
+const exporting = ref(false)
+const exportResult = ref(null)
+const listEl = ref(null)
+const dragFrom = ref(null)
+const dragOver = ref(null)
+
+const current = computed(() => items.value[selected.value])
+const kept = computed(() => items.value.filter((p) => p.keep && !p.media.missing))
+const reelLength = computed(() => kept.value.reduce((a, p) => a + p.length, 0))
+const player = usePlayer(() => current.value)
+const reelName = (rid) => reels.value.find((r) => r.id === rid)?.name ?? 'reel'
+
+// Other parts of the same clip: elsewhere in this reel, and in other reels.
+const segments = computed(() => {
+  const c = current.value
+  if (!c) return []
+  const same = items.value.filter((p) => p.mediaId === c.mediaId && p.id !== c.id)
+  const other = otherItems.value.filter((p) => p.mediaId === c.mediaId)
+  return [...same, ...other].map((p) => ({
+    id: p.id, start: p.start, length: p.length, color: reelColor(p.reelId), reelId: p.reelId,
+    label: `${p.reelId === id ? 'also here' : reelName(p.reelId)} ${fmtTime(p.start)} (${p.length.toFixed(1)}s)`,
+  }))
+})
+
+// ---------------------------------------------------------------- load & save
+
+const saver = debouncedSaver(async (key, patch) => {
+  saveState.value = '· saving…'
+  try {
+    if (key === 'settings') await api.updateReel(id, { settings: patch })
+    else await api.updateItem(key, patch)
+    saveState.value = '· saved'
+  } catch (e) {
+    saveState.value = `· not saved: ${e.message}`
+  }
+})
+
+let ready = false
+onMounted(async () => {
+  try {
+    const data = await api.reel(id)
+    reel.value = { name: data.name }
+    items.value = data.items
+    otherItems.value = data.otherItems
+    reels.value = data.reels
+    Object.assign(settings, data.settings)
+    const want = items.value.findIndex((p) => p.id === Number(route.query.item))
+    if (want >= 0) selected.value = want
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    loading.value = false
+    setTimeout(() => { ready = true })
+  }
+})
+onBeforeUnmount(() => saver.flushAll())
+
+watch(settings, () => { if (ready) saver.queue('settings', { ...settings }) }, { deep: true })
+
+// ---------------------------------------------------------------- selection
+
+function select(i) {
+  if (i < 0 || i >= items.value.length) return
+  selected.value = i
+  player.reset()
+  player.playhead.value = current.value.start
+  const el = listEl.value?.children[i]
+  const list = listEl.value
+  if (el && list) {
+    if (el.offsetTop < list.scrollTop) list.scrollTop = el.offsetTop
+    else if (el.offsetTop + el.offsetHeight > list.scrollTop + list.clientHeight)
+      list.scrollTop = el.offsetTop + el.offsetHeight - list.clientHeight
+  }
+}
+
+function pickSegment(segId) {
+  const i = items.value.findIndex((p) => p.id === segId)
+  if (i >= 0) select(i)   // another part in this reel: jump to it
+  else {                  // a part in another reel: just show where it is
+    const s = otherItems.value.find((p) => p.id === segId)
+    if (s) player.seek(s.start)
+  }
+}
+
+// ---------------------------------------------------------------- editing
+
+function setRange({ start, length }) {
+  const p = current.value
+  const r = p.media.kind === 'video'
+    ? fitRange(start, length, p.media.duration)
+    : { start: 0, length: Math.max(0.2, Math.round(length * 100) / 100) }
+  Object.assign(p, r)
+  saver.queue(p.id, r)
+}
+
+function setIn() {
+  const p = current.value
+  const end = p.start + p.length
+  const t = player.playhead.value
+  if (end - t >= 0.2) setRange({ start: t, length: end - t })
+  else setRange({ start: t, length: p.length })
+}
+
+function setOut() {
+  const p = current.value
+  if (player.playhead.value - p.start >= 0.2) setRange({ start: p.start, length: player.playhead.value - p.start })
+}
+
+function setKeep(p, keep) {
+  p.keep = keep
+  saver.queue(p.id, { keep })
+}
+
+function applyLengthToAll() {
+  const len = Number(settings.defaultLength)
+  if (!(len > 0)) return
+  for (const p of items.value) {
+    if (!p.keep || p.media.kind !== 'video') continue
+    const r = fitRange(p.start, len, p.media.duration)
+    Object.assign(p, r)
+    saver.queue(p.id, r)
+  }
+}
+
+async function remove(p) {
+  await api.deleteItem(p.id)
+  const i = items.value.indexOf(p)
+  items.value.splice(i, 1)
+  select(Math.min(i, items.value.length - 1))
+}
+
+// A second part of the same clip, starting just after this one.
+async function duplicate(p) {
+  const r = fitRange(p.start + p.length, p.length, p.media.duration)
+  const item = await api.addItem(id, { mediaId: p.mediaId, ...r })
+  const i = items.value.indexOf(p) + 1
+  items.value.splice(i, 0, { ...item, media: p.media })
+  await saveOrder()
+  select(i)
+}
+
+// ---------------------------------------------------------------- order
+
+async function saveOrder() {
+  items.value.forEach((p, i) => { p.position = i })
+  await api.reorder(id, items.value.map((p) => p.id))
+}
+
+async function drop(to) {
+  const from = dragFrom.value
+  dragOver.value = null
+  if (from === null || from === to) return
+  const cur = current.value
+  const [moved] = items.value.splice(from, 1)
+  items.value.splice(to, 0, moved)
+  selected.value = items.value.indexOf(cur)
+  await saveOrder()
+}
+
+async function sortByShotTime() {
+  const cur = current.value
+  items.value.sort((a, b) => a.media.capturedAt - b.media.capturedAt || a.start - b.start)
+  selected.value = items.value.indexOf(cur)
+  await saveOrder()
+}
+
+// ---------------------------------------------------------------- reel
+
+async function rename() {
+  const name = window.prompt('Rename reel', reel.value.name)
+  if (!name?.trim() || name.trim() === reel.value.name) return
+  try {
+    await api.updateReel(id, { name: name.trim() })
+    reel.value.name = name.trim()
+  } catch (e) {
+    window.alert(e.message)
+  }
+}
+
+async function removeReel() {
+  if (!window.confirm(`Delete the reel "${reel.value.name}"? Your footage is not touched.`)) return
+  await api.deleteReel(id)
+  router.push('/')
+}
+
+async function doExport() {
+  exporting.value = true
+  try {
+    await saver.flushAll()
+    exportResult.value = await api.exportReel(id)
+  } catch (e) {
+    exportResult.value = { ok: false, path: '', dryRun: e.message, command: '' }
+  } finally {
+    exporting.value = false
+  }
+}
+
+// ---------------------------------------------------------------- keyboard
+
+function onKey(e) {
+  if (e.target.closest('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey || !current.value) return
+  const k = e.key
+  const video = current.value.media.kind === 'video'
+  if (k === ' ') player.toggle()
+  else if (k === 'Enter') player.playPart()
+  else if ((k === 'i' || k === 'I') && video) setIn()
+  else if ((k === 'o' || k === 'O') && video) setOut()
+  else if (k === 'x' || k === 'X') setKeep(current.value, !current.value.keep)
+  else if (k === 'ArrowDown') select(selected.value + 1)
+  else if (k === 'ArrowUp') select(selected.value - 1)
+  else if (k === 'ArrowLeft' && video) { setRange({ ...current.value, start: current.value.start - (e.shiftKey ? 1 : 0.1) }); player.seek(current.value.start) }
+  else if (k === 'ArrowRight' && video) { setRange({ ...current.value, start: current.value.start + (e.shiftKey ? 1 : 0.1) }); player.seek(current.value.start) }
+  else if (k === 'Escape') exportResult.value = null
+  else return
+  e.preventDefault()
+}
+onMounted(() => window.addEventListener('keydown', onKey))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+</script>
+
+<style scoped>
+h1 { display: flex; align-items: center; gap: 10px; }
+h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
+.rename { cursor: text; border-bottom: 1px dashed transparent; }
+.rename:hover { border-bottom-color: var(--sage); }
+.total { color: var(--forest); }
+.save { font-size: 12px; }
+.settings { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+.settings .wide { grid-column: span 2; }
+.field.check span { display: flex; gap: 6px; align-items: center; color: var(--ink); font-size: 14px; }
+.field.check small { font-size: 12px; }
+.danger { color: #9b3b2e; }
+.strip { display: flex; gap: 2px; margin: 16px 0 4px; height: 26px; }
+.seg {
+  flex-basis: 0; min-width: 6px; border: 0; border-radius: 4px; cursor: pointer; padding: 0;
+  background: var(--sage); color: var(--forest); font-size: 10px; font-weight: 700; overflow: hidden;
+}
+.seg.photo { background: var(--sage-soft); }
+.seg.current { background: var(--forest); color: var(--cream); }
+.empty { font-size: 15px; }
+.row { display: flex; align-items: center; gap: 4px; border-top: 2px solid transparent; }
+.row.over { border-top-color: var(--forest); }
+.row > :last-child { flex: 1; min-width: 0; }
+.num { width: 18px; text-align: right; font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
+.keep {
+  width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--line);
+  background: var(--paper); cursor: pointer; font-weight: 700; color: var(--muted);
+}
+.keep.on { background: var(--sage); border-color: var(--sage); color: var(--forest); }
+.legend { font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+.lg { display: inline-flex; align-items: center; gap: 4px; }
+.lg .sw { width: 10px; height: 10px; border-radius: 50%; }
+</style>

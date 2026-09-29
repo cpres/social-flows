@@ -1,8 +1,10 @@
 # Footage Studio
 
-A local app for picking moments out of long clips. Browse the folders in
-`~/Footage`, preview each clip, and set **where each cut starts and how long
-it runs**. It writes the config `montage/montage.py` already reads.
+A local app for building reels out of parts of your clips and photos. Your
+footage stays in shoot folders under `~/Footage`; you tag parts of it into
+reels (one per concept), and the same clip or photo can be used in as many
+reels as you like, with different start and length in each. It writes the
+config `montage/montage.py` already reads.
 
 ## Run
 
@@ -29,22 +31,37 @@ python3 studio/server.py --open
 
 ## How it works
 
-- **Home** lists every folder in `~/Footage` (one per shoot, e.g. `2026-09-24`),
-  newest first, with a cover frame, clip count and total footage length.
-- **A folder** lists its clips in the order they were shot. Pick one to preview it.
-  Under the video, a filmstrip shows what happens where; drag the handles to set
-  the start and end, or drag the highlighted selection to slide it.
-  Type exact values in *Start* / *Length*, or use the quick-length buttons.
-- **Keep / skip** each clip (✓ or `X`). Skipped takes stay on disk, out of the cut.
-- The bar under the header shows the montage: one block per kept cut, sized by length.
-- Everything autosaves to `<folder>/.studio.json`, so reopening a folder
-  picks up where you left off.
-- **Export & preview cut list** writes `<folder>/montage.yaml` and shows
-  `montage.py --dry-run`'s output. Render with the command it prints; the
-  video lands in `<folder>/renders/`.
+- **Home** shows your **Reels** (concepts) above your **Shoots** (the date
+  folders in `~/Footage`, newest first).
+- **Open a shoot** to go through its clips in the order they were shot. Under the
+  video, a filmstrip shows what happens where; drag the handles to pick a part,
+  or type exact start and length. Then click a reel (or press `1`–`9`) to add
+  that part to it. Move the selection and add again to use another part of the
+  same clip, in the same reel or a different one. Photos toggle in and out of
+  reels with one click.
+- Coloured marks under the filmstrip show every part of that clip already in a
+  reel; click one (or *Edit* in the list below) to adjust it.
+- **Open a reel** to see its parts from every shoot. Drag to reorder (or *Sort by
+  shot time*), fine-tune each part's start and length, skip parts without
+  removing them, and set music, beat sync and framing under *Settings*.
+- **Export & preview cut list** writes `~/Footage/.studio/reels/<reel>.yaml` and
+  shows `montage.py --dry-run`'s output, plus the command to render. Videos go
+  to `~/Movies/Footage Studio/` (set `RENDER_DIR` to change).
 
-Keys: `Space` play · `Enter` loop selection · `I`/`O` start/end at playhead ·
-`←`/`→` nudge start (Shift = 1s) · `↑`/`↓` previous/next clip · `X` keep/skip.
+Everything is stored in one SQLite file, `~/Footage/.studio/studio.db`
+(no database server to run). Files are never copied or moved. If you rename a
+file or move it to another shoot folder, it relinks automatically (matched on
+size and capture time).
+
+**Per-concept folders you already have:** open the folder and click *Make a
+reel from this folder*. Files that are copies of originals in another shoot
+folder are pointed at the original, so the copies can be deleted afterwards.
+Trims made with the first version of the studio (`.studio.json`) are carried
+over the same way.
+
+Keys: `Space` play · `Enter` loop the part · `I`/`O` start/end at playhead ·
+`←`/`→` nudge start (Shift = 1s) · `↑`/`↓` previous/next · `1`–`9` add to reel
+(shoot view) · `X` keep/skip (reel view).
 
 **Lengths and beat sync.** With no music, or beat sync off (the default), your
 lengths are used exactly. Turn beat sync on in *Settings* and the engine
