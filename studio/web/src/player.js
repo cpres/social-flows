@@ -1,11 +1,12 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 
-// Playhead tracking plus "play just this part, on a loop".
+// Playhead tracking plus "play just this part": plays from its start and
+// stops at its end.
 export function usePlayer(range) {
   const video = ref(null)
   const playhead = ref(0)
   const playing = ref(false)
-  const looping = ref(false)
+  const playingPart = ref(false)
   const failed = ref(false)
 
   let raf
@@ -14,7 +15,11 @@ export function usePlayer(range) {
     if (v) {
       playhead.value = v.currentTime
       const r = range()
-      if (looping.value && r && !v.paused && v.currentTime >= r.start + r.length) v.currentTime = r.start
+      if (playingPart.value && r && !v.paused && v.currentTime >= r.start + r.length) {
+        v.pause()
+        v.currentTime = r.start + r.length
+        playingPart.value = false
+      }
     }
     raf = requestAnimationFrame(tick)
   }
@@ -29,19 +34,19 @@ export function usePlayer(range) {
     const v = video.value
     if (!v) return
     if (v.paused) v.play()
-    else { v.pause(); looping.value = false }
+    else { v.pause(); playingPart.value = false }
   }
   function playPart() {
     const v = video.value
     const r = range()
     if (!v || !r) return
-    if (looping.value && !v.paused) { v.pause(); looping.value = false; return }
-    looping.value = true
+    if (playingPart.value && !v.paused) { v.pause(); playingPart.value = false; return }
+    playingPart.value = true
     v.currentTime = r.start
     v.play()
   }
   function reset() {
-    looping.value = false
+    playingPart.value = false
     failed.value = false
   }
   const events = {
@@ -49,5 +54,5 @@ export function usePlayer(range) {
     onPause: () => { playing.value = false },
     onError: () => { failed.value = true },
   }
-  return { video, playhead, playing, looping, failed, seek, toggle, playPart, reset, events }
+  return { video, playhead, playing, playingPart, failed, seek, toggle, playPart, reset, events }
 }

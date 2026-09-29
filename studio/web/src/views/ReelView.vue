@@ -171,8 +171,8 @@
             @update="setRange" @seek="player.seek" @pick="pickSegment"
           />
           <div class="controls">
-            <button class="btn" @click="player.toggle">{{ player.playing.value ? 'Pause' : 'Play' }}</button>
-            <button class="btn" :class="{ active: player.looping.value }" @click="player.playPart">▶ Play part</button>
+            <button class="btn" @click="player.toggle">{{ player.playing.value ? 'Pause' : 'Play' }} <kbd>Enter</kbd></button>
+            <button class="btn" :class="{ active: player.playingPart.value }" @click="player.playPart">▶ Play part <kbd>Space</kbd></button>
             <span class="muted mono">{{ fmtTime(player.playhead.value) }}</span>
             <span class="spacer"></span>
             <button class="btn small" @click="setIn">Start here <kbd>I</kbd></button>
@@ -196,7 +196,7 @@
           <span v-for="s in segments" :key="s.id" class="lg"><span class="sw" :style="{ background: s.color }"></span>{{ s.label }}</span>
         </p>
         <p class="muted keys">
-          <kbd>Space</kbd> play · <kbd>Enter</kbd> play part · <kbd>I</kbd>/<kbd>O</kbd> start/end at playhead ·
+          <kbd>Space</kbd> play part · <kbd>Enter</kbd> play/pause whole clip · <kbd>I</kbd>/<kbd>O</kbd> start/end at playhead ·
           <kbd>←</kbd>/<kbd>→</kbd> nudge 0.1s · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next · <kbd>X</kbd> keep/skip ·
           <kbd>G</kbd> Instagram overlays · drag the list to reorder
         </p>
@@ -506,8 +506,8 @@ function onKey(e) {
   if (e.target.closest('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey || !current.value) return
   const k = e.key
   const video = current.value.media.kind === 'video'
-  if (k === ' ') player.toggle()
-  else if (k === 'Enter') player.playPart()
+  if (k === ' ') player.playPart()
+  else if (k === 'Enter') player.toggle()
   else if ((k === 'i' || k === 'I') && video) setIn()
   else if ((k === 'o' || k === 'O') && video) setOut()
   else if (k === 'x' || k === 'X') setKeep(current.value, !current.value.keep)

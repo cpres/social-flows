@@ -64,7 +64,7 @@ CREATE INDEX IF NOT EXISTS items_media ON reel_items(media_id);
 """
 
 DEFAULT_SETTINGS = {
-    "defaultLength": 1.5,   # seconds per video cut
+    "defaultLength": 2.0,   # seconds per video cut
     "defaultHold": 1.6,     # seconds per photo
     "music": "",
     "beatSync": False,      # when on, the engine uses beats and ignores lengths

@@ -58,8 +58,8 @@
             @update="setRange" @seek="player.seek" @pick="activeId = $event"
           />
           <div class="controls">
-            <button class="btn" @click="player.toggle">{{ player.playing.value ? 'Pause' : 'Play' }}</button>
-            <button class="btn" :class="{ active: player.looping.value }" @click="player.playPart">▶ Play selection</button>
+            <button class="btn" @click="player.toggle">{{ player.playing.value ? 'Pause' : 'Play' }} <kbd>Enter</kbd></button>
+            <button class="btn" :class="{ active: player.playingPart.value }" @click="player.playPart">▶ Play selection <kbd>Space</kbd></button>
             <span class="muted mono">{{ fmtTime(player.playhead.value) }}</span>
             <span class="spacer"></span>
             <button class="btn small" @click="setIn">Start here <kbd>I</kbd></button>
@@ -105,7 +105,7 @@
         </div>
 
         <p class="muted keys">
-          <kbd>Space</kbd> play · <kbd>Enter</kbd> play selection · <kbd>I</kbd>/<kbd>O</kbd> start/end at playhead ·
+          <kbd>Space</kbd> play selection · <kbd>Enter</kbd> play/pause whole clip · <kbd>I</kbd>/<kbd>O</kbd> start/end at playhead ·
           <kbd>←</kbd>/<kbd>→</kbd> nudge 0.1s · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next ·
           <kbd>1</kbd>–<kbd>9</kbd> add to reel · <kbd>G</kbd> Instagram overlays
         </p>
@@ -156,12 +156,14 @@ const segments = computed(() =>
     .map((p) => ({ id: p.id, start: p.start, length: p.length, color: reelColor(p.reelId),
                    label: `${reelName(p.reelId)} · ${fmtTime(p.start)} (${p.length.toFixed(1)}s)` })))
 
+const DEFAULT_LENGTH = 2   // seconds, for a new selection on a video
+
 // A fresh selection per clip, where the engine would cut by default.
 function initDraft(m) {
-  const length = m.kind === 'video' ? Math.min(1.5, m.duration || 1.5) : 1.6
+  const length = m.kind === 'video' ? Math.min(DEFAULT_LENGTH, m.duration || DEFAULT_LENGTH) : 1.6
   drafts[m.id] = { start: m.kind === 'video' ? defaultStart(m.duration, length) : 0, length, focusX: 0.5, focusY: 0.5 }
 }
-const draftOf = (m) => (m && drafts[m.id]) || { start: 0, length: 1.5, focusX: 0.5, focusY: 0.5 }
+const draftOf = (m) => (m && drafts[m.id]) || { start: 0, length: DEFAULT_LENGTH, focusX: 0.5, focusY: 0.5 }
 const guides = ref(false)
 
 const saver = debouncedSaver((id, patch) => api.updateItem(id, patch))
@@ -306,8 +308,8 @@ function onKey(e) {
   if (e.target.closest('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey || !current.value) return
   const k = e.key
   const video = current.value.kind === 'video'
-  if (k === ' ') player.toggle()
-  else if (k === 'Enter') player.playPart()
+  if (k === ' ') player.playPart()
+  else if (k === 'Enter') player.toggle()
   else if ((k === 'i' || k === 'I') && video) setIn()
   else if ((k === 'o' || k === 'O') && video) setOut()
   else if (k === 'ArrowDown') select(selected.value + 1)
