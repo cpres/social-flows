@@ -63,9 +63,8 @@ shares = Shares(port=int(os.environ.get("SHARE_PORT", 3010)),
                 ttl=int(os.environ.get("SHARE_TTL", 3600)))
 ITEM_COLUMNS = ("media_id", "position", "start", "length", "keep", "focus_x", "focus_y",
                 "transition", "lighten", "beats", "zoom", "layout")
-# Per part; '' = the reel's framing. "stack": this part runs across the top
-# for the whole reel (sped to fit) and the other parts play underneath.
-LAYOUTS = ("", "fill", "blur", "stack")
+LAYOUTS = ("", "fill", "blur")   # per part; '' = the reel's framing
+FORMATS = ("standard", "stack")
 app = FastAPI(title="Footage Studio")
 
 
@@ -95,10 +94,29 @@ def item_dict(row):
             "zoom": row["zoom"], "layout": row["layout"]}
 
 
-def one_on_top(db, item_id, reel_id):
-    """Only one part per reel runs across the top."""
-    db.execute("UPDATE reel_items SET layout = '' WHERE reel_id = ? AND id != ? AND layout = 'stack'",
-               (reel_id, item_id))
+def top_item(db, reel_id, s):
+    """A Stack reel's top clip: its pinned row, if that's still a video here."""
+    if s.get("format") != "stack" or not s.get("topItemId"):
+        return None
+    return db.execute("""SELECT i.id FROM reel_items i JOIN media m ON m.id = i.media_id
+                         WHERE i.id = ? AND i.reel_id = ? AND m.kind = 'video'""",
+                      (s["topItemId"], reel_id)).fetchone()
+
+
+def clean_settings(db, reel_id, s):
+    """Keep the Stack settings in range."""
+    if s.get("format") not in FORMATS:
+        raise HTTPException(400, f"Unknown format: {s.get('format')}")
+    s["stackSplit"] = round(min(max(float(s.get("stackSplit") or 0.5), 0.3), 0.7), 3)
+    s["dividerPx"] = min(max(int(round(float(s.get("dividerPx") or 0) / 2)) * 2, 0), 20)
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(s.get("dividerColor") or "")):
+        s["dividerColor"] = DEFAULT_SETTINGS["dividerColor"]
+    s["fitTop"] = bool(s.get("fitTop"))
+    if s.get("topItemId") is not None:
+        s["topItemId"] = int(s["topItemId"])
+        if not top_item(db, reel_id, {**s, "format": "stack"}):
+            s["topItemId"] = None   # removed, or not a video in this reel
+    return s
 
 
 def reel_row(db, reel_id):
@@ -279,7 +297,10 @@ def get_reel(reel_id: int):
             WHERE i.reel_id != ? AND i.media_id IN
                   (SELECT media_id FROM reel_items WHERE reel_id = ?)""", (reel_id, reel_id))]
         reels = reel_summaries(db)
-    return {"id": r["id"], "name": r["name"], "settings": settings_of(r), "items": items,
+        settings = settings_of(r)
+        if settings["format"] == "stack" and not top_item(db, reel_id, settings):
+            settings["topItemId"] = None   # its clip was removed: pick another
+    return {"id": r["id"], "name": r["name"], "settings": settings, "items": items,
             "otherItems": others, "reels": reels}
 
 
@@ -297,7 +318,7 @@ def update_reel(reel_id: int, body: dict = Body(...)):
                 raise HTTPException(409, f"A reel called '{name}' already exists")
             db.execute("UPDATE reels SET name = ? WHERE id = ?", (name, reel_id))
         if "settings" in body:
-            settings = {**settings_of(r), **body["settings"]}
+            settings = clean_settings(db, reel_id, {**settings_of(r), **body["settings"]})
             db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(settings), reel_id))
         touch(db, reel_id)
     return {"ok": True}
@@ -346,16 +367,12 @@ def add_item(reel_id: int, body: dict = Body(...)):
         layout = body.get("layout") or ""
         if layout not in LAYOUTS:
             raise HTTPException(400, f"Unknown layout: {layout}")
-        if layout == "stack" and m["kind"] != "video":
-            layout = ""
         pos = db.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM reel_items "
                          "WHERE reel_id = ?", (reel_id,)).fetchone()[0]
         cur = db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length, "
                          "focus_x, focus_y, lighten, beats, zoom, layout) "
                          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                          (reel_id, m["id"], pos, start, length, fx, fy, lighten, beats, zoom, layout))
-        if layout == "stack":
-            one_on_top(db, cur.lastrowid, reel_id)
         touch(db, reel_id)
         row = db.execute("SELECT id AS item_id, * FROM reel_items WHERE id = ?",
                          (cur.lastrowid,)).fetchone()
@@ -394,10 +411,6 @@ def update_item(item_id: int, body: dict = Body(...)):
             fields["start"], fields["length"] = fit(float(fields.get("start", row["start"])),
                                                     float(fields.get("length", row["length"])),
                                                     row["duration"])
-        if fields.get("layout") == "stack":
-            if row["kind"] != "video":
-                raise HTTPException(400, "Only a video can run across the top")
-            one_on_top(db, item_id, row["reel_id"])
         sets = ", ".join(f"{k} = :{k}" for k in fields)
         db.execute(f"UPDATE reel_items SET {sets} WHERE id = :id", {**fields, "id": item_id})
         touch(db, row["reel_id"])
@@ -435,9 +448,18 @@ def duplicate_reel(reel_id: int, body: dict = Body(default={})):
                          "VALUES (?, ?, ?, ?)", (name, r["settings"], now(), now()))
         new_id = cur.lastrowid
         cols = ", ".join(ITEM_COLUMNS)
+        old = [row["id"] for row in db.execute(
+            "SELECT id FROM reel_items WHERE reel_id = ? ORDER BY position, id", (reel_id,))]
         db.execute(f"INSERT INTO reel_items (reel_id, {cols}) "
                    f"SELECT ?, {cols} FROM reel_items WHERE reel_id = ? ORDER BY position, id",
                    (new_id, reel_id))
+        # The copy's top clip is the copy of the original's.
+        s = settings_of(r)
+        if s.get("topItemId") in old:
+            new = [row["id"] for row in db.execute(
+                "SELECT id FROM reel_items WHERE reel_id = ? ORDER BY id", (new_id,))]
+            s["topItemId"] = new[old.index(s["topItemId"])]
+            db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), new_id))
     return {"id": new_id, "name": name}
 
 
@@ -473,13 +495,17 @@ def music_beats(name: str):
 
 def build_config(reel, rows):
     s = settings_of(reel)
-    kept = [r for r in rows if r["keep"] and not r["missing"]]
-    # The part on top runs across the whole reel; the rest play underneath.
-    top = next((r for r in kept if r["layout"] == "stack" and r["kind"] == "video"), None)
-    if top:
-        kept.remove(top)
-        if not kept:
-            raise HTTPException(400, "Add other parts to play under the one on top.")
+    # A Stack reel: the top clip plays in the top pane for the whole reel;
+    # the kept parts play one after another underneath.
+    top = None
+    if s.get("format") == "stack":
+        top = next((r for r in rows if r["id"] == s.get("topItemId") and r["kind"] == "video"), None)
+        if not top or top["missing"]:
+            raise HTTPException(400, "Pick a clip for the top of this Stack reel." if not top else
+                                f"The top clip is missing: {top['path']}")
+    kept = [r for r in rows if r["keep"] and not r["missing"] and r is not top]
+    if top and not kept:
+        raise HTTPException(400, "Add parts to play underneath the top clip.")
     track = shelf.path_of(s.get("music"))
     synced = bool(track and s.get("beatSync"))
     sources, seen = [], {}
@@ -513,8 +539,14 @@ def build_config(reel, rows):
     if top:
         cfg["top"] = {"file": str(ROOT / top["path"]), "start": round(top["start"], 2),
                       "length": round(top["length"], 2)}
+        if (top["focus_x"], top["focus_y"]) != (0.5, 0.5):
+            cfg["top"]["focus"] = [round(top["focus_x"], 3), round(top["focus_y"], 3)]
+        if top["zoom"] > 1.001:
+            cfg["top"]["zoom"] = round(top["zoom"], 3)
         if top["lighten"]:
             cfg["top"]["lighten"] = round(top["lighten"], 2)
+        cfg["stack"] = {"split": s["stackSplit"], "divider": s["dividerPx"],
+                        "divider_color": s["dividerColor"], "fit": bool(s["fitTop"])}
     if track:
         if not track.exists():
             raise HTTPException(400, f"Music file not found: {track}")

@@ -301,12 +301,10 @@ function setOut() {
 
 // ---------------------------------------------------------------- layout
 
-// For landscape footage (a timelapse): crop it, show it whole over a blurred
-// copy, or run it across the top of the whole reel with the other parts underneath.
+// For landscape footage (a timelapse): crop it, or show it whole over a blurred copy.
 const LAYOUTS = [
   { v: 'fill', label: 'Fill', hint: 'Crops to fit. Drag the window to reframe, corners to zoom.' },
   { v: 'blur', label: 'Blur', hint: 'The whole frame, with a blurred copy filling the top and bottom.' },
-  { v: 'stack', label: 'On top', hint: "Across the top for the whole reel, sped up or slowed down to fit; the reel's other parts play underneath." },
 ]
 function setLayout(v) {
   patchRange({ layout: v === 'fill' ? '' : v })

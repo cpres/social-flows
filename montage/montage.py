@@ -91,24 +91,6 @@ def probe(path):
     return duration, has_audio
 
 
-def frame_aspect(path):
-    """Width / height as displayed (honours a rotation flag), or 16:9."""
-    try:
-        out = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-             "stream=width,height:stream_tags=rotate:stream_side_data=rotation",
-             "-of", "json", str(path)], capture_output=True, text=True, timeout=30).stdout
-        st = json.loads(out)["streams"][0]
-        w, h = int(st["width"]), int(st["height"])
-        rot = st.get("tags", {}).get("rotate") or next(
-            (d.get("rotation") for d in st.get("side_data_list", []) if "rotation" in d), 0)
-        if abs(int(float(rot))) % 180 == 90:
-            w, h = h, w
-        return w / h
-    except Exception:
-        return 16 / 9
-
-
 def run(cmd):
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -438,14 +420,6 @@ def video_codec(cfg):
             "-crf", str(cfg.get("crf", 18)), "-profile:v", "high", *pix]
 
 
-def stack_heights(cfg, aspect):
-    """With `top:`, the top clip shows whole at full width (at most 60% of
-    the frame); every cut plays in the rest, underneath."""
-    w, h = cfg["width"], cfg["height"]
-    top = min(round(w / aspect / 2) * 2, round(h * 0.6 / 2) * 2)
-    return top, h - top
-
-
 def fit_filter(cfg, src_label, out_label, focus=(0.5, 0.5), zoom=1.0, fit=None):
     """Frame a source to the output size. `focus` picks which part of a
     too-wide or too-tall source the crop keeps: 0 = left/top, 1 = right/bottom.
@@ -578,9 +552,13 @@ def assemble(segs, plan, cfg, workdir):
 
 
 def load_top(cfg, base_dir):
-    """`top:` a clip shown whole across the top for the entire piece, sped up
-    or slowed down to last exactly as long as the cuts playing underneath.
-    Narrows cfg's height to the space underneath; returns the top, or None."""
+    """A stack piece: `top:` is a clip shown in the top pane for the whole
+    piece, `stack:` the split and the divider. The cuts play underneath, so
+    this narrows cfg's height to the bottom pane. Returns the top, or None.
+
+    With stack fit on (the default) the top clip is sped up or slowed down to
+    end with the cuts; with it off, the piece is as long as the top clip at
+    normal speed and the cuts are cut short, or hold their last frame."""
     top = cfg.get("top")
     if not top:
         return None
@@ -591,28 +569,55 @@ def load_top(cfg, base_dir):
     start = parse_time(top.get("start", 0))
     length = parse_time(top.get("length")) or duration - start
     length = max(0.2, min(length, duration - start))
-    top_h, bottom_h = stack_heights(cfg, frame_aspect(path))
+    st = cfg.get("stack") or {}
+    h = cfg["height"]
+    divider = min(max(int(st.get("divider", 4)) // 2 * 2, 0), 40)
+    split = min(max(float(st.get("split", 0.5)), 0.1), 0.9)
+    top_h = round((h - divider) * split / 2) * 2
     out = {"path": path, "start": start, "length": length, "height": top_h,
-           "lighten": float(top.get("lighten", 0) or 0), "full_height": cfg["height"]}
-    cfg["height"] = bottom_h
+           "focus": top.get("focus", (0.5, 0.5)), "zoom": float(top.get("zoom", 1) or 1),
+           "lighten": float(top.get("lighten", 0) or 0), "full_height": h,
+           "divider": divider, "color": str(st.get("divider_color", "#f7f1e3")).replace("#", "0x"),
+           "fit": bool(st.get("fit", True))}
+    cfg["height"] = h - divider - top_h
     return out
 
 
-def compose_top(top, assembled, cfg, total, workdir):
-    """Put the top clip, sped to fit, above the assembled cuts."""
+def top_length(top, under):
+    """How long the piece runs: the cuts' length when the top is fitted to
+    them, else the top clip's own length."""
+    return under if top["fit"] else round(top["length"] * 1000) / 1000
+
+
+def compose_top(top, assembled, cfg, under, workdir):
+    """The top clip (sped to fit, or not) over the divider over the cuts."""
     w, fps = cfg["width"], cfg["fps"]
+    total = top_length(top, under)
+    bottom_h = cfg["height"]
     out = workdir / "stacked.mkv"
+    cfg["height"] = top["height"]
+    graph = fit_filter(cfg, "0:v", "tfit", top["focus"], top["zoom"], "fill") + ";"
+    cfg["height"] = bottom_h
     lift = min(max(top["lighten"], 0.0), 1.0)
-    eq = (f",eq=gamma={1 + LIGHTEN_GAMMA * lift:.3f}:saturation={1 + 0.08 * lift:.3f}" if lift else "")
-    graph = (f"[0:v]setpts=(PTS-STARTPTS)*{total / top['length']:.6f},fps={fps},"
-             f"scale={w}:{top['height']}:force_original_aspect_ratio=increase,"
-             f"crop={w}:{top['height']},setsar=1{eq},format=yuv420p,"
-             f"trim=end_frame={round(total * fps)},setpts=PTS-STARTPTS[top];"
-             f"[1:v]setsar=1,format=yuv420p[bot];[top][bot]vstack=shortest=1[v]")
+    eq = (f"eq=gamma={1 + LIGHTEN_GAMMA * lift:.3f}:saturation={1 + 0.08 * lift:.3f}," if lift else "")
+    speed = total / top["length"] if top["fit"] else 1.0
+    frames = round(total * fps)
+    graph += (f"[tfit]setpts=(PTS-STARTPTS)*{speed:.6f},fps={fps},{eq}setsar=1,format=yuv420p,"
+              f"trim=end_frame={frames},setpts=PTS-STARTPTS[top];")
+    # Cuts shorter than the top clip hold their last frame (and go quiet).
+    hold = max(total - under, 0)
+    pad = f",tpad=stop_mode=clone:stop_duration={hold:.3f}" if hold > 0.001 else ""
+    graph += (f"[1:v]setsar=1,format=yuv420p{pad},trim=end_frame={frames},setpts=PTS-STARTPTS[bot];"
+              f"[1:a]apad,atrim=0:{total:.4f},asetpts=PTS-STARTPTS[a];")
+    if top["divider"]:
+        graph += (f"color=c={top['color']}:s={w}x{top['divider']}:r={fps},format=yuv420p,"
+                  f"trim=end_frame={frames}[div];[top][div][bot]vstack=inputs=3[v]")
+    else:
+        graph += "[top][bot]vstack=inputs=2[v]"
     run(["ffmpeg", "-y", "-v", "error",
          "-ss", f"{top['start']:.3f}", "-t", f"{top['length']:.3f}", "-i", str(top["path"]),
-         "-i", str(assembled), "-filter_complex", graph, "-map", "[v]", "-map", "1:a",
-         *video_codec(cfg), "-r", str(fps), "-c:a", "copy", str(out)])
+         "-i", str(assembled), "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
+         *video_codec(cfg), "-r", str(fps), "-c:a", "pcm_s16le", str(out)])
     cfg["height"] = top["full_height"]
     return out
 
@@ -694,9 +699,15 @@ def main():
             print(f"  {'':>7}      ~ {seg['label_after']}")
         t += seg["length"]
     if top:
-        print(f"\n  on top: {top['path'].name} {fmt(top['start'])} -> "
-              f"{fmt(top['start'] + top['length'])} ({top['length']:.1f}s), "
-              f"played over {total:.1f}s ({top['length'] / total:.2f}x)")
+        line = (f"\n  top: {top['path'].name} {fmt(top['start'])} -> "
+                f"{fmt(top['start'] + top['length'])} · Top {fmt(top['length'])} · Underneath {fmt(total)}")
+        if top["fit"]:
+            line += f" · timelapse at {top['length'] / total:.2f}x"
+        elif total > top["length"]:
+            line += f" · underneath cut at {fmt(top['length'])}"
+        elif total < top["length"]:
+            line += f" · last part holds {top['length'] - total:.1f}s"
+        print(line)
     for w in warnings:
         print(f"  ! {w}")
     print()
@@ -719,6 +730,7 @@ def main():
         if top:
             print("  stacking under the top clip...          ", end="\r")
             assembled = compose_top(top, assembled, cfg, total, workdir)
+            total = top_length(top, total)
         print("  mixing sound...                         ", end="\r")
         finish(assembled, cfg, base_dir, music_start, total, keep_audio, output)
 
