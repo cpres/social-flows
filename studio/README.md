@@ -90,14 +90,16 @@ can be framed differently in different reels. Drag a corner of the window to zoo
 caption and buttons will cover the picture. Files stored sideways with a
 rotation flag (common from phones) are handled.
 
-**Layout per part** (for landscape footage like mural timelapses): each part
+**Layout per part** (for landscape footage like a day's timelapse): each part
 can override the reel's framing, chosen under *Layout* on the shoot page
-(before adding the part) or in the reel's part editor. *Fill* crops to 9:16 as above; *Blur* shows
-the whole frame with a blurred copy filling the top and bottom; *Stack* puts
-the whole clip across the top at full width and photos underneath (glasses
-photos fit the space well). Pick the photos with *+ Add photos* (from the
-clip's shoot, or any other); several take equal turns across the part, in the
-order shown. Stacked parts get ▤ in the list, blurred ones ◫.
+(before adding the part) or in the reel's part editor. *Fill* crops as above;
+*Blur* shows the whole frame with a blurred copy filling the top and bottom.
+*On top* runs that part across the top of the whole reel, shown whole at full
+width, while every other part plays underneath in order, framed for the space
+that's left (glasses footage fits it well). Its start and length pick which
+stretch of the clip to use; it's sped up or slowed down to last exactly as long
+as the parts underneath. One part per reel can be on top; it's marked ▤ in the
+list, blurred parts ◫.
 
 Everything is stored in one SQLite file, `~/Footage/.studio/studio.db`
 (no database server to run). Files are never copied or moved. If you rename a

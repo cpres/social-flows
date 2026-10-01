@@ -62,8 +62,10 @@ shelf = Shelf(os.environ.get("MUSIC_DIR", "~/Music/Reels"), lib.home / "music")
 shares = Shares(port=int(os.environ.get("SHARE_PORT", 3010)),
                 ttl=int(os.environ.get("SHARE_TTL", 3600)))
 ITEM_COLUMNS = ("media_id", "position", "start", "length", "keep", "focus_x", "focus_y",
-                "transition", "lighten", "beats", "zoom", "layout", "stack")
-LAYOUTS = ("", "fill", "blur", "stack")   # per part; '' = the reel's framing
+                "transition", "lighten", "beats", "zoom", "layout")
+# Per part; '' = the reel's framing. "stack": this part runs across the top
+# for the whole reel (sped to fit) and the other parts play underneath.
+LAYOUTS = ("", "fill", "blur", "stack")
 app = FastAPI(title="Footage Studio")
 
 
@@ -90,29 +92,13 @@ def item_dict(row):
             "position": row["position"], "start": row["start"], "length": row["length"],
             "keep": bool(row["keep"]), "focusX": row["focus_x"], "focusY": row["focus_y"],
             "transition": row["transition"], "lighten": row["lighten"], "beats": row["beats"],
-            "zoom": row["zoom"], "layout": row["layout"], "stack": json.loads(row["stack"] or "[]")}
+            "zoom": row["zoom"], "layout": row["layout"]}
 
 
-def with_stack_media(db, item):
-    """Add the stack photos' media, in order, so the UI can show them."""
-    ids = item["stack"]
-    rows = {r["id"]: r for r in db.execute(
-        f"SELECT * FROM media WHERE id IN ({','.join('?' * len(ids))})", ids)} if ids else {}
-    item["stackMedia"] = [media_dict(rows[i]) for i in ids if i in rows]
-    return item
-
-
-def stack_of(db, ids):
-    """Validate a list of photo ids for a stack part."""
-    if not isinstance(ids, list):
-        raise HTTPException(400, "stack must be a list of photo ids")
-    ids = [int(i) for i in ids]
-    found = {r["id"] for r in db.execute(
-        f"SELECT id FROM media WHERE kind = 'photo' AND id IN ({','.join('?' * len(ids))})", ids)} if ids else set()
-    missing = [i for i in ids if i not in found]
-    if missing:
-        raise HTTPException(400, f"Not photos: {missing}")
-    return json.dumps(ids)
+def one_on_top(db, item_id, reel_id):
+    """Only one part per reel runs across the top."""
+    db.execute("UPDATE reel_items SET layout = '' WHERE reel_id = ? AND id != ? AND layout = 'stack'",
+               (reel_id, item_id))
 
 
 def reel_row(db, reel_id):
@@ -208,7 +194,7 @@ def get_folder(name: str):
     with lib.connect() as db:
         media = [media_dict(r) for r in db.execute(
             "SELECT * FROM media WHERE folder = ? AND missing = 0 ORDER BY captured_at", (name,))]
-        items = [with_stack_media(db, item_dict(r)) for r in db.execute("""
+        items = [item_dict(r) for r in db.execute("""
             SELECT i.id AS item_id, i.* FROM reel_items i JOIN media m ON m.id = i.media_id
             WHERE m.folder = ? ORDER BY i.start""", (name,))]
         reels = reel_summaries(db)
@@ -285,8 +271,7 @@ def get_reel(reel_id: int):
         rows = db.execute("""
             SELECT i.id AS item_id, i.*, m.* FROM reel_items i JOIN media m ON m.id = i.media_id
             WHERE i.reel_id = ? ORDER BY i.position, i.id""", (reel_id,)).fetchall()
-        items = [with_stack_media(db, {**item_dict(row),
-                                       "media": media_dict({**dict(row), "id": row["media_id"]})})
+        items = [{**item_dict(row), "media": media_dict({**dict(row), "id": row["media_id"]})}
                  for row in rows]
         # Other reels' parts of the same files, to show alongside on the trim bar.
         others = [item_dict(row) for row in db.execute("""
@@ -361,18 +346,20 @@ def add_item(reel_id: int, body: dict = Body(...)):
         layout = body.get("layout") or ""
         if layout not in LAYOUTS:
             raise HTTPException(400, f"Unknown layout: {layout}")
-        stack = stack_of(db, body.get("stack") or [])
+        if layout == "stack" and m["kind"] != "video":
+            layout = ""
         pos = db.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM reel_items "
                          "WHERE reel_id = ?", (reel_id,)).fetchone()[0]
         cur = db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length, "
-                         "focus_x, focus_y, lighten, beats, zoom, layout, stack) "
-                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                         (reel_id, m["id"], pos, start, length, fx, fy, lighten, beats, zoom,
-                          layout, stack))
+                         "focus_x, focus_y, lighten, beats, zoom, layout) "
+                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (reel_id, m["id"], pos, start, length, fx, fy, lighten, beats, zoom, layout))
+        if layout == "stack":
+            one_on_top(db, cur.lastrowid, reel_id)
         touch(db, reel_id)
         row = db.execute("SELECT id AS item_id, * FROM reel_items WHERE id = ?",
                          (cur.lastrowid,)).fetchone()
-        return with_stack_media(db, item_dict(row))
+        return item_dict(row)
 
 
 @app.patch("/api/items/{item_id}")
@@ -395,11 +382,9 @@ def update_item(item_id: int, body: dict = Body(...)):
     for key, col in (("focusX", "focus_x"), ("focusY", "focus_y")):
         if key in body:
             fields[col] = unit(body[key])
-    if not fields and "stack" not in body:
+    if not fields:
         return {"ok": True}
     with lib.connect() as db:
-        if "stack" in body:
-            fields["stack"] = stack_of(db, body["stack"])
         row = db.execute("""SELECT i.reel_id, i.start, i.length, m.kind, m.duration
                             FROM reel_items i JOIN media m ON m.id = i.media_id
                             WHERE i.id = ?""", (item_id,)).fetchone()
@@ -409,6 +394,10 @@ def update_item(item_id: int, body: dict = Body(...)):
             fields["start"], fields["length"] = fit(float(fields.get("start", row["start"])),
                                                     float(fields.get("length", row["length"])),
                                                     row["duration"])
+        if fields.get("layout") == "stack":
+            if row["kind"] != "video":
+                raise HTTPException(400, "Only a video can run across the top")
+            one_on_top(db, item_id, row["reel_id"])
         sets = ", ".join(f"{k} = :{k}" for k in fields)
         db.execute(f"UPDATE reel_items SET {sets} WHERE id = :id", {**fields, "id": item_id})
         touch(db, row["reel_id"])
@@ -482,11 +471,15 @@ def music_beats(name: str):
 
 # ---------------------------------------------------------------- export
 
-def build_config(reel, rows, photos=None):
-    """`photos` maps media id -> path for the photos stacked under any part."""
+def build_config(reel, rows):
     s = settings_of(reel)
-    photos = photos or {}
     kept = [r for r in rows if r["keep"] and not r["missing"]]
+    # The part on top runs across the whole reel; the rest play underneath.
+    top = next((r for r in kept if r["layout"] == "stack" and r["kind"] == "video"), None)
+    if top:
+        kept.remove(top)
+        if not kept:
+            raise HTTPException(400, "Add other parts to play under the one on top.")
     track = shelf.path_of(s.get("music"))
     synced = bool(track and s.get("beatSync"))
     sources, seen = [], {}
@@ -501,12 +494,7 @@ def build_config(reel, rows, photos=None):
             entry["lighten"] = round(row["lighten"], 2)
         if row["zoom"] > 1.001:
             entry["zoom"] = round(row["zoom"], 3)
-        if row["layout"] == "stack":
-            stack = [str(ROOT / photos[i]) for i in json.loads(row["stack"] or "[]") if i in photos]
-            entry["fit"] = "stack" if stack else "blur"
-            if stack:
-                entry["stack"] = stack
-        elif row["layout"]:
+        if row["layout"] in ("fill", "blur"):
             entry["fit"] = row["layout"]
         if row["kind"] == "video":
             entry["times"] = [round(row["start"], 2)]
@@ -522,6 +510,11 @@ def build_config(reel, rows, photos=None):
         sources.append(entry)
 
     cfg = {"output": str(RENDERS / f"{slug(reel['name'])}.mp4"), "rounds": 1, "sources": sources}
+    if top:
+        cfg["top"] = {"file": str(ROOT / top["path"]), "start": round(top["start"], 2),
+                      "length": round(top["length"], 2)}
+        if top["lighten"]:
+            cfg["top"]["lighten"] = round(top["lighten"], 2)
     if track:
         if not track.exists():
             raise HTTPException(400, f"Music file not found: {track}")
@@ -563,9 +556,7 @@ def write_config(reel_id):
                              JOIN media m ON m.id = i.media_id
                              WHERE i.reel_id = ? ORDER BY i.position, i.id""",
                           (reel_id,)).fetchall()
-        photos = {r["id"]: r["path"] for r in db.execute(
-            "SELECT id, path FROM media WHERE kind = 'photo' AND missing = 0")}
-    cfg = build_config(reel, rows, photos)
+    cfg = build_config(reel, rows)
     if not cfg["sources"]:
         raise HTTPException(400, "Nothing is kept in this reel yet.")
     out_dir = lib.home / "reels"

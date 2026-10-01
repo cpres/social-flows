@@ -37,7 +37,7 @@
         <div class="preview-col">
           <ReelFrame
             :key="current.id" :media="current" :fit="current.kind === 'video' && range.layout ? range.layout : 'fill'"
-            :stack-media="stackMedia" :stack-index="stackIndex" :guides="guides" muted
+            :guides="guides" muted
             :focus-x="range.focusX ?? 0.5" :focus-y="range.focusY ?? 0.5" :zoom="range.zoom || 1" :poster-time="range.start"
             :bind-video="(el) => (player.video.value = el)"
             @loaded="onLoaded" @play="player.events.onPlay" @pause="player.events.onPause"
@@ -89,21 +89,6 @@
             >{{ l.label }}</button>
           </div>
           <p class="muted hint">{{ LAYOUTS.find((l) => l.v === (range.layout || 'fill')).hint }}</p>
-          <template v-if="range.layout === 'stack'">
-            <p class="muted hint" v-if="!photos.length">
-              No photos in this shoot yet: add some to the folder and click <i>Check for new clips</i>,
-              or pick photos from other shoots in the reel.
-            </p>
-            <div class="pickgrid" v-else>
-              <button
-                v-for="m in photos" :key="m.id" class="pick" :class="{ on: (range.stack || []).includes(m.id) }"
-                @click="toggleStack(m)" :title="m.file"
-              >
-                <img :src="api.thumb(m.folder, m.file, 0, 160)" alt="" loading="lazy" />
-                <span v-if="(range.stack || []).includes(m.id)" class="order">{{ range.stack.indexOf(m.id) + 1 }}</span>
-              </button>
-            </div>
-          </template>
         </div>
 
         <div class="panel" v-if="!active">
@@ -199,10 +184,9 @@ const DEFAULT_LENGTH = 2   // seconds, for a new selection on a video
 // A fresh selection per clip, where the engine would cut by default.
 function initDraft(m) {
   const length = m.kind === 'video' ? Math.min(DEFAULT_LENGTH, m.duration || DEFAULT_LENGTH) : 1.6
-  drafts[m.id] = { start: m.kind === 'video' ? defaultStart(m.duration, length) : 0, length, focusX: 0.5, focusY: 0.5, zoom: 1,
-                   layout: '', stack: [] }
+  drafts[m.id] = { start: m.kind === 'video' ? defaultStart(m.duration, length) : 0, length, focusX: 0.5, focusY: 0.5, zoom: 1, layout: '' }
 }
-const draftOf = (m) => (m && drafts[m.id]) || { start: 0, length: DEFAULT_LENGTH, focusX: 0.5, focusY: 0.5, zoom: 1, layout: '', stack: [] }
+const draftOf = (m) => (m && drafts[m.id]) || { start: 0, length: DEFAULT_LENGTH, focusX: 0.5, focusY: 0.5, zoom: 1, layout: '' }
 const guides = ref(false)
 
 const saver = debouncedSaver((id, patch) => api.updateItem(id, patch))
@@ -318,32 +302,14 @@ function setOut() {
 // ---------------------------------------------------------------- layout
 
 // For landscape footage (a timelapse): crop it, show it whole over a blurred
-// copy, or show it whole across the top with this shoot's photos underneath.
+// copy, or run it across the top of the whole reel with the other parts underneath.
 const LAYOUTS = [
-  { v: 'fill', label: 'Fill', hint: 'Crops to 9:16. Drag the window to reframe, corners to zoom.' },
+  { v: 'fill', label: 'Fill', hint: 'Crops to fit. Drag the window to reframe, corners to zoom.' },
   { v: 'blur', label: 'Blur', hint: 'The whole frame, with a blurred copy filling the top and bottom.' },
-  { v: 'stack', label: 'Stack', hint: 'The whole frame across the top, photos underneath, taking turns. Click photos to add them.' },
+  { v: 'stack', label: 'On top', hint: "Across the top for the whole reel, sped up or slowed down to fit; the reel's other parts play underneath." },
 ]
-const photos = computed(() => media.value.filter((m) => m.kind === 'photo'))
-// The stacked photos, in order: this shoot's, plus any from other shoots on a saved part.
-const stackMedia = computed(() => (range.value.stack || [])
-  .map((id) => photos.value.find((m) => m.id === id) || range.value.stackMedia?.find((m) => m.id === id))
-  .filter(Boolean))
-const stackIndex = computed(() => {
-  const n = stackMedia.value.length
-  if (n < 2) return 0
-  const t = (player.playhead.value - range.value.start) / range.value.length
-  return Math.floor(Math.min(Math.max(t, 0), 0.999) * n)
-})
 function setLayout(v) {
   patchRange({ layout: v === 'fill' ? '' : v })
-}
-function toggleStack(m) {
-  const ids = range.value.stack || []
-  const stack = ids.includes(m.id) ? ids.filter((i) => i !== m.id) : [...ids, m.id]
-  if (active.value) active.value.stackMedia = stack.map((id) => photos.value.find((x) => x.id === id)
-    || active.value.stackMedia?.find((x) => x.id === id)).filter(Boolean)
-  patchRange({ stack })
 }
 function patchRange(patch) {
   if (active.value) {
@@ -366,7 +332,7 @@ async function tag(reel) {
   try {
     const item = await api.addItem(reel.id, {
       mediaId: m.id, start: r.start, length: r.length, focusX: r.focusX, focusY: r.focusY, zoom: r.zoom || 1,
-      ...(m.kind === 'video' ? { layout: r.layout || '', stack: r.stack || [] } : {}),
+      ...(m.kind === 'video' ? { layout: r.layout || '' } : {}),
     })
     items.value.push(item)
     showFlash(`Added to ${reel.name}`)
@@ -438,14 +404,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 <style scoped>
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
 .hint { font-size: 12px; margin: 8px 0 0; }
-.pickgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 4px; margin-top: 8px; max-height: 220px; overflow: auto; }
-.pick { position: relative; padding: 0; border: 2px solid transparent; border-radius: 6px; overflow: hidden; cursor: pointer; aspect-ratio: 3 / 4; background: none; }
-.pick.on { border-color: var(--sage); }
-.pick img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.pick .order {
-  position: absolute; top: 3px; left: 3px; min-width: 16px; height: 16px; border-radius: 999px; font-size: 11px; font-weight: 700;
-  line-height: 16px; background: var(--sage); color: var(--on-sage);
-}
 .count {
   font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px;
   background: var(--forest); color: var(--cream);

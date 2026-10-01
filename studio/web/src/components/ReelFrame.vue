@@ -1,5 +1,13 @@
 <template>
-  <div class="frame-stage" ref="stage" :style="{ height: `${box.h}px` }">
+  <div class="frame-stage" ref="stage" :style="{ height: `${box.h + stripH}px` }">
+   <div class="column">
+    <!-- the part on top of the whole reel, at the reel's time -->
+    <div v-if="top" class="topstrip" :style="{ width: `${box.w}px`, height: `${stripH}px` }">
+      <video
+        v-if="top.media.kind === 'video'" ref="topVideo" :src="api.media(top.media.folder, top.media.file)"
+        preload="auto" muted playsinline @loadedmetadata="syncTop"
+      ></video>
+    </div>
     <div class="box" :class="[fxClass, { stack: mode === 'stack' }]" :style="{ width: `${box.w}px`, height: `${box.h}px`, background: backdrop }">
       <img
         v-if="mode === 'fit' && fit === 'blur'" class="blurbg" alt=""
@@ -24,14 +32,10 @@
         ></video>
         <img v-else :src="api.thumb(media.folder, media.file, 0, 1080)" alt="" @load="onImg" />
       </div>
-      <!-- stack: the photos under the clip, one at a time -->
-      <template v-if="mode === 'stack'">
-        <img
-          v-if="stackPhoto" class="stackphoto" alt="" :style="[{ top: `${stackTop}%`, height: `${100 - stackTop}%` }, liftStyle]"
-          :src="api.thumb(stackPhoto.folder, stackPhoto.file, 0, 1080)"
-        />
-        <div v-else class="stackphoto empty" :style="{ top: `${stackTop}%`, height: `${100 - stackTop}%` }">Add photos to show under the clip</div>
-      </template>
+      <!-- on top of the reel: the rest of the reel plays underneath -->
+      <div v-if="mode === 'stack'" class="under" :style="{ top: `${stackTop}%`, height: `${100 - stackTop}%` }">
+        The reel's other parts play here, underneath
+      </div>
 
       <!-- the part of the frame the reel keeps -->
       <div
@@ -49,6 +53,7 @@
       </div>
       <Guides v-else-if="guides" />
     </div>
+   </div>
     <slot />
   </div>
 </template>
@@ -58,7 +63,7 @@ import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch
 import { api } from '../api'
 import { clamp } from '../time'
 
-const OUT = 9 / 16   // the reel's shape
+const REEL = 9 / 16   // the reel's shape
 const BRAND = { forest: '#344a34', sage: '#8aa37c', cream: '#f7f1e3' }
 
 const props = defineProps({
@@ -73,8 +78,11 @@ const props = defineProps({
   lighten: { type: Number, default: 0 },
   zoom: { type: Number, default: 1 },              // >1 = crop tighter than the full 9:16 window           // 0..1, as the engine's `lighten`          // { type, at }: a transition to play into this shot                                 // show only what the reel shows (while playing it)                                   // matches whether the reel keeps clip audio
   posterTime: { type: Number, default: 0 },
-  stackMedia: { type: Array, default: () => [] },   // with fit 'stack': photos shown under the clip
-  stackIndex: { type: Number, default: 0 },
+  out: { type: Number, default: REEL },             // the shape this clip fills (less than the reel under a top part)
+  top: { type: Object, default: null },            // { media, ratio }: a part playing across the top, ratio = its height / width
+  topT: { type: Number, default: 0 },              // where in that clip we are
+  topRate: { type: Number, default: 1 },
+  topPlaying: Boolean,
   bindVideo: { type: Function, default: () => {} },
 })
 const emit = defineEmits(['focus', 'play', 'pause', 'error', 'toggle', 'loaded'])
@@ -92,7 +100,7 @@ const natural = reactive({ w: 0, h: 0 })
 const aspect = computed(() => {
   const w = natural.w || props.media.width
   const hgt = natural.h || props.media.height
-  return w && hgt ? w / hgt : OUT
+  return w && hgt ? w / hgt : OUT.value
 })
 function onMeta(e) {
   natural.w = e.target.videoWidth
@@ -104,16 +112,30 @@ function onImg(e) {
   natural.h = e.target.naturalHeight
 }
 
+const OUT = computed(() => props.out)
 // fill crops the source to 9:16 (show the whole source with the kept window);
 // blur and pad fit the whole source inside a 9:16 frame; stack shows the
 // whole source across the top with photos underneath.
 const mode = computed(() => (props.fit === 'fill' ? 'crop' : props.fit === 'stack' ? 'stack' : 'fit'))
-const boxAspect = computed(() => (mode.value === 'crop' && !props.cropped ? aspect.value : OUT))
+const boxAspect = computed(() => (mode.value === 'crop' && !props.cropped ? aspect.value : OUT.value))
 
 // As the engine: the clip's height at full width, at most 60% of the frame.
-const stackTop = computed(() => Math.min((OUT / aspect.value) * 100, 60))
-const stackPhoto = computed(() =>
-  props.stackMedia[clamp(props.stackIndex, 0, props.stackMedia.length - 1)])
+const stackTop = computed(() => Math.min((REEL / aspect.value) * 100, 60))
+
+// The top part: kept at the reel's time, playing at the rate that fits it in.
+const topVideo = ref(null)
+const stripH = computed(() => (props.top ? Math.round(box.value.w * props.top.ratio) : 0))
+function syncTop() {
+  const v = topVideo.value
+  if (!v || v.readyState < 1) return
+  const rate = clamp(props.topRate, 0.0625, 16)
+  if (Math.abs(v.currentTime - props.topT) > 0.3 * Math.max(1, rate) || !props.topPlaying) v.currentTime = props.topT
+  if (props.topPlaying) {
+    v.playbackRate = rate
+    if (v.paused) v.play().catch(() => {})
+  } else if (!v.paused) v.pause()
+}
+watch(() => [props.topT, props.topPlaying, props.topRate], syncTop)
 
 const stage = ref(null)
 
@@ -167,7 +189,8 @@ onBeforeUnmount(() => {
 })
 
 const box = computed(() => {
-  const w = Math.min(width.value, cap.value * boxAspect.value)
+  const ratio = props.top ? props.top.ratio : 0
+  const w = Math.min(width.value, cap.value / (1 / boxAspect.value + ratio))
   return { w: Math.round(w), h: Math.round(w / boxAspect.value) }
 })
 
@@ -185,11 +208,11 @@ const mediaStyle = computed(() => {
   if (mode.value === 'stack') return { left: 0, right: 0, top: 0, height: `${stackTop.value}%` }
   // contained inside the 9:16 box
   const a = aspect.value
-  if (a > OUT) {
-    const hPct = (OUT / a) * 100
+  if (a > OUT.value) {
+    const hPct = (OUT.value / a) * 100
     return { left: 0, right: 0, top: `${(100 - hPct) / 2}%`, height: `${hPct}%` }
   }
-  const wPct = (a / OUT) * 100
+  const wPct = (a / OUT.value) * 100
   return { top: 0, bottom: 0, left: `${(100 - wPct) / 2}%`, width: `${wPct}%` }
 })
 
@@ -206,8 +229,8 @@ const win = computed(() => {
   const a = aspect.value
   let w = 100
   let h = 100
-  if (a > OUT) w = (OUT / a) * 100
-  else h = (a / OUT) * 100
+  if (a > OUT.value) w = (OUT.value / a) * 100
+  else h = (a / OUT.value) * 100
   w /= zoom.value
   h /= zoom.value
   return { w, h, left: (100 - w) * props.focusX, top: (100 - h) * props.focusY }
@@ -256,9 +279,9 @@ function move(e) {
   // window stays 9:16 on screen.
   const px = e.clientX - origin.rect.left
   const py = e.clientY - origin.rect.top
-  let nw = Math.max(Math.abs(px - origin.anchor.x), Math.abs(py - origin.anchor.y) * OUT)
+  let nw = Math.max(Math.abs(px - origin.anchor.x), Math.abs(py - origin.anchor.y) * OUT.value)
   nw = clamp(nw, origin.fullW / MAX_ZOOM, origin.fullW)
-  const nh = nw / OUT
+  const nh = nw / OUT.value
   const left = clamp(origin.what.includes('w') ? origin.anchor.x - nw : origin.anchor.x, 0, bw - nw)
   const top = clamp(origin.what.includes('n') ? origin.anchor.y - nh : origin.anchor.y, 0, bh - nh)
   emit('focus', {
@@ -288,11 +311,13 @@ const round = (v) => Math.round(v * 1000) / 1000
 .media video, .media img { width: 100%; height: 100%; display: block; object-fit: fill; }
 .media video { cursor: pointer; }
 .box.stack .media video, .box.stack .media img { object-fit: cover; }
-.stackphoto { position: absolute; left: 0; width: 100%; object-fit: cover; display: block; }
-.stackphoto.empty {
-  display: grid; place-items: center; font-size: 12px; text-align: center; padding: 12px;
-  color: var(--on-media); background: rgb(31 42 31 / 55%);
+.under {
+  position: absolute; left: 0; width: 100%; display: grid; place-items: center; font-size: 12px; text-align: center;
+  padding: 12px; color: var(--on-media); background: rgb(31 42 31 / 55%); border-top: 1px dashed rgb(247 241 227 / 40%);
 }
+.column { display: flex; flex-direction: column; }
+.topstrip { position: relative; overflow: hidden; background: #000; }
+.topstrip video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .blurbg { position: absolute; inset: -10%; width: 120%; height: 120%; object-fit: cover; filter: blur(18px) brightness(0.8); }
 .window {
   position: absolute; box-shadow: 0 0 0 9999px rgb(10 14 10 / 62%);

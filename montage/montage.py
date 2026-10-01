@@ -327,11 +327,6 @@ def build_plan(cfg, base_dir, beats):
         src["_is_image"] = path.suffix.lower() in IMAGE_EXTS
         if not src["_is_image"]:
             src["_duration"], src["_has_audio"] = probe(path)
-        stack = [(base_dir / q).expanduser() for q in src.get("stack") or []]
-        for q in stack:
-            if not q.exists():
-                sys.exit(f"File not found: {q}")
-        src["stack"] = stack
 
     # 1. Which cuts exist, in order.
     plan, warnings = [], []
@@ -345,7 +340,7 @@ def build_plan(cfg, base_dir, beats):
                                  "transition": src.get("transition"),
                                  "lighten": float(src.get("lighten", 0) or 0),
                                  "zoom": float(src.get("zoom", 1) or 1),
-                                 "fit": src.get("fit"), "stack": src.get("stack") or [],
+                                 "fit": src.get("fit"),
                                  "seconds": float(src.get("hold", default_hold)),
                                  "beats": int(src.get("hold_beats", beats_per_cut * 2))})
                 continue
@@ -365,7 +360,7 @@ def build_plan(cfg, base_dir, beats):
                          "transition": src.get("transition"),
                          "lighten": float(src.get("lighten", 0) or 0),
                          "zoom": float(src.get("zoom", 1) or 1),
-                         "fit": src.get("fit"), "stack": src.get("stack") or [],
+                         "fit": src.get("fit"),
                          "has_audio": src["_has_audio"],
                          "seconds": float(src.get("length", default_len)),
                          "beats": int(src.get("beats", beats_per_cut))})
@@ -444,38 +439,22 @@ def video_codec(cfg):
 
 
 def stack_heights(cfg, aspect):
-    """Stack layout: the top shows the whole source at full width (at most
-    60% of the frame); the photos underneath get the rest."""
+    """With `top:`, the top clip shows whole at full width (at most 60% of
+    the frame); every cut plays in the rest, underneath."""
     w, h = cfg["width"], cfg["height"]
     top = min(round(w / aspect / 2) * 2, round(h * 0.6 / 2) * 2)
     return top, h - top
 
 
-def fit_filter(cfg, src_label, out_label, focus=(0.5, 0.5), zoom=1.0, fit=None,
-               stack=(), size=None):
+def fit_filter(cfg, src_label, out_label, focus=(0.5, 0.5), zoom=1.0, fit=None):
     """Frame a source to the output size. `focus` picks which part of a
     too-wide or too-tall source the crop keeps: 0 = left/top, 1 = right/bottom.
     `zoom` > 1 (fill only) crops tighter: the source is scaled up first.
-    `fit` overrides the config's for one cut. With fit "stack", `stack` is the
-    input labels of the photos shown in turn under the source, and `size` is
-    (the source's aspect, frames per photo)."""
+    `fit` overrides the config's for one cut."""
     w, h = cfg["width"], cfg["height"]
     fx, fy = (min(max(float(v), 0.0), 1.0) for v in focus)
     crop = f"crop={w}:{h}:(iw-{w})*{fx:.4f}:(ih-{h})*{fy:.4f}"
     fit = fit or cfg.get("fit", "fill")
-    if fit == "stack":
-        aspect, frames = size
-        top, bottom = stack_heights(cfg, aspect)
-        parts = [f"[{src_label}]scale={w}:{top}:force_original_aspect_ratio=increase,"
-                 f"crop={w}:{top},setsar=1[stop]"]
-        for i, (label, n) in enumerate(zip(stack, frames)):
-            parts.append(f"[{label}]scale={w}:{bottom}:force_original_aspect_ratio=increase,"
-                         f"crop={w}:{bottom},setsar=1,fps={cfg['fps']},"
-                         f"trim=end_frame={n},setpts=PTS-STARTPTS[sp{i}]")
-        joined = "".join(f"[sp{i}]" for i in range(len(stack)))
-        parts.append(f"{joined}concat=n={len(stack)}:v=1:a=0[sbot]")
-        parts.append(f"[stop]fps={cfg['fps']}[stopf];[stopf][sbot]vstack=shortest=0[{out_label}]")
-        return ";".join(parts)
     if fit == "fill":
         z = min(max(float(zoom or 1), 1.0), 3.0)
         zw, zh = round(w * z / 2) * 2, round(h * z / 2) * 2
@@ -507,26 +486,12 @@ def render_segment(seg, idx, cfg, workdir, keep_audio):
     else:
         cmd += ["-ss", f"{seg['start']:.3f}", "-i", str(seg["path"])]
 
-    # Stack: the photos underneath take equal turns across the cut.
-    fit, stack, size = seg.get("fit"), [], None
-    if fit == "stack":
-        photos = seg.get("stack") or []
-        if not photos or seg["kind"] == "image":   # stacking is for clips
-            fit = "blur"
-        else:
-            cuts = [round(n_frames * k / len(photos)) for k in range(len(photos) + 1)]
-            frames = [b - a for a, b in zip(cuts, cuts[1:])]
-            for i, photo in enumerate(photos):
-                cmd += ["-loop", "1", "-t", f"{frames[i] / fps + 0.5:.3f}", "-i", str(photo)]
-                stack.append(f"{i + 1}:v")
-            size = (frame_aspect(seg["path"]), frames)
-
     use_source_audio = keep_audio and seg["kind"] == "video" and seg["has_audio"]
     if not use_source_audio:
         cmd += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
-    a_in = "0:a:0" if use_source_audio else f"{1 + len(stack)}:a"
+    a_in = "0:a:0" if use_source_audio else "1:a"
 
-    framing = (seg.get("focus", (0.5, 0.5)), seg.get("zoom", 1), fit, stack, size)
+    framing = (seg.get("focus", (0.5, 0.5)), seg.get("zoom", 1), seg.get("fit"))
     lift = min(max(seg.get("lighten", 0), 0.0), 1.0)
     if lift:
         # Lift shadows and midtones (gamma) rather than flat brightness, so
@@ -612,6 +577,46 @@ def assemble(segs, plan, cfg, workdir):
     return out
 
 
+def load_top(cfg, base_dir):
+    """`top:` a clip shown whole across the top for the entire piece, sped up
+    or slowed down to last exactly as long as the cuts playing underneath.
+    Narrows cfg's height to the space underneath; returns the top, or None."""
+    top = cfg.get("top")
+    if not top:
+        return None
+    path = (base_dir / top["file"]).expanduser()
+    if not path.exists():
+        sys.exit(f"File not found: {path}")
+    duration, _ = probe(path)
+    start = parse_time(top.get("start", 0))
+    length = parse_time(top.get("length")) or duration - start
+    length = max(0.2, min(length, duration - start))
+    top_h, bottom_h = stack_heights(cfg, frame_aspect(path))
+    out = {"path": path, "start": start, "length": length, "height": top_h,
+           "lighten": float(top.get("lighten", 0) or 0), "full_height": cfg["height"]}
+    cfg["height"] = bottom_h
+    return out
+
+
+def compose_top(top, assembled, cfg, total, workdir):
+    """Put the top clip, sped to fit, above the assembled cuts."""
+    w, fps = cfg["width"], cfg["fps"]
+    out = workdir / "stacked.mkv"
+    lift = min(max(top["lighten"], 0.0), 1.0)
+    eq = (f",eq=gamma={1 + LIGHTEN_GAMMA * lift:.3f}:saturation={1 + 0.08 * lift:.3f}" if lift else "")
+    graph = (f"[0:v]setpts=(PTS-STARTPTS)*{total / top['length']:.6f},fps={fps},"
+             f"scale={w}:{top['height']}:force_original_aspect_ratio=increase,"
+             f"crop={w}:{top['height']},setsar=1{eq},format=yuv420p,"
+             f"trim=end_frame={round(total * fps)},setpts=PTS-STARTPTS[top];"
+             f"[1:v]setsar=1,format=yuv420p[bot];[top][bot]vstack=shortest=1[v]")
+    run(["ffmpeg", "-y", "-v", "error",
+         "-ss", f"{top['start']:.3f}", "-t", f"{top['length']:.3f}", "-i", str(top["path"]),
+         "-i", str(assembled), "-filter_complex", graph, "-map", "[v]", "-map", "1:a",
+         *video_codec(cfg), "-r", str(fps), "-c:a", "copy", str(out)])
+    cfg["height"] = top["full_height"]
+    return out
+
+
 def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output):
     # music_in_video: false times the cuts to the song but leaves it out of the
     # file, for adding the same song in Instagram (which licenses it).
@@ -669,6 +674,7 @@ def main():
     for note in expand_folders(cfg, base_dir):
         print(f"  {note}")
     beats, music_start = load_beats(cfg, base_dir)
+    top = load_top(cfg, base_dir)
     plan, warnings = build_plan(cfg, base_dir, beats)
     if not plan:
         sys.exit("Nothing to cut. Check your start/step/times against clip lengths.")
@@ -679,10 +685,7 @@ def main():
     for seg in plan:
         where = "hold" if seg["kind"] == "image" else f"from {fmt(seg['start'])}"
         layout = ""
-        if seg.get("fit") == "stack" and seg.get("stack"):
-            n = len(seg["stack"])
-            layout = f"  [stack, {n} photo{'s' if n > 1 else ''} below]"
-        elif seg.get("fit") and seg["fit"] != "stack":
+        if seg.get("fit"):
             layout = f"  [{seg['fit']}]"
         print(f"  {fmt(t):>7}  r{seg['round']}  {seg['label']:<16} {where:<12} {seg['length']:.2f}s{layout}")
         if seg["t_after"]:
@@ -690,6 +693,10 @@ def main():
         elif seg["label_after"]:
             print(f"  {'':>7}      ~ {seg['label_after']}")
         t += seg["length"]
+    if top:
+        print(f"\n  on top: {top['path'].name} {fmt(top['start'])} -> "
+              f"{fmt(top['start'] + top['length'])} ({top['length']:.1f}s), "
+              f"played over {total:.1f}s ({top['length'] / total:.2f}x)")
     for w in warnings:
         print(f"  ! {w}")
     print()
@@ -709,6 +716,9 @@ def main():
             segs.append(render_segment(seg, i, cfg, workdir, keep_audio))
         print("  joining cuts...                         ", end="\r")
         assembled = assemble(segs, plan, cfg, workdir)
+        if top:
+            print("  stacking under the top clip...          ", end="\r")
+            assembled = compose_top(top, assembled, cfg, total, workdir)
         print("  mixing sound...                         ", end="\r")
         finish(assembled, cfg, base_dir, music_start, total, keep_audio, output)
 
