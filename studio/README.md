@@ -91,7 +91,8 @@ caption and buttons will cover the picture. Files stored sideways with a
 rotation flag (common from phones) are handled.
 
 **Layout per part** (for landscape footage like mural timelapses): each part
-can override the reel's framing. *Fill* crops to 9:16 as above; *Blur* shows
+can override the reel's framing, chosen under *Layout* on the shoot page
+(before adding the part) or in the reel's part editor. *Fill* crops to 9:16 as above; *Blur* shows
 the whole frame with a blurred copy filling the top and bottom; *Stack* puts
 the whole clip across the top at full width and photos underneath (glasses
 photos fit the space well). Pick the photos with *+ Add photos* (from the

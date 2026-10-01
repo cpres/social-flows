@@ -208,7 +208,7 @@ def get_folder(name: str):
     with lib.connect() as db:
         media = [media_dict(r) for r in db.execute(
             "SELECT * FROM media WHERE folder = ? AND missing = 0 ORDER BY captured_at", (name,))]
-        items = [item_dict(r) for r in db.execute("""
+        items = [with_stack_media(db, item_dict(r)) for r in db.execute("""
             SELECT i.id AS item_id, i.* FROM reel_items i JOIN media m ON m.id = i.media_id
             WHERE m.folder = ? ORDER BY i.start""", (name,))]
         reels = reel_summaries(db)
