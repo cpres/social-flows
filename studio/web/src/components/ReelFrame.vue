@@ -1,6 +1,6 @@
 <template>
   <div class="frame-stage" ref="stage" :style="{ height: `${box.h}px` }">
-    <div class="box" :class="fxClass" :style="{ width: `${box.w}px`, height: `${box.h}px`, background: backdrop }">
+    <div class="box" :class="[fxClass, { stack: mode === 'stack' }]" :style="{ width: `${box.w}px`, height: `${box.h}px`, background: backdrop }">
       <img
         v-if="mode === 'fit' && fit === 'blur'" class="blurbg" alt=""
         :src="api.thumb(media.folder, media.file, posterTime, 320)"
@@ -24,6 +24,14 @@
         ></video>
         <img v-else :src="api.thumb(media.folder, media.file, 0, 1080)" alt="" @load="onImg" />
       </div>
+      <!-- stack: the photos under the clip, one at a time -->
+      <template v-if="mode === 'stack'">
+        <img
+          v-if="stackPhoto" class="stackphoto" alt="" :style="[{ top: `${stackTop}%`, height: `${100 - stackTop}%` }, liftStyle]"
+          :src="api.thumb(stackPhoto.folder, stackPhoto.file, 0, 1080)"
+        />
+        <div v-else class="stackphoto empty" :style="{ top: `${stackTop}%`, height: `${100 - stackTop}%` }">Add photos to show under the clip</div>
+      </template>
 
       <!-- the part of the frame the reel keeps -->
       <div
@@ -65,6 +73,8 @@ const props = defineProps({
   lighten: { type: Number, default: 0 },
   zoom: { type: Number, default: 1 },              // >1 = crop tighter than the full 9:16 window           // 0..1, as the engine's `lighten`          // { type, at }: a transition to play into this shot                                 // show only what the reel shows (while playing it)                                   // matches whether the reel keeps clip audio
   posterTime: { type: Number, default: 0 },
+  stackMedia: { type: Array, default: () => [] },   // with fit 'stack': photos shown under the clip
+  stackIndex: { type: Number, default: 0 },
   bindVideo: { type: Function, default: () => {} },
 })
 const emit = defineEmits(['focus', 'play', 'pause', 'error', 'toggle', 'loaded'])
@@ -95,9 +105,15 @@ function onImg(e) {
 }
 
 // fill crops the source to 9:16 (show the whole source with the kept window);
-// blur and pad fit the whole source inside a 9:16 frame.
-const mode = computed(() => (props.fit === 'fill' ? 'crop' : 'fit'))
+// blur and pad fit the whole source inside a 9:16 frame; stack shows the
+// whole source across the top with photos underneath.
+const mode = computed(() => (props.fit === 'fill' ? 'crop' : props.fit === 'stack' ? 'stack' : 'fit'))
 const boxAspect = computed(() => (mode.value === 'crop' && !props.cropped ? aspect.value : OUT))
+
+// As the engine: the clip's height at full width, at most 60% of the frame.
+const stackTop = computed(() => Math.min((OUT / aspect.value) * 100, 60))
+const stackPhoto = computed(() =>
+  props.stackMedia[clamp(props.stackIndex, 0, props.stackMedia.length - 1)])
 
 const stage = ref(null)
 
@@ -166,6 +182,7 @@ const mediaStyle = computed(() => {
     }
   }
   if (mode.value === 'crop') return { inset: 0 }
+  if (mode.value === 'stack') return { left: 0, right: 0, top: 0, height: `${stackTop.value}%` }
   // contained inside the 9:16 box
   const a = aspect.value
   if (a > OUT) {
@@ -270,6 +287,12 @@ const round = (v) => Math.round(v * 1000) / 1000
 .media { position: absolute; }
 .media video, .media img { width: 100%; height: 100%; display: block; object-fit: fill; }
 .media video { cursor: pointer; }
+.box.stack .media video, .box.stack .media img { object-fit: cover; }
+.stackphoto { position: absolute; left: 0; width: 100%; object-fit: cover; display: block; }
+.stackphoto.empty {
+  display: grid; place-items: center; font-size: 12px; text-align: center; padding: 12px;
+  color: var(--on-media); background: rgb(31 42 31 / 55%);
+}
 .blurbg { position: absolute; inset: -10%; width: 120%; height: 120%; object-fit: cover; filter: blur(18px) brightness(0.8); }
 .window {
   position: absolute; box-shadow: 0 0 0 9999px rgb(10 14 10 / 62%);

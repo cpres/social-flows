@@ -91,6 +91,24 @@ def probe(path):
     return duration, has_audio
 
 
+def frame_aspect(path):
+    """Width / height as displayed (honours a rotation flag), or 16:9."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=width,height:stream_tags=rotate:stream_side_data=rotation",
+             "-of", "json", str(path)], capture_output=True, text=True, timeout=30).stdout
+        st = json.loads(out)["streams"][0]
+        w, h = int(st["width"]), int(st["height"])
+        rot = st.get("tags", {}).get("rotate") or next(
+            (d.get("rotation") for d in st.get("side_data_list", []) if "rotation" in d), 0)
+        if abs(int(float(rot))) % 180 == 90:
+            w, h = h, w
+        return w / h
+    except Exception:
+        return 16 / 9
+
+
 def run(cmd):
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -309,6 +327,11 @@ def build_plan(cfg, base_dir, beats):
         src["_is_image"] = path.suffix.lower() in IMAGE_EXTS
         if not src["_is_image"]:
             src["_duration"], src["_has_audio"] = probe(path)
+        stack = [(base_dir / q).expanduser() for q in src.get("stack") or []]
+        for q in stack:
+            if not q.exists():
+                sys.exit(f"File not found: {q}")
+        src["stack"] = stack
 
     # 1. Which cuts exist, in order.
     plan, warnings = [], []
@@ -322,6 +345,7 @@ def build_plan(cfg, base_dir, beats):
                                  "transition": src.get("transition"),
                                  "lighten": float(src.get("lighten", 0) or 0),
                                  "zoom": float(src.get("zoom", 1) or 1),
+                                 "fit": src.get("fit"), "stack": src.get("stack") or [],
                                  "seconds": float(src.get("hold", default_hold)),
                                  "beats": int(src.get("hold_beats", beats_per_cut * 2))})
                 continue
@@ -341,6 +365,7 @@ def build_plan(cfg, base_dir, beats):
                          "transition": src.get("transition"),
                          "lighten": float(src.get("lighten", 0) or 0),
                          "zoom": float(src.get("zoom", 1) or 1),
+                         "fit": src.get("fit"), "stack": src.get("stack") or [],
                          "has_audio": src["_has_audio"],
                          "seconds": float(src.get("length", default_len)),
                          "beats": int(src.get("beats", beats_per_cut))})
@@ -418,14 +443,39 @@ def video_codec(cfg):
             "-crf", str(cfg.get("crf", 18)), "-profile:v", "high", *pix]
 
 
-def fit_filter(cfg, src_label, out_label, focus=(0.5, 0.5), zoom=1.0):
+def stack_heights(cfg, aspect):
+    """Stack layout: the top shows the whole source at full width (at most
+    60% of the frame); the photos underneath get the rest."""
+    w, h = cfg["width"], cfg["height"]
+    top = min(round(w / aspect / 2) * 2, round(h * 0.6 / 2) * 2)
+    return top, h - top
+
+
+def fit_filter(cfg, src_label, out_label, focus=(0.5, 0.5), zoom=1.0, fit=None,
+               stack=(), size=None):
     """Frame a source to the output size. `focus` picks which part of a
     too-wide or too-tall source the crop keeps: 0 = left/top, 1 = right/bottom.
-    `zoom` > 1 (fill only) crops tighter: the source is scaled up first."""
+    `zoom` > 1 (fill only) crops tighter: the source is scaled up first.
+    `fit` overrides the config's for one cut. With fit "stack", `stack` is the
+    input labels of the photos shown in turn under the source, and `size` is
+    (the source's aspect, frames per photo)."""
     w, h = cfg["width"], cfg["height"]
     fx, fy = (min(max(float(v), 0.0), 1.0) for v in focus)
     crop = f"crop={w}:{h}:(iw-{w})*{fx:.4f}:(ih-{h})*{fy:.4f}"
-    fit = cfg.get("fit", "fill")
+    fit = fit or cfg.get("fit", "fill")
+    if fit == "stack":
+        aspect, frames = size
+        top, bottom = stack_heights(cfg, aspect)
+        parts = [f"[{src_label}]scale={w}:{top}:force_original_aspect_ratio=increase,"
+                 f"crop={w}:{top},setsar=1[stop]"]
+        for i, (label, n) in enumerate(zip(stack, frames)):
+            parts.append(f"[{label}]scale={w}:{bottom}:force_original_aspect_ratio=increase,"
+                         f"crop={w}:{bottom},setsar=1,fps={cfg['fps']},"
+                         f"trim=end_frame={n},setpts=PTS-STARTPTS[sp{i}]")
+        joined = "".join(f"[sp{i}]" for i in range(len(stack)))
+        parts.append(f"{joined}concat=n={len(stack)}:v=1:a=0[sbot]")
+        parts.append(f"[stop]fps={cfg['fps']}[stopf];[stopf][sbot]vstack=shortest=0[{out_label}]")
+        return ";".join(parts)
     if fit == "fill":
         z = min(max(float(zoom or 1), 1.0), 3.0)
         zw, zh = round(w * z / 2) * 2, round(h * z / 2) * 2
@@ -457,19 +507,34 @@ def render_segment(seg, idx, cfg, workdir, keep_audio):
     else:
         cmd += ["-ss", f"{seg['start']:.3f}", "-i", str(seg["path"])]
 
+    # Stack: the photos underneath take equal turns across the cut.
+    fit, stack, size = seg.get("fit"), [], None
+    if fit == "stack":
+        photos = seg.get("stack") or []
+        if not photos or seg["kind"] == "image":   # stacking is for clips
+            fit = "blur"
+        else:
+            cuts = [round(n_frames * k / len(photos)) for k in range(len(photos) + 1)]
+            frames = [b - a for a, b in zip(cuts, cuts[1:])]
+            for i, photo in enumerate(photos):
+                cmd += ["-loop", "1", "-t", f"{frames[i] / fps + 0.5:.3f}", "-i", str(photo)]
+                stack.append(f"{i + 1}:v")
+            size = (frame_aspect(seg["path"]), frames)
+
     use_source_audio = keep_audio and seg["kind"] == "video" and seg["has_audio"]
     if not use_source_audio:
         cmd += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
-    a_in = "0:a:0" if use_source_audio else "1:a"
+    a_in = "0:a:0" if use_source_audio else f"{1 + len(stack)}:a"
 
+    framing = (seg.get("focus", (0.5, 0.5)), seg.get("zoom", 1), fit, stack, size)
     lift = min(max(seg.get("lighten", 0), 0.0), 1.0)
     if lift:
         # Lift shadows and midtones (gamma) rather than flat brightness, so
         # shade opens up without blowing out the sky.
-        graph = (fit_filter(cfg, "0:v", "fit0", seg.get("focus", (0.5, 0.5)), seg.get("zoom", 1)) +
+        graph = (fit_filter(cfg, "0:v", "fit0", *framing) +
                  f";[fit0]eq=gamma={1 + LIGHTEN_GAMMA * lift:.3f}:saturation={1 + 0.08 * lift:.3f}[fit];")
     else:
-        graph = fit_filter(cfg, "0:v", "fit", seg.get("focus", (0.5, 0.5)), seg.get("zoom", 1)) + ";"
+        graph = fit_filter(cfg, "0:v", "fit", *framing) + ";"
     # Zoom punch-in: start PUNCH_ZOOM larger and ease back to normal.
     punch_frames = round(seg.get("punch_in", 0) * fps)
     punch = (f"+{PUNCH_ZOOM}*pow(max(0,1-on/{punch_frames}),2)" if punch_frames else "")
@@ -613,7 +678,13 @@ def main():
     t = 0.0
     for seg in plan:
         where = "hold" if seg["kind"] == "image" else f"from {fmt(seg['start'])}"
-        print(f"  {fmt(t):>7}  r{seg['round']}  {seg['label']:<16} {where:<12} {seg['length']:.2f}s")
+        layout = ""
+        if seg.get("fit") == "stack" and seg.get("stack"):
+            n = len(seg["stack"])
+            layout = f"  [stack, {n} photo{'s' if n > 1 else ''} below]"
+        elif seg.get("fit") and seg["fit"] != "stack":
+            layout = f"  [{seg['fit']}]"
+        print(f"  {fmt(t):>7}  r{seg['round']}  {seg['label']:<16} {where:<12} {seg['length']:.2f}s{layout}")
         if seg["t_after"]:
             print(f"  {'':>7}      ~ {seg['label_after']} {seg['d_after']:.2f}s")
         elif seg["label_after"]:

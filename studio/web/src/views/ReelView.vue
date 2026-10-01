@@ -194,7 +194,7 @@
             :sub="folderTitle(p.media.folder)"
             :chip="(p.media.kind === 'video'
               ? `${fmtTime(p.start)} → ${fmtTime(p.start + len(p))}  ${len(p).toFixed(1)}s`
-              : `hold ${len(p).toFixed(1)}s`) + (synced ? `  ${beatsOf(p)}♩` : '') + (p.lighten ? '  ☀' : '')"
+              : `hold ${len(p).toFixed(1)}s`) + (synced ? `  ${beatsOf(p)}♩` : '') + (p.lighten ? '  ☀' : '') + badge(p)"
             @select="select(i)"
           >
             <button
@@ -219,7 +219,8 @@
             </p>
           </div>
           <ReelFrame
-            v-else :key="current.mediaId" :media="current.media" :fit="settings.fit || 'fill'" :guides="guides"
+            v-else :key="current.mediaId" :media="current.media" :fit="layoutOf(current)" :guides="guides"
+            :stack-media="current.stackMedia || []" :stack-index="stackIndex"
             :muted="!settings.originalAudio" :cropped="reelOn" :effect="effect" :lighten="current.lighten"
             :focus-x="current.focusX" :focus-y="current.focusY" :zoom="current.zoom || 1" :poster-time="current.start"
             :bind-video="(el) => (player.video.value = el)"
@@ -283,6 +284,41 @@
                 @click="setLighten(current, l.v)"
               >{{ l.label }}</button>
               <button class="btn small" @click="lightenAll(current.lighten)" :title="`Set every part to ${lightenLabel(current.lighten)}`">Use on every part</button>
+            </div>
+          </div>
+          <div class="tpick">
+            <span class="muted">Layout</span>
+            <div>
+              <button
+                v-for="l in layoutChoices" :key="l.v" class="btn small" :class="{ active: (current.layout || '') === l.v }"
+                @click="setLayout(current, l.v)" :title="l.hint"
+              >{{ l.label }}</button>
+            </div>
+          </div>
+          <div class="tpick stackpick" v-if="current.layout === 'stack'">
+            <span class="muted">Photos underneath{{ (current.stackMedia || []).length > 1 ? ', in turn' : '' }}</span>
+            <div class="stackrow">
+              <span v-for="(m, k) in current.stackMedia || []" :key="m.id" class="stackchip" :class="{ on: k === stackIndex }">
+                <img :src="api.thumb(m.folder, m.file, 0, 160)" alt="" />
+                <span class="stackbtns">
+                  <button v-if="k > 0" title="Earlier" @click="moveStack(current, k, -1)">‹</button>
+                  <button title="Remove" @click="toggleStack(current, m)">×</button>
+                  <button v-if="k < current.stackMedia.length - 1" title="Later" @click="moveStack(current, k, 1)">›</button>
+                </span>
+              </span>
+              <button class="btn small" @click="openPicker">{{ picker.open ? 'Done' : '+ Add photos' }}</button>
+            </div>
+            <div v-if="picker.open" class="picker">
+              <select v-model="picker.folder" @change="loadPicker">
+                <option v-for="f in picker.folders" :key="f" :value="f">{{ folderTitle(f) }}</option>
+              </select>
+              <p v-if="!picker.photos.length" class="muted">No photos in this shoot.</p>
+              <div class="pickgrid">
+                <button
+                  v-for="m in picker.photos" :key="m.id" class="pick"
+                  :class="{ on: (current.stack || []).includes(m.id) }" @click="toggleStack(current, m)"
+                ><img :src="api.thumb(m.folder, m.file, 0, 160)" alt="" loading="lazy" /></button>
+              </div>
             </div>
           </div>
           <div class="tpick" v-if="hasNext(current)">
@@ -510,7 +546,8 @@ async function remove(p) {
 // A second part of the same clip, starting just after this one.
 async function duplicate(p) {
   const r = fitRange(p.start + len(p), p.length, p.media.duration)
-  const item = await api.addItem(id, { mediaId: p.mediaId, ...r, focusX: p.focusX, focusY: p.focusY, zoom: p.zoom, lighten: p.lighten })
+  const item = await api.addItem(id, { mediaId: p.mediaId, ...r, focusX: p.focusX, focusY: p.focusY, zoom: p.zoom,
+                                       lighten: p.lighten, layout: p.layout, stack: p.stack })
   const i = items.value.indexOf(p) + 1
   items.value.splice(i, 0, { ...item, media: p.media })
   await saveOrder()
@@ -769,6 +806,75 @@ function lightenAll(v) {
   for (const p of items.value) if (p.lighten !== v) setLighten(p, v)
 }
 
+// ---------------------------------------------------------------- layout
+
+// Per part: the reel's framing, or its own. Stack puts the whole clip across
+// the top (a landscape timelapse) with photos underneath, taking turns.
+const LAYOUTS = [
+  { v: '', label: 'Reel default', hint: 'Use the framing set in Settings' },
+  { v: 'fill', label: 'Fill', hint: 'Crop to 9:16; drag the window to reframe' },
+  { v: 'blur', label: 'Blur', hint: 'The whole frame, with a blurred copy above and below' },
+  { v: 'stack', label: 'Stack', hint: 'The whole frame on top, photos underneath' },
+]
+const layoutChoices = computed(() =>
+  (current.value?.media.kind === 'video' ? LAYOUTS : LAYOUTS.filter((l) => l.v !== 'stack')))
+const layoutOf = (p) => (p.layout && !(p.layout === 'stack' && p.media.kind !== 'video')
+  ? p.layout : settings.fit || 'fill')
+const badge = (p) => (p.layout === 'stack' ? '  ▤' : p.layout === 'blur' ? '  ◫' : '')
+function setLayout(p, v) {
+  p.layout = v
+  saver.queue(p.id, { layout: v })
+  if (v === 'stack' && !(p.stack || []).length) openPicker()
+}
+
+// Which stacked photo shows: they share the part equally, as in the render.
+const stackIndex = computed(() => {
+  const p = current.value
+  const n = p?.stackMedia?.length || 0
+  if (n < 2) return 0
+  const t = p.media.kind === 'video' ? (player.playhead.value - p.start) / len(p) : 0
+  return Math.floor(Math.min(Math.max(t, 0), 0.999) * n)
+})
+function saveStack(p, media) {
+  p.stackMedia = media
+  p.stack = media.map((m) => m.id)
+  saver.queue(p.id, { stack: p.stack })
+}
+function toggleStack(p, m) {
+  const list = p.stackMedia || []
+  saveStack(p, list.some((x) => x.id === m.id) ? list.filter((x) => x.id !== m.id) : [...list, m])
+}
+function moveStack(p, k, dir) {
+  const list = [...p.stackMedia]
+  ;[list[k], list[k + dir]] = [list[k + dir], list[k]]
+  saveStack(p, list)
+}
+
+// Photos to stack, from this clip's shoot by default.
+const picker = reactive({ open: false, folder: '', folders: [], photos: [] })
+async function openPicker() {
+  if (picker.open) { picker.open = false; return }
+  picker.open = true
+  picker.folder = current.value.media.folder
+  picker.folders = [picker.folder]
+  loadPicker()
+  try {
+    const home = await api.home()
+    picker.folders = home.folders.filter((f) => f.photoCount).map((f) => f.name)
+    if (!picker.folders.includes(picker.folder)) picker.folders.unshift(picker.folder)
+  } catch { /* keep this shoot only */ }
+}
+async function loadPicker() {
+  const name = picker.folder
+  try {
+    const data = await api.folder(name)
+    if (picker.folder === name) picker.photos = data.media.filter((m) => m.kind === 'photo')
+  } catch {
+    picker.photos = []
+  }
+}
+watch(() => current.value?.id, () => { picker.open = false })
+
 // ---------------------------------------------------------------- play the reel
 
 // Plays every kept part in order, cropped to the reel, so you can see how the
@@ -1018,6 +1124,22 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .tpill:not(.t-cut) { border-style: solid; border-color: var(--sage); background: var(--sage-soft); color: var(--forest); }
 .tpick { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
 .tpick div { display: flex; gap: 4px; flex-wrap: wrap; }
+.stackpick { flex-basis: 100%; }
+.stackrow { align-items: center; }
+.stackchip { position: relative; width: 54px; height: 72px; border-radius: 6px; overflow: hidden; outline: 2px solid transparent; }
+.stackchip.on { outline-color: var(--sage); }
+.stackchip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tpick .stackbtns { position: absolute; left: 0; right: 0; bottom: 0; display: flex; justify-content: center; gap: 2px; padding: 2px; }
+.stackbtns button {
+  border: 0; border-radius: 4px; width: 16px; height: 16px; line-height: 14px; padding: 0; font-size: 12px; cursor: pointer;
+  background: rgb(31 42 31 / 75%); color: var(--on-media);
+}
+.picker { max-width: 520px; display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: var(--radius); background: var(--stage); }
+.picker select { align-self: flex-start; }
+.tpick .pickgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 4px; max-height: 220px; overflow: auto; }
+.pick { padding: 0; border: 2px solid transparent; border-radius: 6px; overflow: hidden; cursor: pointer; aspect-ratio: 3 / 4; background: none; }
+.pick.on { border-color: var(--sage); }
+.pick img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .seg {
   flex-basis: 0; min-width: 6px; border: 0; border-radius: 4px; cursor: pointer; padding: 0;
   background: var(--sage); color: var(--on-sage); font-size: 10px; font-weight: 700; overflow: hidden;

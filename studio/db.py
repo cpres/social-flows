@@ -61,7 +61,9 @@ CREATE TABLE IF NOT EXISTS reel_items (
     transition TEXT NOT NULL DEFAULT '',    -- into the next part; '' = reel default
     lighten  REAL NOT NULL DEFAULT 0,       -- 0..1, lifts shadows and midtones
     beats    INTEGER NOT NULL DEFAULT 0,    -- with beat sync: beats long; 0 = reel default
-    zoom     REAL NOT NULL DEFAULT 1        -- >1 crops tighter than the full 9:16 window
+    zoom     REAL NOT NULL DEFAULT 1,       -- >1 crops tighter than the full 9:16 window
+    layout   TEXT NOT NULL DEFAULT '',      -- fill | blur | stack; '' = reel's framing
+    stack    TEXT NOT NULL DEFAULT '[]'     -- with stack: JSON list of photo ids shown underneath
 );
 CREATE INDEX IF NOT EXISTS items_reel ON reel_items(reel_id, position);
 CREATE INDEX IF NOT EXISTS items_media ON reel_items(media_id);
@@ -209,7 +211,9 @@ def migrate(db):
                              ("reel_items", "transition", "TEXT NOT NULL DEFAULT ''"),
                              ("reel_items", "lighten", "REAL NOT NULL DEFAULT 0"),
                              ("reel_items", "beats", "INTEGER NOT NULL DEFAULT 0"),
-                             ("reel_items", "zoom", "REAL NOT NULL DEFAULT 1")]:
+                             ("reel_items", "zoom", "REAL NOT NULL DEFAULT 1"),
+                             ("reel_items", "layout", "TEXT NOT NULL DEFAULT ''"),
+                             ("reel_items", "stack", "TEXT NOT NULL DEFAULT '[]'")]:
         if col not in have[table]:
             db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
     # v1: photo sizes now honour EXIF rotation; re-measure photos once.
