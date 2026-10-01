@@ -36,7 +36,8 @@
       <section class="editor" v-if="current">
         <div class="preview-col">
           <ReelFrame
-            :key="current.id" :media="current" fit="fill" :guides="guides" muted
+            :key="current.id" :media="current" :fit="current.kind === 'video' && range.layout ? range.layout : 'fill'"
+            :guides="guides" muted
             :focus-x="range.focusX ?? 0.5" :focus-y="range.focusY ?? 0.5" :zoom="range.zoom || 1" :poster-time="range.start"
             :bind-video="(el) => (player.video.value = el)"
             @loaded="onLoaded" @play="player.events.onPlay" @pause="player.events.onPause"
@@ -78,6 +79,17 @@
           :kind="current.kind" :start="range.start" :length="range.length"
           :duration="current.duration" @update="setRange"
         />
+
+        <div class="panel" v-if="current.kind === 'video'">
+          <h3>Layout</h3>
+          <div class="chips">
+            <button
+              v-for="l in LAYOUTS" :key="l.v" class="btn small" :class="{ active: (range.layout || 'fill') === l.v }"
+              @click="setLayout(l.v)" :title="l.hint"
+            >{{ l.label }}</button>
+          </div>
+          <p class="muted hint">{{ LAYOUTS.find((l) => l.v === (range.layout || 'fill')).hint }}</p>
+        </div>
 
         <div class="panel" v-if="!active">
           <h3>{{ current.kind === 'video' ? 'Add this selection to a reel' : 'Use this photo in' }}</h3>
@@ -172,9 +184,9 @@ const DEFAULT_LENGTH = 2   // seconds, for a new selection on a video
 // A fresh selection per clip, where the engine would cut by default.
 function initDraft(m) {
   const length = m.kind === 'video' ? Math.min(DEFAULT_LENGTH, m.duration || DEFAULT_LENGTH) : 1.6
-  drafts[m.id] = { start: m.kind === 'video' ? defaultStart(m.duration, length) : 0, length, focusX: 0.5, focusY: 0.5, zoom: 1 }
+  drafts[m.id] = { start: m.kind === 'video' ? defaultStart(m.duration, length) : 0, length, focusX: 0.5, focusY: 0.5, zoom: 1, layout: '' }
 }
-const draftOf = (m) => (m && drafts[m.id]) || { start: 0, length: DEFAULT_LENGTH, focusX: 0.5, focusY: 0.5, zoom: 1 }
+const draftOf = (m) => (m && drafts[m.id]) || { start: 0, length: DEFAULT_LENGTH, focusX: 0.5, focusY: 0.5, zoom: 1, layout: '' }
 const guides = ref(false)
 
 const saver = debouncedSaver((id, patch) => api.updateItem(id, patch))
@@ -287,6 +299,25 @@ function setOut() {
   if (player.playhead.value - r.start >= 0.2) setRange({ start: r.start, length: player.playhead.value - r.start })
 }
 
+// ---------------------------------------------------------------- layout
+
+// For landscape footage (a timelapse): crop it, or show it whole over a blurred copy.
+const LAYOUTS = [
+  { v: 'fill', label: 'Fill', hint: 'Crops to fit. Drag the window to reframe, corners to zoom.' },
+  { v: 'blur', label: 'Blur', hint: 'The whole frame, with a blurred copy filling the top and bottom.' },
+]
+function setLayout(v) {
+  patchRange({ layout: v === 'fill' ? '' : v })
+}
+function patchRange(patch) {
+  if (active.value) {
+    Object.assign(active.value, patch)
+    saver.queue(active.value.id, patch)
+  } else {
+    Object.assign(draftOf(current.value), patch)
+  }
+}
+
 // ---------------------------------------------------------------- tagging
 
 async function tag(reel) {
@@ -299,6 +330,7 @@ async function tag(reel) {
   try {
     const item = await api.addItem(reel.id, {
       mediaId: m.id, start: r.start, length: r.length, focusX: r.focusX, focusY: r.focusY, zoom: r.zoom || 1,
+      ...(m.kind === 'video' ? { layout: r.layout || '' } : {}),
     })
     items.value.push(item)
     showFlash(`Added to ${reel.name}`)
@@ -369,6 +401,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 <style scoped>
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.hint { font-size: 12px; margin: 8px 0 0; }
 .count {
   font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px;
   background: var(--forest); color: var(--cream);

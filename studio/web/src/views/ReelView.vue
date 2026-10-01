@@ -8,9 +8,15 @@
         <h1>
           <span class="sw" :style="{ background: reelColor(id) }"></span>
           <span class="rename" title="Rename" @click="rename">{{ reel.name }}</span>
+          <span class="formats" role="group" aria-label="Reel format">
+            <button
+              v-for="f in FORMATS" :key="f.v" class="btn small" :class="{ active: (settings.format || 'standard') === f.v }"
+              @click="setFormat(f.v)" :title="f.hint"
+            >{{ f.label }}</button>
+          </span>
         </h1>
         <p class="muted">
-          {{ kept.length }} of {{ items.length }} parts kept ·
+          {{ kept.length + (topPart ? 1 : 0) }} of {{ items.length }} parts kept ·
           reel <b class="mono total">{{ fmtTime(reelLength) }}</b>
           <span class="save">{{ saveState }}</span>
         </p>
@@ -46,12 +52,12 @@
           <p class="muted small"><RouterLink to="/renders">All renders →</RouterLink></p>
         </div>
       </div>
-      <SendToPhone v-if="sending" :name="sending" @close="sending = null" />
       <template v-else>
         <h3>Render failed</h3>
         <pre class="log">{{ job.log.join('\n') }}</pre>
         <button class="btn" @click="job = null">Close</button>
       </template>
+      <SendToPhone v-if="sending" :name="sending" @close="sending = null" />
     </section>
 
     <section v-if="showSettings" class="panel settings">
@@ -107,8 +113,28 @@
           </label>
         </div>
       </div>
+      <template v-if="isStack">
+        <label class="field">
+          Split, top / underneath
+          <input type="range" min="0.3" max="0.7" step="0.05" v-model.number="settings.stackSplit" />
+          <small class="mono">{{ Math.round(settings.stackSplit * 100) }} / {{ 100 - Math.round(settings.stackSplit * 100) }}</small>
+        </label>
+        <label class="field">
+          Divider (px at 1080 wide)
+          <input type="number" min="0" max="20" step="2" v-model.number="settings.dividerPx" />
+        </label>
+        <label class="field">
+          Divider colour
+          <input type="color" v-model="settings.dividerColor" />
+        </label>
+        <label class="field check">
+          <span><input type="checkbox" v-model="settings.fitTop" /> Fit timelapse to underneath</span>
+          <small>{{ settings.fitTop ? 'The top clip speeds up or slows down to end with the parts underneath.'
+            : 'The reel runs as long as the top clip at normal speed.' }}</small>
+        </label>
+      </template>
       <label class="field">
-        Framing
+        {{ isStack ? 'Underneath framing' : 'Framing' }}
         <select v-model="settings.fit">
           <option value="fill">Fill (crop to 9:16)</option>
           <option value="blur">Blurred background</option>
@@ -160,20 +186,33 @@
       <span v-if="settings.music" class="songtag" :title="settings.music">
         ♪ {{ settings.music.replace(/\.[^.]+$/, '').replace(/^.*\//, '') }}{{ beatData ? ` · ${Math.round(beatData.bpm)} bpm` : '' }}
       </span>
+      <div class="tracks">
+      <div v-if="isStack" class="strip toptrack">
+        <button
+          v-if="topPart" class="seg topseg" :class="{ current: topPart === current }"
+          @click="select(items.indexOf(topPart))" :title="`${topPart.media.file}: plays on top for the whole reel`"
+        >▤ {{ topPart.media.file }} · {{ topRate.toFixed(2) }}×</button>
+        <span v-else class="muted toptrack-empty">No top clip: drag one to the Top slot</span>
+        <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
+      </div>
       <div class="strip">
         <button
           v-for="p in kept" :key="p.id" class="seg"
           :class="{ current: p === current, playing: reelOn && p === current, photo: p.media.kind === 'photo' }"
           :style="{ flexGrow: len(p) }" :title="`${p.media.file} · ${len(p).toFixed(1)}s`"
+          :data-past="pastEnd(p) || null"
           @click="jumpTo(p)"
         >{{ synced ? `${beatsOf(p)}♩` : len(p).toFixed(1) }}</button>
         <div
           v-for="(x, i) in beatTicks" :key="i" class="tick" :class="{ bar: i % 4 === 0 }"
           :style="{ left: `${x}%` }"
         ></div>
+        <div v-if="spare > 0" class="seg spare" :style="{ flexGrow: spare }" title="The last part holds while the top clip finishes"></div>
         <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
       </div>
+      </div>
     </section>
+    <p v-if="isStack && topPart && kept.length" class="readout mono muted">{{ readout }}</p>
 
     <p v-if="!items.length" class="panel empty">
       This reel is empty. Open a shoot from the <RouterLink to="/">home page</RouterLink>,
@@ -182,25 +221,53 @@
 
     <div class="workspace" v-else>
       <aside class="cliplist" ref="listEl">
+        <!-- Stack: the clip on top for the whole reel, then the parts underneath -->
+        <template v-if="isStack">
+          <div class="slotlabel">Top (timelapse)</div>
+          <div
+            class="topslot" :class="{ over: dragOver === 'top', empty: !topPart }"
+            @dragover.prevent="dragOver = 'top'" @dragleave="dragOver = null" @drop="dropTop"
+          >
+            <div
+              v-if="topPart" class="row" :data-i="items.indexOf(topPart)" draggable="true"
+              @dragstart="dragFrom = 'top'" @dragend="dragOver = null"
+            >
+              <span class="num">▤</span>
+              <ClipCard
+                :media="topPart.media" :thumb-time="topPart.start" :selected="topPart === current"
+                :sub="folderTitle(topPart.media.folder)"
+                :chip="`${fmtTime(topPart.start)} → ${fmtTime(topPart.start + topPart.length)}  ${topPart.length.toFixed(1)}s · ${topRate.toFixed(2)}×` + (topPart.lighten ? '  ☀' : '')"
+                @select="select(items.indexOf(topPart))"
+              />
+            </div>
+            <p v-else class="muted">Drop a clip here to play it on top for the whole reel</p>
+          </div>
+          <div class="slotlabel">Underneath</div>
+        </template>
+        <template v-for="(p, i) in items" :key="p.id">
         <div
-          v-for="(p, i) in items" :key="p.id" class="row"
+          v-if="p !== topPart" class="row" :data-i="i"
           :class="{ over: dragOver === i, playing: reelOn && i === selected }"
           draggable="true" @dragstart="dragFrom = i" @dragover.prevent="dragOver = i"
           @dragleave="dragOver = null" @drop="drop(i)" @dragend="dragOver = null"
         >
-          <span class="num">{{ reelOn && i === selected ? '▶' : i + 1 }}</span>
+          <span class="num">{{ reelOn && i === selected ? '▶' : rowNumber(p) }}</span>
           <ClipCard
             :media="p.media" :thumb-time="p.start" :selected="i === selected" :dim="!p.keep"
             :sub="folderTitle(p.media.folder)"
             :chip="(p.media.kind === 'video'
               ? `${fmtTime(p.start)} → ${fmtTime(p.start + len(p))}  ${len(p).toFixed(1)}s`
-              : `hold ${len(p).toFixed(1)}s`) + (synced ? `  ${beatsOf(p)}♩` : '') + (p.lighten ? '  ☀' : '')"
+              : `hold ${len(p).toFixed(1)}s`) + (synced ? `  ${beatsOf(p)}♩` : '') + (p.lighten ? '  ☀' : '') + badge(p)"
             @select="select(i)"
           >
             <button
               class="keep" :class="{ on: p.keep }" @click.stop="setKeep(p, !p.keep)"
               :title="p.keep ? 'In the cut — click to skip (X)' : 'Skipped — click to keep (X)'"
             >{{ p.keep ? '✓' : '–' }}</button>
+            <button
+              v-if="isStack && p.media.kind === 'video'" class="maketop" @click.stop="makeTop(p)"
+              title="Play this on top for the whole reel"
+            >⤒</button>
           </ClipCard>
           <button
             v-if="hasNext(p)" class="tpill" :class="`t-${effective(p)}`"
@@ -208,6 +275,7 @@
             @click.stop="cycle(p)"
           >{{ icon(effective(p)) }} {{ label(effective(p)) }}</button>
         </div>
+        </template>
       </aside>
 
       <section class="editor" v-if="current">
@@ -218,14 +286,39 @@
               Put it back (or in any shoot folder) and it will relink.
             </p>
           </div>
-          <ReelFrame
-            v-else :key="current.mediaId" :media="current.media" :fit="settings.fit || 'fill'" :guides="guides"
-            :muted="!settings.originalAudio" :cropped="reelOn" :effect="effect" :lighten="current.lighten"
-            :focus-x="current.focusX" :focus-y="current.focusY" :zoom="current.zoom || 1" :poster-time="current.start"
-            :bind-video="(el) => (player.video.value = el)"
-            @loaded="onFrameLoaded" @play="player.events.onPlay" @pause="player.events.onPause"
-            @error="player.events.onError" @toggle="player.toggle" @focus="setFocus"
+          <!-- Stack: the top clip over the parts, each pane framing its own clip -->
+          <StackFrame
+            v-else-if="isStack && topPart" :split="settings.stackSplit" :divider-px="settings.dividerPx"
+            :divider-color="settings.dividerColor" :editing="current === topPart ? 'top' : 'under'"
+            :top-t="topT" :top-rate="topRate" :top-playing="reelOn" :guides="guides"
           >
+            <template #top="{ maxH, out, bindTop }">
+              <ReelFrame
+                v-if="current === topPart" :key="`edit-${current.mediaId}`" v-bind="frameProps" v-on="frameOn"
+                fit="fill" :out="out" :max-h="maxH" muted
+              />
+              <ReelFrame
+                v-else :key="`top-${topPart.mediaId}`" :media="topPart.media" fit="fill" :out="out" :max-h="maxH"
+                cropped muted :lighten="topPart.lighten" :focus-x="topPart.focusX" :focus-y="topPart.focusY"
+                :zoom="topPart.zoom || 1" :poster-time="topPart.start" :bind-video="bindTop"
+              />
+            </template>
+            <template #under="{ maxH, out }">
+              <ReelFrame
+                v-if="current !== topPart" :key="`edit-${current.mediaId}`" v-bind="frameProps" v-on="frameOn"
+                :out="out" :max-h="maxH"
+              />
+              <div v-else class="underidle">
+                <img v-if="kept[0]" :src="api.thumb(kept[0].media.folder, kept[0].media.file, kept[0].start, 480)" alt="" />
+                <span>The parts play here, one after another</span>
+              </div>
+            </template>
+            <p v-if="player.failed.value" class="unplayable">
+              This browser can't play this file's codec (HEVC often won't play in Chrome — try Safari).
+              Thumbnails and trimming still work.
+            </p>
+          </StackFrame>
+          <ReelFrame v-else :key="current.mediaId" v-bind="frameProps" v-on="frameOn" :guides="guides">
             <p v-if="player.failed.value" class="unplayable">
               This browser can't play this file's codec (HEVC often won't play in Chrome — try Safari).
               Thumbnails and trimming still work.
@@ -262,10 +355,15 @@
           :kind="current.media.kind" :start="current.start" :length="len(current)"
           :duration="current.media.duration" @update="setRange"
         >
-          <label class="field check">
+          <p v-if="current === topPart" class="topnote muted">
+            ▤ On top for the whole reel: {{ fmtTime(current.length) }} of the clip
+            {{ settings.fitTop ? `over ${fmtTime(underLength)}, at ${topRate.toFixed(2)}×` : 'at normal speed' }}.
+            No cuts or transitions up here; drag the window above to reframe.
+          </p>
+          <label class="field check" v-if="current !== topPart">
             <span><input type="checkbox" :checked="current.keep" @change="setKeep(current, $event.target.checked)" /> In the cut <kbd>X</kbd></span>
           </label>
-          <div class="tpick" v-if="synced">
+          <div class="tpick" v-if="synced && current !== topPart">
             <span class="muted">Beats (one beat = {{ period.toFixed(2) }}s)</span>
             <div>
               <button
@@ -285,6 +383,15 @@
               <button class="btn small" @click="lightenAll(current.lighten)" :title="`Set every part to ${lightenLabel(current.lighten)}`">Use on every part</button>
             </div>
           </div>
+          <div class="tpick" v-if="current !== topPart">
+            <span class="muted">Layout</span>
+            <div>
+              <button
+                v-for="l in LAYOUTS" :key="l.v" class="btn small" :class="{ active: (current.layout || '') === l.v }"
+                @click="setLayout(current, l.v)" :title="l.hint"
+              >{{ l.label }}</button>
+            </div>
+          </div>
           <div class="tpick" v-if="hasNext(current)">
             <span class="muted">Into next part <kbd>T</kbd></span>
             <div>
@@ -294,7 +401,8 @@
               >{{ t.icon }} {{ t.label }}</button>
             </div>
           </div>
-          <button class="btn small" @click="duplicate(current)" v-if="current.media.kind === 'video'">Use another part of this clip</button>
+          <button class="btn small" @click="duplicate(current)" v-if="current.media.kind === 'video' && current !== topPart">Use another part of this clip</button>
+          <button class="btn small" @click="unTop" v-if="current === topPart">Move underneath</button>
           <button class="btn small" @click="remove(current)">Remove from reel</button>
         </TimingFields>
 
@@ -334,6 +442,7 @@ import { fitRange, fmtTime, folderTitle, parseTime, reelColor } from '../time'
 import ClipCard from '../components/ClipCard.vue'
 import SendToPhone from '../components/SendToPhone.vue'
 import ReelFrame from '../components/ReelFrame.vue'
+import StackFrame from '../components/StackFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
 import TrimBar from '../components/TrimBar.vue'
 
@@ -363,8 +472,14 @@ const sending = ref(null)   // render file name being sent to the phone
 const clock = ref(Date.now() / 1000)
 
 const current = computed(() => items.value[selected.value])
-const kept = computed(() => items.value.filter((p) => p.keep && !p.media.missing))
-const reelLength = computed(() => bounds.value[bounds.value.length - 1] || 0)
+// A Stack reel's top clip; the kept parts play in order underneath it.
+const topPart = computed(() => (settings.format === 'stack'
+  ? items.value.find((p) => p.id === settings.topItemId && p.media.kind === 'video' && !p.media.missing) || null
+  : null))
+const kept = computed(() => items.value.filter((p) => p.keep && !p.media.missing && p !== topPart.value))
+// Fit off, a Stack reel runs as long as its top clip.
+const reelLength = computed(() => (topPart.value && !settings.fitTop
+  ? topPart.value.length : bounds.value[bounds.value.length - 1] || 0))
 const player = usePlayer(() => current.value && { start: current.value.start, length: len(current.value) })
 const reelName = (rid) => reels.value.find((r) => r.id === rid)?.name ?? 'reel'
 
@@ -430,7 +545,7 @@ function select(i, fromReel = false) {
   // Another part of the same clip: the video stays loaded, so just move to it.
   const v = player.video.value
   if (v && v.readyState > 0 && !fromReel) player.seek(current.value.start)
-  const el = listEl.value?.children[i]
+  const el = listEl.value?.querySelector(`[data-i="${i}"]`)
   const list = listEl.value
   if (el && list) {
     if (el.offsetTop < list.scrollTop) list.scrollTop = el.offsetTop
@@ -510,7 +625,8 @@ async function remove(p) {
 // A second part of the same clip, starting just after this one.
 async function duplicate(p) {
   const r = fitRange(p.start + len(p), p.length, p.media.duration)
-  const item = await api.addItem(id, { mediaId: p.mediaId, ...r, focusX: p.focusX, focusY: p.focusY, zoom: p.zoom, lighten: p.lighten })
+  const item = await api.addItem(id, { mediaId: p.mediaId, ...r, focusX: p.focusX, focusY: p.focusY, zoom: p.zoom,
+                                       lighten: p.lighten, layout: p.layout })
   const i = items.value.indexOf(p) + 1
   items.value.splice(i, 0, { ...item, media: p.media })
   await saveOrder()
@@ -527,6 +643,7 @@ async function saveOrder() {
 async function drop(to) {
   const from = dragFrom.value
   dragOver.value = null
+  if (from === 'top') return unTop(to)   // the top clip dragged into the list
   if (from === null || from === to) return
   const cur = current.value
   const [moved] = items.value.splice(from, 1)
@@ -636,6 +753,7 @@ const bounds = computed(() => {
 // How long a part plays: whole beats when cutting on the beat, else its length.
 function len(p) {
   if (!p) return 0
+  if (p === topPart.value) return p.length
   if (!synced.value) return p.length
   const k = kept.value.indexOf(p)
   return k >= 0 ? bounds.value[k + 1] - bounds.value[k] : beatsOf(p) * period.value
@@ -769,6 +887,115 @@ function lightenAll(v) {
   for (const p of items.value) if (p.lighten !== v) setLighten(p, v)
 }
 
+// ---------------------------------------------------------------- layout
+
+// Per part: the reel's framing, or its own.
+const LAYOUTS = [
+  { v: '', label: 'Reel default', hint: 'Use the framing set in Settings' },
+  { v: 'fill', label: 'Fill', hint: 'Crop to fit; drag the window to reframe' },
+  { v: 'blur', label: 'Blur', hint: 'The whole frame, with a blurred copy above and below' },
+]
+const layoutOf = (p) => p.layout || settings.fit || 'fill'
+const badge = (p) => (p.layout === 'blur' ? '  ◫' : '')
+function setLayout(p, v) {
+  p.layout = v
+  saver.queue(p.id, { layout: v })
+}
+
+// ---------------------------------------------------------------- stack format
+
+// A Stack reel: one clip (a timelapse, say) plays in the top pane for the whole
+// reel; the kept parts play one after another underneath. The top clip is a
+// normal part of the reel, pinned by the reel's topItemId.
+const FORMATS = [
+  { v: 'standard', label: 'Standard', hint: 'One clip at a time, full frame' },
+  { v: 'stack', label: 'Stack', hint: 'A clip on top for the whole reel, the parts underneath' },
+]
+const isStack = computed(() => settings.format === 'stack')
+const underLength = computed(() => bounds.value[bounds.value.length - 1] || 0)
+const topRate = computed(() => (topPart.value && settings.fitTop
+  ? topPart.value.length / (underLength.value || 1) : 1))
+const topT = computed(() => (topPart.value ? topPart.value.start + (reelTime.value ?? 0) * topRate.value : 0))
+// Fit off: the top clip at normal speed sets the length; the parts are cut
+// where it ends, or the last one holds.
+const spare = computed(() => (isStack.value && topPart.value && !settings.fitTop
+  ? Math.max(topPart.value.length - underLength.value, 0) : 0))
+const pastEnd = (p) => isStack.value && topPart.value && !settings.fitTop
+  && offsetOf(kept.value.indexOf(p)) >= topPart.value.length
+const readout = computed(() => {
+  const top = topPart.value.length
+  const under = underLength.value
+  let line = `Top ${fmtTime(top)} · Underneath ${fmtTime(under)} · `
+  if (settings.fitTop) line += `timelapse at ${(top / (under || 1)).toFixed(2)}×`
+  else if (under > top + 0.05) line += `underneath cut at ${fmtTime(top)}`
+  else if (under < top - 0.05) line += `last part holds ${(top - under).toFixed(1)}s`
+  else line += 'same length'
+  return line
+})
+
+// Standard → Stack picks a top clip: one called "timelapse", else the longest.
+function defaultTop() {
+  const videos = items.value.filter((p) => p.media.kind === 'video' && !p.media.missing)
+  return videos.find((p) => /timelapse/i.test(p.media.file))
+    || [...videos].sort((a, b) => b.media.duration - a.media.duration)[0] || null
+}
+async function setFormat(f) {
+  if (f === (settings.format || 'standard')) return
+  stopReel()
+  if (f === 'stack') {
+    const keep = items.value.find((p) => p.id === settings.topItemId && p.media.kind === 'video')
+    settings.topItemId = (keep || defaultTop())?.id ?? null
+    settings.format = 'stack'
+    return
+  }
+  // Back to Standard: the top clip becomes the first part again.
+  const top = topPart.value
+  settings.format = 'standard'
+  if (top) await moveItem(top, 0)
+}
+function makeTop(p) {
+  stopReel()
+  settings.topItemId = p.id
+}
+// The top clip back into the list, as a normal part, at `to` (default: first).
+async function unTop(to = 0) {
+  const top = topPart.value
+  if (!top) return
+  stopReel()
+  settings.topItemId = null
+  if (!top.keep) setKeep(top, true)
+  await moveItem(top, to)
+}
+async function moveItem(p, to) {
+  const cur = current.value
+  const from = items.value.indexOf(p)
+  items.value.splice(from, 1)
+  items.value.splice(Math.min(to, items.value.length), 0, p)
+  selected.value = items.value.indexOf(cur)
+  await saveOrder()
+}
+function dropTop() {
+  const from = dragFrom.value
+  dragOver.value = null
+  if (typeof from !== 'number') return
+  const p = items.value[from]
+  if (p.media.kind !== 'video') return
+  makeTop(p)
+}
+const rowNumber = (p) => items.value.filter((q) => q !== topPart.value).indexOf(p) + 1
+
+// What every ReelFrame showing the selected clip gets.
+const frameProps = computed(() => ({
+  media: current.value.media, fit: layoutOf(current.value), guides: !isStack.value && guides.value,
+  muted: !settings.originalAudio, cropped: reelOn.value, effect: effect.value, lighten: current.value.lighten,
+  focusX: current.value.focusX, focusY: current.value.focusY, zoom: current.value.zoom || 1,
+  posterTime: current.value.start, bindVideo: (el) => { player.video.value = el },
+}))
+const frameOn = {
+  loaded: (e) => onFrameLoaded(e), play: () => player.events.onPlay(), pause: () => player.events.onPause(),
+  error: () => player.events.onError(), toggle: () => player.toggle(), focus: (f) => setFocus(f),
+}
+
 // ---------------------------------------------------------------- play the reel
 
 // Plays every kept part in order, cropped to the reel, so you can see how the
@@ -844,6 +1071,14 @@ watch(() => player.playhead.value, (t) => {
   const v = player.video.value
   if (p && p === current.value && p.media.kind === 'video' && v && !v.paused && t >= p.start + len(p)) {
     startPart(reelIdx.value + 1)
+  }
+})
+
+// A Stack reel with fit off ends when its top clip does.
+watch(() => reelTime.value, (t) => {
+  if (reelOn.value && topPart.value && !settings.fitTop && t >= reelLength.value) {
+    stopReel()
+    restart = true
   }
 })
 
@@ -1017,6 +1252,29 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .tpill:hover { border-color: var(--forest); color: var(--forest); }
 .tpill:not(.t-cut) { border-style: solid; border-color: var(--sage); background: var(--sage-soft); color: var(--forest); }
 .tpick { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.formats { display: inline-flex; gap: 2px; margin-left: 6px; padding: 2px; border-radius: 999px; background: rgb(128 128 128 / 16%); }
+.formats .btn { border-radius: 999px; border-color: transparent; background: transparent; }
+.formats .btn.active { background: var(--sage); color: var(--on-sage); }
+.tracks { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.tracks .strip { flex: none; }
+.toptrack { height: 22px; }
+.toptrack .topseg { flex: 1; text-align: left; padding-left: 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.toptrack-empty { font-size: 12px; padding: 4px 10px; }
+.seg.spare { background: repeating-linear-gradient(45deg, transparent 0 6px, rgb(128 128 128 / 25%) 6px 12px); pointer-events: none; }
+.seg[data-past] { opacity: 0.35; }
+.readout { margin: -26px 0 14px; font-size: 12px; }
+.slotlabel { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted, inherit); opacity: 0.75; margin: 6px 0 4px; }
+.topslot { border: 2px dashed transparent; border-radius: var(--radius); padding: 2px; margin-bottom: 6px; border-bottom: 3px solid var(--sage); }
+.topslot.empty { border-color: var(--sage); padding: 14px; text-align: center; font-size: 12px; }
+.topslot.over { border-style: dashed; border-color: var(--sage); background: rgb(138 163 124 / 15%); }
+.maketop {
+  border: 0; background: none; cursor: pointer; font-size: 15px; padding: 2px 6px; border-radius: 6px; color: inherit; opacity: 0.6;
+}
+.maketop:hover { opacity: 1; background: rgb(138 163 124 / 25%); }
+.topnote { font-size: 12px; flex-basis: 100%; margin: 0; }
+.underidle { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; background: #111; }
+.underidle img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.35; }
+.underidle span { position: relative; font-size: 12px; color: var(--on-media); padding: 6px 10px; border-radius: 999px; background: rgb(31 42 31 / 70%); }
 .tpick div { display: flex; gap: 4px; flex-wrap: wrap; }
 .seg {
   flex-basis: 0; min-width: 6px; border: 0; border-radius: 4px; cursor: pointer; padding: 0;

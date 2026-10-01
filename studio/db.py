@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS reel_items (
     transition TEXT NOT NULL DEFAULT '',    -- into the next part; '' = reel default
     lighten  REAL NOT NULL DEFAULT 0,       -- 0..1, lifts shadows and midtones
     beats    INTEGER NOT NULL DEFAULT 0,    -- with beat sync: beats long; 0 = reel default
-    zoom     REAL NOT NULL DEFAULT 1        -- >1 crops tighter than the full 9:16 window
+    zoom     REAL NOT NULL DEFAULT 1,       -- >1 crops tighter than the full 9:16 window
+    layout   TEXT NOT NULL DEFAULT ''       -- fill | blur; '' = the reel's framing
 );
 CREATE INDEX IF NOT EXISTS items_reel ON reel_items(reel_id, position);
 CREATE INDEX IF NOT EXISTS items_media ON reel_items(media_id);
@@ -80,6 +81,14 @@ DEFAULT_SETTINGS = {
     "transition": "cut",    # between parts, unless a part picks its own
     "originalAudio": False,  # glasses audio off unless a reel turns it on
     "originalVolume": 0.35,
+    # Stack format: one clip (a timelapse, say) plays in the top pane for the
+    # whole reel while the parts play one after another underneath.
+    "format": "standard",   # standard | stack
+    "topItemId": None,      # the reel_items row pinned on top; still a normal row
+    "stackSplit": 0.5,      # the top pane's share of the height
+    "dividerPx": 4,         # the line between the panes (0 = none)
+    "dividerColor": "#f7f1e3",
+    "fitTop": True,         # speed the top clip to end with the parts underneath
 }
 
 
@@ -209,13 +218,23 @@ def migrate(db):
                              ("reel_items", "transition", "TEXT NOT NULL DEFAULT ''"),
                              ("reel_items", "lighten", "REAL NOT NULL DEFAULT 0"),
                              ("reel_items", "beats", "INTEGER NOT NULL DEFAULT 0"),
-                             ("reel_items", "zoom", "REAL NOT NULL DEFAULT 1")]:
+                             ("reel_items", "zoom", "REAL NOT NULL DEFAULT 1"),
+                             ("reel_items", "layout", "TEXT NOT NULL DEFAULT ''")]:
         if col not in have[table]:
             db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
     # v1: photo sizes now honour EXIF rotation; re-measure photos once.
     if db.execute("PRAGMA user_version").fetchone()[0] < 1:
         db.execute("UPDATE media SET width = 0 WHERE kind = 'photo'")
         db.execute("PRAGMA user_version = 1")
+    # v2: "on top" was a per-part layout; it's now the reel's Stack format.
+    if db.execute("PRAGMA user_version").fetchone()[0] < 2:
+        for row in db.execute("SELECT id, reel_id FROM reel_items WHERE layout = 'stack' "
+                              "ORDER BY position DESC").fetchall():
+            reel = db.execute("SELECT settings FROM reels WHERE id = ?", (row["reel_id"],)).fetchone()
+            s = {**json.loads(reel["settings"] or "{}"), "format": "stack", "topItemId": row["id"]}
+            db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), row["reel_id"]))
+        db.execute("UPDATE reel_items SET layout = '' WHERE layout = 'stack'")
+        db.execute("PRAGMA user_version = 2")
 
 
 def photo_rotation(path):

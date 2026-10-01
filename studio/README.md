@@ -90,6 +90,29 @@ can be framed differently in different reels. Drag a corner of the window to zoo
 caption and buttons will cover the picture. Files stored sideways with a
 rotation flag (common from phones) are handled.
 
+**Layout per part** (for landscape footage like a day's timelapse): each part
+can override the reel's framing, chosen under *Layout* on the shoot page
+(before adding the part) or in the reel's part editor. *Fill* crops as above;
+*Blur* shows the whole frame with a blurred copy filling the top and bottom
+(marked ◫ in the list).
+
+**Stack reels.** Switch a reel from *Standard* to *Stack* next to its name.
+One clip (a timelapse, say) plays in the top pane for the whole reel, and the
+parts play one after another underneath, with their trims, framing,
+transitions and lighten as usual; photos are simply parts underneath. The list
+shows the clip on top in its own *Top (timelapse)* slot: drag a part onto it,
+or click ⤒ on a part, to put that one on top; drag it back into the list (or
+*Move underneath*) to make it a normal part. Switching to Stack picks a clip
+with "timelapse" in its name, else the longest; switching back to Standard
+makes the top clip the first part again. The top clip's start and length pick
+which stretch of it plays; drag its window to frame it. Settings has the
+split (50/50 by default), the divider's thickness and colour, and *Fit
+timelapse to underneath* (on): the top clip speeds up or slows down to end with
+the parts. Turned off, the reel runs as long as the top clip at normal speed;
+the parts are cut where it ends, or the last one holds. The line under the
+timeline shows the lengths and the speed. The top clip is silent; the parts
+keep their sound.
+
 Everything is stored in one SQLite file, `~/Footage/.studio/studio.db`
 (no database server to run). Files are never copied or moved. If you rename a
 file or move it to another shoot folder, it relinks automatically (matched on

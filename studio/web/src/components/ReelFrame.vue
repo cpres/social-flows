@@ -1,5 +1,5 @@
 <template>
-  <div class="frame-stage" ref="stage" :style="{ height: `${box.h}px` }">
+  <div class="frame-stage" ref="stage" :class="{ bare: maxH }" :style="{ height: `${maxH || box.h}px` }">
     <div class="box" :class="fxClass" :style="{ width: `${box.w}px`, height: `${box.h}px`, background: backdrop }">
       <img
         v-if="mode === 'fit' && fit === 'blur'" class="blurbg" alt=""
@@ -18,6 +18,7 @@
       <div class="media" :style="[mediaStyle, liftStyle]">
         <video
           v-if="media.kind === 'video'" :ref="bindVideo" :src="api.media(media.folder, media.file)"
+          :poster="api.thumb(media.folder, media.file, posterTime, 640)"
           preload="auto" playsinline :muted="muted" @loadedmetadata="onMeta" @play="$emit('play')" @pause="$emit('pause')"
           @playing="firePending"
           @error="$emit('error')" @click="$emit('toggle')"
@@ -50,7 +51,7 @@ import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch
 import { api } from '../api'
 import { clamp } from '../time'
 
-const OUT = 9 / 16   // the reel's shape
+const REEL = 9 / 16   // the reel's shape
 const BRAND = { forest: '#344a34', sage: '#8aa37c', cream: '#f7f1e3' }
 
 const props = defineProps({
@@ -65,6 +66,8 @@ const props = defineProps({
   lighten: { type: Number, default: 0 },
   zoom: { type: Number, default: 1 },              // >1 = crop tighter than the full 9:16 window           // 0..1, as the engine's `lighten`          // { type, at }: a transition to play into this shot                                 // show only what the reel shows (while playing it)                                   // matches whether the reel keeps clip audio
   posterTime: { type: Number, default: 0 },
+  out: { type: Number, default: REEL },             // the shape this clip fills: a Stack reel's pane is wider than 9:16
+  maxH: { type: Number, default: 0 },              // fit inside this height (a Stack pane) instead of the window's
   bindVideo: { type: Function, default: () => {} },
 })
 const emit = defineEmits(['focus', 'play', 'pause', 'error', 'toggle', 'loaded'])
@@ -82,7 +85,7 @@ const natural = reactive({ w: 0, h: 0 })
 const aspect = computed(() => {
   const w = natural.w || props.media.width
   const hgt = natural.h || props.media.height
-  return w && hgt ? w / hgt : OUT
+  return w && hgt ? w / hgt : OUT.value
 })
 function onMeta(e) {
   natural.w = e.target.videoWidth
@@ -94,10 +97,11 @@ function onImg(e) {
   natural.h = e.target.naturalHeight
 }
 
-// fill crops the source to 9:16 (show the whole source with the kept window);
-// blur and pad fit the whole source inside a 9:16 frame.
+const OUT = computed(() => props.out)
+// fill crops the source to the reel's shape (show the whole source with the
+// kept window); blur and pad fit the whole source inside it.
 const mode = computed(() => (props.fit === 'fill' ? 'crop' : 'fit'))
-const boxAspect = computed(() => (mode.value === 'crop' && !props.cropped ? aspect.value : OUT))
+const boxAspect = computed(() => (mode.value === 'crop' && !props.cropped ? aspect.value : OUT.value))
 
 const stage = ref(null)
 
@@ -151,7 +155,7 @@ onBeforeUnmount(() => {
 })
 
 const box = computed(() => {
-  const w = Math.min(width.value, cap.value * boxAspect.value)
+  const w = Math.min(width.value, (props.maxH || cap.value) * boxAspect.value)
   return { w: Math.round(w), h: Math.round(w / boxAspect.value) }
 })
 
@@ -168,11 +172,11 @@ const mediaStyle = computed(() => {
   if (mode.value === 'crop') return { inset: 0 }
   // contained inside the 9:16 box
   const a = aspect.value
-  if (a > OUT) {
-    const hPct = (OUT / a) * 100
+  if (a > OUT.value) {
+    const hPct = (OUT.value / a) * 100
     return { left: 0, right: 0, top: `${(100 - hPct) / 2}%`, height: `${hPct}%` }
   }
-  const wPct = (a / OUT) * 100
+  const wPct = (a / OUT.value) * 100
   return { top: 0, bottom: 0, left: `${(100 - wPct) / 2}%`, width: `${wPct}%` }
 })
 
@@ -189,8 +193,8 @@ const win = computed(() => {
   const a = aspect.value
   let w = 100
   let h = 100
-  if (a > OUT) w = (OUT / a) * 100
-  else h = (a / OUT) * 100
+  if (a > OUT.value) w = (OUT.value / a) * 100
+  else h = (a / OUT.value) * 100
   w /= zoom.value
   h /= zoom.value
   return { w, h, left: (100 - w) * props.focusX, top: (100 - h) * props.focusY }
@@ -239,9 +243,9 @@ function move(e) {
   // window stays 9:16 on screen.
   const px = e.clientX - origin.rect.left
   const py = e.clientY - origin.rect.top
-  let nw = Math.max(Math.abs(px - origin.anchor.x), Math.abs(py - origin.anchor.y) * OUT)
+  let nw = Math.max(Math.abs(px - origin.anchor.x), Math.abs(py - origin.anchor.y) * OUT.value)
   nw = clamp(nw, origin.fullW / MAX_ZOOM, origin.fullW)
-  const nh = nw / OUT
+  const nh = nw / OUT.value
   const left = clamp(origin.what.includes('w') ? origin.anchor.x - nw : origin.anchor.x, 0, bw - nw)
   const top = clamp(origin.what.includes('n') ? origin.anchor.y - nh : origin.anchor.y, 0, bh - nh)
   emit('focus', {
@@ -270,6 +274,7 @@ const round = (v) => Math.round(v * 1000) / 1000
 .media { position: absolute; }
 .media video, .media img { width: 100%; height: 100%; display: block; object-fit: fill; }
 .media video { cursor: pointer; }
+.frame-stage.bare { border-radius: 0; }
 .blurbg { position: absolute; inset: -10%; width: 120%; height: 120%; object-fit: cover; filter: blur(18px) brightness(0.8); }
 .window {
   position: absolute; box-shadow: 0 0 0 9999px rgb(10 14 10 / 62%);

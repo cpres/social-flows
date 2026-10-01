@@ -322,6 +322,7 @@ def build_plan(cfg, base_dir, beats):
                                  "transition": src.get("transition"),
                                  "lighten": float(src.get("lighten", 0) or 0),
                                  "zoom": float(src.get("zoom", 1) or 1),
+                                 "fit": src.get("fit"),
                                  "seconds": float(src.get("hold", default_hold)),
                                  "beats": int(src.get("hold_beats", beats_per_cut * 2))})
                 continue
@@ -341,6 +342,7 @@ def build_plan(cfg, base_dir, beats):
                          "transition": src.get("transition"),
                          "lighten": float(src.get("lighten", 0) or 0),
                          "zoom": float(src.get("zoom", 1) or 1),
+                         "fit": src.get("fit"),
                          "has_audio": src["_has_audio"],
                          "seconds": float(src.get("length", default_len)),
                          "beats": int(src.get("beats", beats_per_cut))})
@@ -418,14 +420,15 @@ def video_codec(cfg):
             "-crf", str(cfg.get("crf", 18)), "-profile:v", "high", *pix]
 
 
-def fit_filter(cfg, src_label, out_label, focus=(0.5, 0.5), zoom=1.0):
+def fit_filter(cfg, src_label, out_label, focus=(0.5, 0.5), zoom=1.0, fit=None):
     """Frame a source to the output size. `focus` picks which part of a
     too-wide or too-tall source the crop keeps: 0 = left/top, 1 = right/bottom.
-    `zoom` > 1 (fill only) crops tighter: the source is scaled up first."""
+    `zoom` > 1 (fill only) crops tighter: the source is scaled up first.
+    `fit` overrides the config's for one cut."""
     w, h = cfg["width"], cfg["height"]
     fx, fy = (min(max(float(v), 0.0), 1.0) for v in focus)
     crop = f"crop={w}:{h}:(iw-{w})*{fx:.4f}:(ih-{h})*{fy:.4f}"
-    fit = cfg.get("fit", "fill")
+    fit = fit or cfg.get("fit", "fill")
     if fit == "fill":
         z = min(max(float(zoom or 1), 1.0), 3.0)
         zw, zh = round(w * z / 2) * 2, round(h * z / 2) * 2
@@ -462,14 +465,15 @@ def render_segment(seg, idx, cfg, workdir, keep_audio):
         cmd += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
     a_in = "0:a:0" if use_source_audio else "1:a"
 
+    framing = (seg.get("focus", (0.5, 0.5)), seg.get("zoom", 1), seg.get("fit"))
     lift = min(max(seg.get("lighten", 0), 0.0), 1.0)
     if lift:
         # Lift shadows and midtones (gamma) rather than flat brightness, so
         # shade opens up without blowing out the sky.
-        graph = (fit_filter(cfg, "0:v", "fit0", seg.get("focus", (0.5, 0.5)), seg.get("zoom", 1)) +
+        graph = (fit_filter(cfg, "0:v", "fit0", *framing) +
                  f";[fit0]eq=gamma={1 + LIGHTEN_GAMMA * lift:.3f}:saturation={1 + 0.08 * lift:.3f}[fit];")
     else:
-        graph = fit_filter(cfg, "0:v", "fit", seg.get("focus", (0.5, 0.5)), seg.get("zoom", 1)) + ";"
+        graph = fit_filter(cfg, "0:v", "fit", *framing) + ";"
     # Zoom punch-in: start PUNCH_ZOOM larger and ease back to normal.
     punch_frames = round(seg.get("punch_in", 0) * fps)
     punch = (f"+{PUNCH_ZOOM}*pow(max(0,1-on/{punch_frames}),2)" if punch_frames else "")
@@ -547,6 +551,77 @@ def assemble(segs, plan, cfg, workdir):
     return out
 
 
+def load_top(cfg, base_dir):
+    """A stack piece: `top:` is a clip shown in the top pane for the whole
+    piece, `stack:` the split and the divider. The cuts play underneath, so
+    this narrows cfg's height to the bottom pane. Returns the top, or None.
+
+    With stack fit on (the default) the top clip is sped up or slowed down to
+    end with the cuts; with it off, the piece is as long as the top clip at
+    normal speed and the cuts are cut short, or hold their last frame."""
+    top = cfg.get("top")
+    if not top:
+        return None
+    path = (base_dir / top["file"]).expanduser()
+    if not path.exists():
+        sys.exit(f"File not found: {path}")
+    duration, _ = probe(path)
+    start = parse_time(top.get("start", 0))
+    length = parse_time(top.get("length")) or duration - start
+    length = max(0.2, min(length, duration - start))
+    st = cfg.get("stack") or {}
+    h = cfg["height"]
+    divider = min(max(int(st.get("divider", 4)) // 2 * 2, 0), 40)
+    split = min(max(float(st.get("split", 0.5)), 0.1), 0.9)
+    top_h = round((h - divider) * split / 2) * 2
+    out = {"path": path, "start": start, "length": length, "height": top_h,
+           "focus": top.get("focus", (0.5, 0.5)), "zoom": float(top.get("zoom", 1) or 1),
+           "lighten": float(top.get("lighten", 0) or 0), "full_height": h,
+           "divider": divider, "color": str(st.get("divider_color", "#f7f1e3")).replace("#", "0x"),
+           "fit": bool(st.get("fit", True))}
+    cfg["height"] = h - divider - top_h
+    return out
+
+
+def top_length(top, under):
+    """How long the piece runs: the cuts' length when the top is fitted to
+    them, else the top clip's own length."""
+    return under if top["fit"] else round(top["length"] * 1000) / 1000
+
+
+def compose_top(top, assembled, cfg, under, workdir):
+    """The top clip (sped to fit, or not) over the divider over the cuts."""
+    w, fps = cfg["width"], cfg["fps"]
+    total = top_length(top, under)
+    bottom_h = cfg["height"]
+    out = workdir / "stacked.mkv"
+    cfg["height"] = top["height"]
+    graph = fit_filter(cfg, "0:v", "tfit", top["focus"], top["zoom"], "fill") + ";"
+    cfg["height"] = bottom_h
+    lift = min(max(top["lighten"], 0.0), 1.0)
+    eq = (f"eq=gamma={1 + LIGHTEN_GAMMA * lift:.3f}:saturation={1 + 0.08 * lift:.3f}," if lift else "")
+    speed = total / top["length"] if top["fit"] else 1.0
+    frames = round(total * fps)
+    graph += (f"[tfit]setpts=(PTS-STARTPTS)*{speed:.6f},fps={fps},{eq}setsar=1,format=yuv420p,"
+              f"trim=end_frame={frames},setpts=PTS-STARTPTS[top];")
+    # Cuts shorter than the top clip hold their last frame (and go quiet).
+    hold = max(total - under, 0)
+    pad = f",tpad=stop_mode=clone:stop_duration={hold:.3f}" if hold > 0.001 else ""
+    graph += (f"[1:v]setsar=1,format=yuv420p{pad},trim=end_frame={frames},setpts=PTS-STARTPTS[bot];"
+              f"[1:a]apad,atrim=0:{total:.4f},asetpts=PTS-STARTPTS[a];")
+    if top["divider"]:
+        graph += (f"color=c={top['color']}:s={w}x{top['divider']}:r={fps},format=yuv420p,"
+                  f"trim=end_frame={frames}[div];[top][div][bot]vstack=inputs=3[v]")
+    else:
+        graph += "[top][bot]vstack=inputs=2[v]"
+    run(["ffmpeg", "-y", "-v", "error",
+         "-ss", f"{top['start']:.3f}", "-t", f"{top['length']:.3f}", "-i", str(top["path"]),
+         "-i", str(assembled), "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
+         *video_codec(cfg), "-r", str(fps), "-c:a", "pcm_s16le", str(out)])
+    cfg["height"] = top["full_height"]
+    return out
+
+
 def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output):
     # music_in_video: false times the cuts to the song but leaves it out of the
     # file, for adding the same song in Instagram (which licenses it).
@@ -604,6 +679,7 @@ def main():
     for note in expand_folders(cfg, base_dir):
         print(f"  {note}")
     beats, music_start = load_beats(cfg, base_dir)
+    top = load_top(cfg, base_dir)
     plan, warnings = build_plan(cfg, base_dir, beats)
     if not plan:
         sys.exit("Nothing to cut. Check your start/step/times against clip lengths.")
@@ -613,12 +689,25 @@ def main():
     t = 0.0
     for seg in plan:
         where = "hold" if seg["kind"] == "image" else f"from {fmt(seg['start'])}"
-        print(f"  {fmt(t):>7}  r{seg['round']}  {seg['label']:<16} {where:<12} {seg['length']:.2f}s")
+        layout = ""
+        if seg.get("fit"):
+            layout = f"  [{seg['fit']}]"
+        print(f"  {fmt(t):>7}  r{seg['round']}  {seg['label']:<16} {where:<12} {seg['length']:.2f}s{layout}")
         if seg["t_after"]:
             print(f"  {'':>7}      ~ {seg['label_after']} {seg['d_after']:.2f}s")
         elif seg["label_after"]:
             print(f"  {'':>7}      ~ {seg['label_after']}")
         t += seg["length"]
+    if top:
+        line = (f"\n  top: {top['path'].name} {fmt(top['start'])} -> "
+                f"{fmt(top['start'] + top['length'])} · Top {fmt(top['length'])} · Underneath {fmt(total)}")
+        if top["fit"]:
+            line += f" · timelapse at {top['length'] / total:.2f}x"
+        elif total > top["length"]:
+            line += f" · underneath cut at {fmt(top['length'])}"
+        elif total < top["length"]:
+            line += f" · last part holds {top['length'] - total:.1f}s"
+        print(line)
     for w in warnings:
         print(f"  ! {w}")
     print()
@@ -638,6 +727,10 @@ def main():
             segs.append(render_segment(seg, i, cfg, workdir, keep_audio))
         print("  joining cuts...                         ", end="\r")
         assembled = assemble(segs, plan, cfg, workdir)
+        if top:
+            print("  stacking under the top clip...          ", end="\r")
+            assembled = compose_top(top, assembled, cfg, total, workdir)
+            total = top_length(top, total)
         print("  mixing sound...                         ", end="\r")
         finish(assembled, cfg, base_dir, music_start, total, keep_audio, output)
 
