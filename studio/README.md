@@ -37,6 +37,17 @@ python3 studio/server.py --open
 
 - **Home** shows your **Reels** (concepts) above your **Shoots** (the date
   folders in `~/Footage`, newest first).
+- **Import from Downloads** (next to *Shoots*) brings in what you AirDropped
+  from your phone. It lists the photos and videos that landed in `~/Downloads`
+  over the last month, grouped by the day they arrived, starting on today (the
+  button shows how many new ones are waiting). Everything new from that day is
+  selected; click thumbnails to leave some out. Then either make a **new shoot
+  folder** (the date plus an optional "what was it", e.g.
+  `2026-10-06 garden build`) or **add them to an existing folder** (a folder
+  already named for that day is picked for you). Files are moved, unless you
+  tick *Keep a copy in Downloads*. iPhone HEIC photos are converted to JPEG on
+  the way in. Files already in a shoot folder are marked and left unselected.
+  `DOWNLOADS_DIR` points it somewhere else.
 - **Open a shoot** to go through its clips in the order they were shot. Under the
   video, a filmstrip shows what happens where; drag the handles to pick a part,
   or type exact start and length. Then click a reel (or press `1`–`9`) to add

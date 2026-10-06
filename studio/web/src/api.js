@@ -48,6 +48,11 @@ export const api = {
   updateItem: (id, patch) => send('PATCH', `/api/items/${id}`, patch),
   deleteItem: (id) => send('DELETE', `/api/items/${id}`),
 
+  // AirDropped files waiting in ~/Downloads, and moving them into a shoot.
+  importList: () => fetch('/api/import').then(json),
+  importThumb: (file, w = 320) => `/api/import/thumb/${enc(file)}?w=${w}`,
+  importFiles: (body) => send('POST', '/api/import', body),
+
   media: (folder, file) => `/api/media/${enc(folder)}/${enc(file)}`,
   thumb: (folder, file, t = 0, w = 480) =>
     `/api/thumb/${enc(folder)}/${enc(file)}?t=${Math.max(0, t).toFixed(1)}&w=${w}`,

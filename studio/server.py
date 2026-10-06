@@ -11,6 +11,7 @@ uses, live in ~/Footage/.studio/studio.db (see db.py). Exporting a reel writes
 
 FOOTAGE_DIR overrides the footage root (default ~/Footage).
 RENDER_DIR sets where rendered videos go (default ~/Movies/Footage Studio).
+DOWNLOADS_DIR is where AirDrop drops things, for Import (default ~/Downloads).
 """
 
 import argparse
@@ -18,11 +19,12 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
 import uuid
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 if sys.version_info < (3, 9):
@@ -53,6 +55,7 @@ from share import Shares  # noqa: E402
 ROOT = Path(os.environ.get("FOOTAGE_DIR", "~/Footage")).expanduser().resolve()
 RENDERS = Path(os.environ.get("RENDER_DIR", "~/Movies/Footage Studio")).expanduser()
 CACHE = Path("~/.cache/footage-studio").expanduser()
+DOWNLOADS = Path(os.environ.get("DOWNLOADS_DIR", "~/Downloads")).expanduser().resolve()
 SIDECAR = ".studio.json"
 # What a part can lead into the next with ('' = the reel's default).
 TRANSITIONS = ("", "cut", "flash", "whip", "zoom", "dissolve", "dip")   # per-folder trims from the first version of the studio
@@ -808,19 +811,173 @@ def media(name: str, file: str):
 
 @app.get("/api/thumb/{name}/{file}")
 def thumb(name: str, file: str, t: float = 0.0, w: int = 480):
-    path = resolve(name, file)
+    return make_thumb(resolve(name, file), t, w)
+
+
+def make_thumb(path, t=0.0, w=480):
     w = max(64, min(w, 1280))
     key = hashlib.sha1(f"{path}|{path.stat().st_mtime}|{t:.2f}|{w}".encode()).hexdigest()
     out = CACHE / f"{key}.jpg"
     if not out.exists():
         CACHE.mkdir(parents=True, exist_ok=True)
-        seek = ["-ss", f"{max(t, 0):.2f}"] if Library.kind_of(path) == "video" else []
-        subprocess.run(["ffmpeg", "-y", "-v", "error", *seek, "-i", str(path),
-                        "-frames:v", "1", "-vf", f"scale={w}:-2", "-q:v", "4", str(out)],
-                       capture_output=True, timeout=60)
+        if path.suffix.lower() in HEIC_EXTS and sys.platform == "darwin":
+            subprocess.run(["sips", "-s", "format", "jpeg", "-Z", str(w), str(path),
+                            "--out", str(out)], capture_output=True, timeout=60)
+        else:
+            seek = ["-ss", f"{max(t, 0):.2f}"] if Library.kind_of(path) == "video" else []
+            subprocess.run(["ffmpeg", "-y", "-v", "error", *seek, "-i", str(path),
+                            "-frames:v", "1", "-vf", f"scale={w}:-2", "-q:v", "4", str(out)],
+                           capture_output=True, timeout=60)
         if not out.exists():
             raise HTTPException(500, "Could not make a thumbnail")
     return FileResponse(out, headers={"Cache-Control": "max-age=86400"})
+
+
+# ---------------------------------------------------------------- import
+# Things AirDropped from the phone land loose in ~/Downloads. Import moves a
+# day's worth of them into a shoot folder (a new one, or one you already have).
+
+HEIC_EXTS = {".heic", ".heif"}   # iPhone photos; converted to JPEG on the way in
+IMPORT_DAYS = 30                 # how far back the import list looks
+
+
+def importable(path):
+    return (path.is_file() and not path.name.startswith(".")
+            and (Library.kind_of(path) or path.suffix.lower() in HEIC_EXTS))
+
+
+def arrived(st):
+    """When a file landed in Downloads. AirDrop keeps the photo's own dates on
+    some files, but the inode change time is when it was written here."""
+    return max(st.st_mtime, st.st_ctime)
+
+
+def download_path(name):
+    path = (DOWNLOADS / name).resolve()
+    if path.parent != DOWNLOADS or not path.exists() or not importable(path):
+        raise HTTPException(404, f"Not in Downloads: {name}")
+    return path
+
+
+def folder_name_ok(name):
+    return bool(name) and name not in (".", "..") and not name.startswith(".") \
+        and "/" not in name and "\\" not in name and ":" not in name
+
+
+@app.get("/api/import")
+def import_list():
+    """Photos and videos in Downloads from the last few weeks, grouped by the
+    day they arrived, each marked if a shoot folder already has it."""
+    if not DOWNLOADS.is_dir():
+        return {"dir": str(DOWNLOADS), "days": [], "files": [],
+                "error": f"{DOWNLOADS} does not exist"}
+    since = datetime.combine(date.today() - timedelta(days=IMPORT_DAYS), datetime.min.time())
+    files = []
+    with lib.connect() as db:
+        for p in DOWNLOADS.iterdir():
+            if not importable(p):
+                continue
+            st = p.stat()
+            at = arrived(st)
+            if at < since.timestamp():
+                continue
+            heic = p.suffix.lower() in HEIC_EXTS
+            # Imported before: same name in a shoot (as .jpg if it was HEIC), same size
+            # unless it was converted.
+            stored = Path(p.name).with_suffix(".jpg").name if heic else p.name
+            row = db.execute("SELECT folder FROM media WHERE name = ? AND missing = 0 "
+                             "AND (? OR size = ?) ORDER BY id LIMIT 1",
+                             (stored, heic, st.st_size)).fetchone()
+            files.append({"name": p.name, "kind": Library.kind_of(p) or "photo",
+                          "size": st.st_size, "arrived": at,
+                          "day": datetime.fromtimestamp(at).strftime("%Y-%m-%d"),
+                          "convert": heic, "importedTo": row["folder"] if row else None})
+    files.sort(key=lambda f: f["arrived"])
+    days = {}
+    for f in files:
+        d = days.setdefault(f["day"], {"day": f["day"], "photos": 0, "videos": 0, "new": 0})
+        d["videos" if f["kind"] == "video" else "photos"] += 1
+        d["new"] += not f["importedTo"]
+    return {"dir": str(DOWNLOADS), "today": date.today().isoformat(),
+            "days": sorted(days.values(), key=lambda d: d["day"], reverse=True), "files": files}
+
+
+@app.get("/api/import/thumb/{file}")
+def import_thumb(file: str, w: int = 320):
+    path = download_path(file)
+    try:
+        return make_thumb(path, 0.5, w)
+    except HTTPException:
+        return make_thumb(path, 0.0, w)   # a clip shorter than the seek
+
+
+@app.post("/api/import")
+def import_files(body: dict = Body(...)):
+    """Move (or copy) files from Downloads into a shoot folder.
+
+    {files: [names], folder: "2026-10-06 garden", create: true, keepOriginals: false}
+    """
+    name = (body.get("folder") or "").strip()
+    if not folder_name_ok(name):
+        raise HTTPException(400, "Give the folder a name (no slashes or colons)")
+    if not ROOT.is_dir():
+        raise HTTPException(400, f"{ROOT} does not exist")
+    sources = [download_path(f) for f in body.get("files") or []]
+    if not sources:
+        raise HTTPException(400, "Pick at least one file to import")
+    dest = ROOT / name
+    if body.get("create"):
+        if dest.exists():
+            raise HTTPException(409, f"There's already a folder called '{name}'")
+        dest.mkdir()
+    elif not dest.is_dir():
+        raise HTTPException(404, f"No folder called '{name}'")
+
+    keep = bool(body.get("keepOriginals"))
+    imported, skipped, failed = [], [], []
+    for src in sources:
+        heic = src.suffix.lower() in HEIC_EXTS
+        target = dest / (src.with_suffix(".jpg").name if heic else src.name)
+        if target.exists():
+            if heic or target.stat().st_size == src.stat().st_size:
+                skipped.append(src.name)   # already there
+                continue
+            target = free_name(target)
+        try:
+            if heic:
+                to_jpeg(src, target)
+                if not keep:
+                    src.unlink()
+            elif keep:
+                shutil.copy2(src, target)
+            else:
+                shutil.move(str(src), str(target))
+            imported.append(target.name)
+        except Exception as e:   # one bad file shouldn't stop the rest
+            failed.append({"name": src.name, "error": str(e)})
+    lib.scan([dest])
+    return {"folder": name, "imported": imported, "skipped": skipped, "failed": failed}
+
+
+def free_name(path):
+    n = 2
+    while (candidate := path.with_name(f"{path.stem} ({n}){path.suffix}")).exists():
+        n += 1
+    return candidate
+
+
+def to_jpeg(src, target):
+    """HEIC -> JPEG, keeping the photo's dates (the studio sorts by them)."""
+    if sys.platform == "darwin":
+        cmd = ["sips", "-s", "format", "jpeg", "-s", "formatOptions", "best",
+               str(src), "--out", str(target)]
+    else:
+        cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(src), "-q:v", "2", str(target)]
+    subprocess.run(cmd, capture_output=True, timeout=120)
+    if not target.exists():
+        raise RuntimeError("couldn't convert it to JPEG")
+    st = src.stat()
+    os.utime(target, (st.st_atime, st.st_mtime))
 
 
 DIST = HERE / "web" / "dist"

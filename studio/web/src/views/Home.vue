@@ -35,10 +35,15 @@
         <button class="refresh inline" @click="load" :disabled="refreshing">
           ↻ {{ refreshing ? 'Checking…' : 'Refresh' }}
         </button>
+        <button class="btn primary import" @click="importing = true">
+          ⇣ Import from Downloads
+          <span class="count" v-if="waiting" :title="`${waiting} new from today`">{{ waiting }}</span>
+        </button>
       </div>
       <p v-if="!folders.length" class="notice">
-        No folders in <code>{{ root }}</code> yet. Make one per shoot (e.g. <code>2026-09-24</code>)
-        and drop the clips in.
+        No folders in <code>{{ root }}</code> yet. AirDrop clips from your phone and
+        <button class="link" @click="importing = true">import them</button>, or make a folder per
+        shoot (e.g. <code>2026-09-24</code>) and drop the clips in.
       </p>
       <div class="grid">
         <RouterLink
@@ -65,6 +70,10 @@
         ↻ {{ refreshing ? 'Checking for new footage…' : 'Check for new footage' }}
       </button>
     </template>
+    <ImportDialog
+      v-if="importing" :folders="folders" :root="root"
+      @close="importing = false" @imported="imported"
+    />
   </main>
 </template>
 
@@ -72,6 +81,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
+import ImportDialog from '../components/ImportDialog.vue'
 import { useRefreshOnFocus } from '../refresh'
 import { fmtDuration, fmtTime, folderTitle, reelColor } from '../time'
 
@@ -85,6 +95,8 @@ const loading = ref(true)
 const totalFootage = computed(() => folders.value.reduce((a, f) => a + f.totalDuration, 0))
 
 const refreshing = ref(false)
+const importing = ref(false)
+const waiting = ref(0)   // photos and videos from today in Downloads, not yet imported
 
 async function load() {
   if (refreshing.value) return
@@ -96,6 +108,7 @@ async function load() {
     root.value = data.root
     error.value = data.error || ''
     emit('root', data.root)
+    checkDownloads()
   } catch (e) {
     error.value = `Couldn't reach the server: ${e.message}`
   } finally {
@@ -105,6 +118,20 @@ async function load() {
 }
 onMounted(load)
 useRefreshOnFocus(load)
+
+async function checkDownloads() {
+  try {
+    const r = await api.importList()
+    waiting.value = r.days.find((d) => d.day === r.today)?.new || 0
+  } catch {
+    waiting.value = 0
+  }
+}
+
+function imported(r) {
+  importing.value = false
+  router.push(`/shoot/${encodeURIComponent(r.folder)}`)
+}
 
 async function newReel() {
   const name = window.prompt('Name the new reel')
@@ -123,6 +150,15 @@ async function newReel() {
 .head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
 .head.shoots { margin-top: 44px; }
 .refresh.inline { width: auto; margin-left: auto; }
+.import { display: inline-flex; align-items: center; gap: 8px; }
+.import .count {
+  background: var(--sage); color: var(--on-sage); border-radius: 999px; font-size: 12px;
+  font-weight: 700; padding: 0 7px; min-width: 20px; text-align: center;
+}
+.link {
+  border: 0; background: none; padding: 0; color: var(--forest); font-weight: 600; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+}
 .refresh.bottom { margin-top: 20px; }
 h1 { margin: 0; font-size: 26px; color: var(--forest); }
 .head p { margin: 0; }
