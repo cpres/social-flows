@@ -25,7 +25,7 @@
             <span class="dname">{{ dayLabel(d.day) }}</span>
             <span class="dcount">
               {{ d.photos + d.videos }}
-              <span v-if="d.new < d.photos + d.videos" class="muted">· {{ d.new }} new</span>
+              <span v-if="d.new < d.photos + d.videos" class="muted">· {{ d.photos + d.videos - d.new }} duplicate{{ d.photos + d.videos - d.new === 1 ? '' : 's' }}</span>
             </span>
           </button>
         </div>
@@ -36,21 +36,27 @@
           </span>
           <span class="spacer"></span>
           <button class="link" @click="selectAll(true)">All</button>
-          <button class="link" v-if="dayFiles.some((f) => f.importedTo)" @click="selectNew">Only new</button>
           <button class="link" @click="selectAll(false)">None</button>
         </div>
+
+        <p class="dupnote" v-if="chosenDups">
+          {{ chosenDups }} of these {{ chosenDups === 1 ? 'is a duplicate' : 'are duplicates' }}
+          of something already in Footage. {{ chosenDups === 1 ? "It won't" : "They won't" }} be
+          copied again, just deleted from Downloads.
+        </p>
 
         <div class="thumbs">
           <button
             v-for="f in dayFiles" :key="f.name" class="thumb"
-            :class="{ on: chosen.has(f.name), done: f.importedTo }"
+            :class="{ on: chosen.has(f.name), done: isDup(f) }"
             :aria-pressed="chosen.has(f.name)" :title="f.name" @click="toggle(f.name)"
           >
             <img :src="api.importThumb(f.name)" loading="lazy" alt="" />
             <span class="check">{{ chosen.has(f.name) ? '✓' : '' }}</span>
             <span class="tag" v-if="f.kind === 'video'">▶</span>
             <span class="tag heic" v-else-if="f.convert" title="Converted to JPEG on import">HEIC</span>
-            <span class="already" v-if="f.importedTo">in {{ folderTitle(f.importedTo) }}</span>
+            <span class="already" v-if="f.importedTo">already in {{ folderTitle(f.importedTo) }}</span>
+            <span class="already" v-else-if="f.copyOf">copy of {{ f.copyOf }}</span>
             <span class="time">{{ clockTime(f.arrived) }}</span>
           </button>
         </div>
@@ -105,10 +111,8 @@
       </template>
 
       <p v-if="failure" class="err">{{ failure }}</p>
+      <p v-if="notice" class="ok">{{ notice }}</p>
       <div class="controls">
-        <label class="keep" v-if="days.length">
-          <input type="checkbox" v-model="keepOriginals" /> Keep a copy in Downloads
-        </label>
         <span class="spacer"></span>
         <button class="btn" @click="close">Cancel</button>
         <button class="btn primary" v-if="days.length" :disabled="!canImport" @click="go">
@@ -143,11 +147,12 @@ const mode = ref('new')
 const newDate = ref('')
 const newLabel = ref('')
 const target = ref('')
-const keepOriginals = ref(false)
+const notice = ref('')
 const busy = ref(false)
 const failure = ref('')
 const labelInput = ref(null)
 
+const isDup = (f) => !!(f.importedTo || f.copyOf)
 const dayFiles = computed(() => files.value.filter((f) => f.day === day.value))
 const chosenCounts = computed(() => {
   const picked = dayFiles.value.filter((f) => chosen.value.has(f.name))
@@ -156,14 +161,19 @@ const chosenCounts = computed(() => {
   return [v && `${v} video${v === 1 ? '' : 's'}`, p && `${p} photo${p === 1 ? '' : 's'}`]
     .filter(Boolean).join(', ')
 })
+const chosenDups = computed(() => dayFiles.value.filter((f) => chosen.value.has(f.name) && isDup(f)).length)
+const chosenNew = computed(() => chosen.value.size - chosenDups.value)
 const newName = computed(() => [newDate.value, newLabel.value.trim()].filter(Boolean).join(' '))
 const clash = computed(() => props.folders.some((f) => f.name === newName.value))
 const destName = computed(() => (mode.value === 'new' ? newName.value : target.value))
 const canImport = computed(() =>
   !busy.value && chosen.value.size > 0 && !!destName.value && !(mode.value === 'new' && clash.value))
 const importLabel = computed(() => {
-  const n = chosen.value.size
-  return `${keepOriginals.value ? 'Copy' : 'Import'} ${n} file${n === 1 ? '' : 's'}`
+  const n = chosenNew.value
+  const d = chosenDups.value
+  const clear = `clear ${d} duplicate${d === 1 ? '' : 's'}`
+  if (!n) return clear[0].toUpperCase() + clear.slice(1)
+  return `Import ${n} file${n === 1 ? '' : 's'}${d ? ` · ${clear}` : ''}`
 })
 
 // A local date as YYYY-MM-DD (toISOString would give the UTC day).
@@ -180,8 +190,8 @@ function dayLabel(d) {
 
 function pickDay(d) {
   day.value = d
-  // Everything new from that day, ready to go; already-imported ones left out.
-  chosen.value = new Set(dayFiles.value.filter((f) => !f.importedTo).map((f) => f.name))
+  // Everything from that day: new files get imported, duplicates cleared out.
+  chosen.value = new Set(dayFiles.value.map((f) => f.name))
   newDate.value = d
   // A folder for that day already? Offer it, else a new one.
   const match = props.folders.find((f) => f.name.startsWith(d))
@@ -195,7 +205,6 @@ function toggle(name) {
   chosen.value = s
 }
 const selectAll = (on) => { chosen.value = new Set(on ? dayFiles.value.map((f) => f.name) : []) }
-const selectNew = () => { chosen.value = new Set(dayFiles.value.filter((f) => !f.importedTo).map((f) => f.name)) }
 
 function useExisting(name) {
   target.value = name
@@ -216,13 +225,19 @@ async function go() {
   try {
     const r = await api.importFiles({
       files: [...chosen.value], folder: destName.value,
-      create: mode.value === 'new', keepOriginals: keepOriginals.value,
+      create: mode.value === 'new',
     })
     if (r.failed.length && !r.imported.length && !r.skipped.length) {
       failure.value = r.failed.map((f) => `${f.name}: ${f.error}`).join('\n')
       return
     }
-    emit('imported', r)
+    if (r.imported.length) {
+      emit('imported', r)
+      return
+    }
+    const n = r.removed.length
+    notice.value = `Deleted ${n} duplicate${n === 1 ? '' : 's'} from Downloads.`
+    await load()
   } catch (e) {
     failure.value = e.message
   } finally {
@@ -235,8 +250,7 @@ function close() {
 }
 const onKey = (e) => { if (e.key === 'Escape') close() }
 
-onMounted(async () => {
-  window.addEventListener('keydown', onKey)
+async function load() {
   try {
     const r = await api.importList()
     dir.value = r.dir
@@ -245,13 +259,18 @@ onMounted(async () => {
     files.value = r.files
     error.value = r.error || ''
     // Start on today if anything came in, else the latest day with something new.
-    const start = r.days.find((d) => d.day === today.value) || r.days.find((d) => d.new) || r.days[0]
+    const start = r.days.find((d) => d.day === day.value) || r.days.find((d) => d.day === today.value) || r.days.find((d) => d.new) || r.days[0]
     if (start) pickDay(start.day)
   } catch (e) {
     error.value = `Couldn't read Downloads: ${e.message}`
   } finally {
     loading.value = false
   }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onKey)
+  load()
 })
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 </script>
@@ -353,8 +372,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .exmeta .muted { font-size: 12px; }
 
 .controls { margin-top: 0; }
-.keep { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; }
-.keep input { accent-color: var(--forest); }
+.dupnote {
+  margin: 0; padding: 8px 12px; font-size: 13px; border-radius: 8px;
+  background: var(--sage-soft); color: var(--ink);
+}
+.ok { margin: 0; color: var(--forest); font-weight: 600; }
 @media (max-width: 700px) {
   .dest { grid-template-columns: 1fr; }
 }

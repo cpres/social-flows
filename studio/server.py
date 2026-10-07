@@ -872,32 +872,26 @@ def import_list():
         return {"dir": str(DOWNLOADS), "days": [], "files": [],
                 "error": f"{DOWNLOADS} does not exist"}
     since = datetime.combine(date.today() - timedelta(days=IMPORT_DAYS), datetime.min.time())
-    files = []
+    files, seen = [], {}
+    paths = sorted((p for p in DOWNLOADS.iterdir() if importable(p)), key=lambda p: arrived(p.stat()))
     with lib.connect() as db:
-        for p in DOWNLOADS.iterdir():
-            if not importable(p):
-                continue
+        for p in paths:
             st = p.stat()
             at = arrived(st)
             if at < since.timestamp():
                 continue
-            heic = p.suffix.lower() in HEIC_EXTS
-            # Imported before: same name in a shoot (as .jpg if it was HEIC), same size
-            # unless it was converted.
-            stored = Path(p.name).with_suffix(".jpg").name if heic else p.name
-            row = db.execute("SELECT folder FROM media WHERE name = ? AND missing = 0 "
-                             "AND (? OR size = ?) ORDER BY id LIMIT 1",
-                             (stored, heic, st.st_size)).fetchone()
             files.append({"name": p.name, "kind": Library.kind_of(p) or "photo",
                           "size": st.st_size, "arrived": at,
                           "day": datetime.fromtimestamp(at).strftime("%Y-%m-%d"),
-                          "convert": heic, "importedTo": row["folder"] if row else None})
+                          "convert": p.suffix.lower() in HEIC_EXTS,
+                          "importedTo": in_footage(db, p),
+                          "copyOf": copy_in_batch(p, seen)})
     files.sort(key=lambda f: f["arrived"])
     days = {}
     for f in files:
         d = days.setdefault(f["day"], {"day": f["day"], "photos": 0, "videos": 0, "new": 0})
         d["videos" if f["kind"] == "video" else "photos"] += 1
-        d["new"] += not f["importedTo"]
+        d["new"] += not (f["importedTo"] or f["copyOf"])
     return {"dir": str(DOWNLOADS), "today": date.today().isoformat(),
             "days": sorted(days.values(), key=lambda d: d["day"], reverse=True), "files": files}
 
@@ -913,16 +907,21 @@ def import_thumb(file: str, w: int = 320):
 
 @app.post("/api/import")
 def import_files(body: dict = Body(...)):
-    """Move (or copy) files from Downloads into a shoot folder.
+    """Move files from Downloads into a shoot folder.
 
-    {files: [names], folder: "2026-10-06 garden", create: true, keepOriginals: false}
+    {files: [names], folder: "2026-10-06 garden", create: true}
+
+    A file that's already in Footage (or the same as one earlier in this
+    import) isn't copied again; it's deleted from Downloads, so there's only
+    ever one of each.
     """
     name = (body.get("folder") or "").strip()
     if not folder_name_ok(name):
         raise HTTPException(400, "Give the folder a name (no slashes or colons)")
     if not ROOT.is_dir():
         raise HTTPException(400, f"{ROOT} does not exist")
-    sources = [download_path(f) for f in body.get("files") or []]
+    sources = sorted((download_path(f) for f in body.get("files") or []),
+                     key=lambda p: arrived(p.stat()))
     if not sources:
         raise HTTPException(400, "Pick at least one file to import")
     dest = ROOT / name
@@ -933,30 +932,85 @@ def import_files(body: dict = Body(...)):
     elif not dest.is_dir():
         raise HTTPException(404, f"No folder called '{name}'")
 
-    keep = bool(body.get("keepOriginals"))
-    imported, skipped, failed = [], [], []
+    lib.scan()   # so files dropped into Footage by hand count as already there
+    seen = {}
+    copies = {src: copy_in_batch(src, seen) for src in sources}   # before anything moves
+    imported, removed, failed = [], [], []
     for src in sources:
         heic = src.suffix.lower() in HEIC_EXTS
-        target = dest / (src.with_suffix(".jpg").name if heic else src.name)
-        if target.exists():
-            if heic or target.stat().st_size == src.stat().st_size:
-                skipped.append(src.name)   # already there
-                continue
-            target = free_name(target)
         try:
+            with lib.connect() as db:
+                dup = in_footage(db, src)
+            if dup or copies[src]:
+                src.unlink()
+                removed.append(src.name)
+                continue
+            target = dest / (src.with_suffix(".jpg").name if heic else src.name)
+            if target.exists():
+                target = free_name(target)   # a different file with the same name
             if heic:
                 to_jpeg(src, target)
-                if not keep:
-                    src.unlink()
-            elif keep:
-                shutil.copy2(src, target)
+                src.unlink()
             else:
                 shutil.move(str(src), str(target))
             imported.append(target.name)
         except Exception as e:   # one bad file shouldn't stop the rest
             failed.append({"name": src.name, "error": str(e)})
     lib.scan([dest])
-    return {"folder": name, "imported": imported, "skipped": skipped, "failed": failed}
+    if not any(dest.iterdir()) and body.get("create"):
+        dest.rmdir()   # everything was a duplicate: no empty folder left behind
+    return {"folder": name, "imported": imported, "removed": removed, "failed": failed}
+
+
+def fingerprint(path):
+    """Size plus a hash of the start and end: enough to tell two copies of a
+    phone photo or clip apart from different files, without reading a whole video."""
+    size = path.stat().st_size
+    h = hashlib.sha1(str(size).encode())
+    with open(path, "rb") as f:
+        h.update(f.read(1 << 20))
+        if size > 2 << 20:
+            f.seek(-(1 << 20), os.SEEK_END)
+            h.update(f.read())
+    return h.hexdigest()
+
+
+def in_footage(db, src):
+    """The shoot folder that already has this file, if any.
+
+    Matched on content, so a copy AirDrop renamed ('IMG_1234 2.MOV') still
+    counts. A HEIC photo is converted on import, so it's matched by name.
+    """
+    if src.suffix.lower() in HEIC_EXTS:
+        stems = {src.stem, re.sub(r" \d+$", "", src.stem)}
+        rows = db.execute(f"SELECT folder FROM media WHERE missing = 0 AND kind = 'photo' AND name IN "
+                          f"({','.join('?' * len(stems))})", [f"{s}.jpg" for s in stems]).fetchall()
+        return rows[0]["folder"] if rows else None
+    size, fp = src.stat().st_size, None
+    for row in db.execute("SELECT path, folder FROM media WHERE size = ? AND missing = 0", (size,)):
+        other = ROOT / row["path"]
+        try:
+            fp = fp or fingerprint(src)
+            if fingerprint(other) == fp:
+                return row["folder"]
+        except OSError:
+            continue
+    return None
+
+
+def copy_in_batch(src, seen):
+    """The name of an earlier file in Downloads with the same content, if any
+    (AirDrop the same thing twice and you get 'IMG_1234 2.MOV'). Records src.
+    Only files of the same size are ever read."""
+    size = src.stat().st_size
+    group = seen.setdefault(size, [])
+    fp = fingerprint(src) if group else None
+    for entry in group:
+        entry[1] = entry[1] or fingerprint(entry[0])
+        if entry[1] == fp:
+            return entry[0].name
+    group.append([src, fp])
+    return None
 
 
 def free_name(path):
