@@ -44,10 +44,12 @@ python3 studio/server.py --open
   selected; click thumbnails to leave some out. Then either make a **new shoot
   folder** (the date plus an optional "what was it", e.g.
   `2026-10-06 garden build`) or **add them to an existing folder** (a folder
-  already named for that day is picked for you). Files are moved, unless you
-  tick *Keep a copy in Downloads*. iPhone HEIC photos are converted to JPEG on
-  the way in. Files already in a shoot folder are marked and left unselected.
-  `DOWNLOADS_DIR` points it somewhere else.
+  already named for that day is picked for you). Files are moved, so there's
+  only ever one of each. iPhone HEIC photos are converted to JPEG on the way in.
+  A file that's already in a shoot folder (matched on content, so AirDrop's
+  renamed copies like `IMG_1234 2.MOV` count), or that's a repeat of another
+  file in Downloads, isn't copied again: importing just deletes it from
+  Downloads. `DOWNLOADS_DIR` points it somewhere else.
 - **Open a shoot** to go through its clips in the order they were shot. Under the
   video, a filmstrip shows what happens where; drag the handles to pick a part,
   or type exact start and length. Then click a reel (or press `1`–`9`) to add
