@@ -453,7 +453,7 @@ def render_segment(seg, idx, cfg, workdir, keep_audio):
     length = seg["render_length"]
     n_frames = round(length * fps)
     out = workdir / f"seg_{idx:03d}.mkv"
-    cmd = ["ffmpeg", "-y", "-v", "error"]
+    cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error"]
 
     if seg["kind"] == "image":
         cmd += ["-i", str(seg["path"])]
@@ -519,7 +519,7 @@ def assemble(segs, plan, cfg, workdir):
     """Join all cuts, applying hard cuts or crossfades between them."""
     fps = cfg["fps"]
     out = workdir / "assembled.mkv"
-    cmd = ["ffmpeg", "-y", "-v", "error"]
+    cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error"]
     for p in segs:
         cmd += ["-i", str(p)]
 
@@ -614,7 +614,7 @@ def compose_top(top, assembled, cfg, under, workdir):
                   f"trim=end_frame={frames}[div];[top][div][bot]vstack=inputs=3[v]")
     else:
         graph += "[top][bot]vstack=inputs=2[v]"
-    run(["ffmpeg", "-y", "-v", "error",
+    run(["ffmpeg", "-nostdin", "-y", "-v", "error",
          "-ss", f"{top['start']:.3f}", "-t", f"{top['length']:.3f}", "-i", str(top["path"]),
          "-i", str(assembled), "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
          *video_codec(cfg), "-r", str(fps), "-c:a", "pcm_s16le", str(out)])
@@ -631,7 +631,7 @@ def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output)
 
     if not music:
         audio = ["-map", "0:a"] if keep_audio else ["-an"]
-        run(["ffmpeg", "-y", "-v", "error", "-i", str(assembled),
+        run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(assembled),
              "-map", "0:v", *audio, *common])
         return
 
@@ -650,7 +650,7 @@ def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output)
     else:
         graph = f"{music_chain}[a]"
 
-    run(["ffmpeg", "-y", "-v", "error",
+    run(["ffmpeg", "-nostdin", "-y", "-v", "error",
          "-i", str(assembled),
          "-ss", f"{music_start:.3f}", "-i", str(music_file),
          "-filter_complex", graph, "-map", "0:v", "-map", "[a]", *common])

@@ -69,4 +69,11 @@ if [ ! -f web/dist/index.html ] || [ -n "$(find web/src web/index.html web/packa
   (cd web && { [ -d node_modules ] && [ node_modules -nt package.json ] || npm install --silent; } && npm run build --silent)
 fi
 
-exec .venv/bin/python server.py --open ${ARGS[@]+"${ARGS[@]}"}
+# Put the terminal back as we found it when the server stops (Ctrl-C included),
+# in case anything it ran left typing invisible.
+if [ -t 0 ]; then
+  TTY_STATE="$(stty -g)"
+  trap 'stty "$TTY_STATE"' EXIT
+  trap 'exit 130' INT TERM
+fi
+.venv/bin/python server.py --open ${ARGS[@]+"${ARGS[@]}"}

@@ -773,7 +773,7 @@ def rendered_thumb(name: str):
     out = CACHE / f"{key}.jpg"
     if not out.exists():
         CACHE.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", "0.5", "-i", str(path),
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", "0.5", "-i", str(path),
                         "-frames:v", "1", "-vf", "scale=240:-2", "-q:v", "4", str(out)],
                        capture_output=True, timeout=60)
         if not out.exists():
@@ -825,7 +825,7 @@ def make_thumb(path, t=0.0, w=480):
                             "--out", str(out)], capture_output=True, timeout=60)
         else:
             seek = ["-ss", f"{max(t, 0):.2f}"] if Library.kind_of(path) == "video" else []
-            subprocess.run(["ffmpeg", "-y", "-v", "error", *seek, "-i", str(path),
+            subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", *seek, "-i", str(path),
                             "-frames:v", "1", "-vf", f"scale={w}:-2", "-q:v", "4", str(out)],
                            capture_output=True, timeout=60)
         if not out.exists():
@@ -1026,7 +1026,7 @@ def to_jpeg(src, target):
         cmd = ["sips", "-s", "format", "jpeg", "-s", "formatOptions", "best",
                str(src), "--out", str(target)]
     else:
-        cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(src), "-q:v", "2", str(target)]
+        cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(src), "-q:v", "2", str(target)]
     subprocess.run(cmd, capture_output=True, timeout=120)
     if not target.exists():
         raise RuntimeError("couldn't convert it to JPEG")
