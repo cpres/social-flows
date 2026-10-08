@@ -122,7 +122,8 @@ useRefreshOnFocus(load)
 async function checkDownloads() {
   try {
     const r = await api.importList()
-    waiting.value = r.days.find((d) => d.day === r.today)?.new || 0
+    const songs = (r.songs || []).filter((f) => f.day === r.today && !f.inShelf).length
+    waiting.value = (r.days.find((d) => d.day === r.today)?.new || 0) + songs
   } catch {
     waiting.value = 0
   }

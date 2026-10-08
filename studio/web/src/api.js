@@ -52,6 +52,7 @@ export const api = {
   importList: () => fetch('/api/import').then(json),
   importThumb: (file, w = 320) => `/api/import/thumb/${enc(file)}?w=${w}`,
   importFiles: (body) => send('POST', '/api/import', body),
+  importMusic: (files) => send('POST', '/api/import/music', { files }),
 
   media: (folder, file) => `/api/media/${enc(folder)}/${enc(file)}`,
   thumb: (folder, file, t = 0, w = 480) =>

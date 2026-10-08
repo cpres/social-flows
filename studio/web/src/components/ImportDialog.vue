@@ -12,7 +12,7 @@
       <p v-if="loading" class="muted">Looking in Downloads…</p>
       <p v-else-if="error" class="err">{{ error }}</p>
       <p v-else-if="!days.length" class="empty">
-        No photos or videos have arrived in Downloads in the last month.
+        No photos, videos or songs have arrived in Downloads in the last month.
         AirDrop some from your phone, then come back here.
       </p>
 
@@ -24,12 +24,34 @@
           >
             <span class="dname">{{ dayLabel(d.day) }}</span>
             <span class="dcount">
-              {{ d.photos + d.videos }}
+              {{ d.photos + d.videos }}<template v-if="d.songs"> · ♪ {{ d.songs }}</template>
               <span v-if="d.new < d.photos + d.videos" class="muted">· {{ d.photos + d.videos - d.new }} duplicate{{ d.photos + d.videos - d.new === 1 ? '' : 's' }}</span>
             </span>
           </button>
         </div>
 
+        <section class="songs" v-if="daySongs.length">
+          <div class="selbar">
+            <b>Songs</b>
+            <span class="muted">for the music folder · <span class="mono">{{ musicDir }}</span></span>
+          </div>
+          <label v-for="f in daySongs" :key="f.name" class="song" :class="{ done: f.inShelf }">
+            <input type="checkbox" :checked="chosenSongs.has(f.name)" @change="toggleSong(f.name)" />
+            <span class="sname">♪ {{ f.name }}</span>
+            <span class="muted small" v-if="f.inShelf">already there as {{ f.inShelf }}</span>
+            <span class="muted mono small">{{ clockTime(f.arrived) }}</span>
+          </label>
+          <div class="songgo">
+            <span class="muted small" v-if="songNotice">{{ songNotice }}</span>
+            <span class="spacer"></span>
+            <button class="btn" :disabled="!chosenSongs.size || songBusy" @click="moveSongs">
+              {{ songBusy ? 'Moving…' : `Move ${chosenSongs.size} song${chosenSongs.size === 1 ? '' : 's'} to the music folder` }}
+            </button>
+          </div>
+        </section>
+        <p class="ok" v-else-if="songNotice">{{ songNotice }}</p>
+
+        <template v-if="dayFiles.length">
         <div class="selbar">
           <span><b>{{ chosen.size }}</b> of {{ dayFiles.length }} selected
             <span class="muted" v-if="chosenCounts">· {{ chosenCounts }}</span>
@@ -108,6 +130,7 @@
             </div>
           </div>
         </div>
+        </template>
       </template>
 
       <p v-if="failure" class="err">{{ failure }}</p>
@@ -115,7 +138,7 @@
       <div class="controls">
         <span class="spacer"></span>
         <button class="btn" @click="close">Cancel</button>
-        <button class="btn primary" v-if="days.length" :disabled="!canImport" @click="go">
+        <button class="btn primary" v-if="dayFiles.length" :disabled="!canImport" @click="go">
           {{ busy ? 'Importing…' : importLabel }}
         </button>
       </div>
@@ -142,6 +165,11 @@ const days = ref([])
 const files = ref([])
 const day = ref('')
 const chosen = ref(new Set())
+const songs = ref([])
+const musicDir = ref('')
+const chosenSongs = ref(new Set())
+const songBusy = ref(false)
+const songNotice = ref('')
 
 const mode = ref('new')
 const newDate = ref('')
@@ -154,6 +182,7 @@ const labelInput = ref(null)
 
 const isDup = (f) => !!(f.importedTo || f.copyOf)
 const dayFiles = computed(() => files.value.filter((f) => f.day === day.value))
+const daySongs = computed(() => songs.value.filter((f) => f.day === day.value))
 const chosenCounts = computed(() => {
   const picked = dayFiles.value.filter((f) => chosen.value.has(f.name))
   const v = picked.filter((f) => f.kind === 'video').length
@@ -192,6 +221,7 @@ function pickDay(d) {
   day.value = d
   // Everything from that day: new files get imported, duplicates cleared out.
   chosen.value = new Set(dayFiles.value.map((f) => f.name))
+  chosenSongs.value = new Set(daySongs.value.map((f) => f.name))
   newDate.value = d
   // A folder for that day already? Offer it, else a new one.
   const match = props.folders.find((f) => f.name.startsWith(d))
@@ -204,6 +234,32 @@ function toggle(name) {
   s.has(name) ? s.delete(name) : s.add(name)
   chosen.value = s
 }
+function toggleSong(name) {
+  const s = new Set(chosenSongs.value)
+  s.has(name) ? s.delete(name) : s.add(name)
+  chosenSongs.value = s
+}
+
+async function moveSongs() {
+  songBusy.value = true
+  failure.value = ''
+  try {
+    const r = await api.importMusic([...chosenSongs.value])
+    const m = r.moved.length
+    const d = r.removed.length
+    songNotice.value = [
+      m && `Moved ${m} song${m === 1 ? '' : 's'} to the music folder.`,
+      d && `Deleted ${d} the music folder already had.`,
+    ].filter(Boolean).join(' ')
+    if (r.failed.length) failure.value = r.failed.map((f) => `${f.name}: ${f.error}`).join('\n')
+    await load()
+  } catch (e) {
+    failure.value = e.message
+  } finally {
+    songBusy.value = false
+  }
+}
+
 const selectAll = (on) => { chosen.value = new Set(on ? dayFiles.value.map((f) => f.name) : []) }
 
 function useExisting(name) {
@@ -257,6 +313,8 @@ async function load() {
     today.value = r.today || isoDay(new Date())
     days.value = r.days
     files.value = r.files
+    songs.value = r.songs || []
+    musicDir.value = r.musicDir || ''
     error.value = r.error || ''
     // Start on today if anything came in, else the latest day with something new.
     const start = r.days.find((d) => d.day === day.value) || r.days.find((d) => d.day === today.value) || r.days.find((d) => d.new) || r.days[0]
@@ -371,6 +429,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .exmeta b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .exmeta .muted { font-size: 12px; }
 
+.songs { display: flex; flex-direction: column; gap: 6px; }
+.song {
+  display: flex; align-items: center; gap: 10px; padding: 6px 10px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--paper); font-size: 14px;
+}
+.song input { accent-color: var(--forest); margin: 0; }
+.song.done .sname { opacity: 0.6; }
+.sname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.small { font-size: 12px; }
+.songgo { display: flex; align-items: center; gap: 10px; }
 .controls { margin-top: 0; }
 .dupnote {
   margin: 0; padding: 8px 12px; font-size: 13px; border-radius: 8px;

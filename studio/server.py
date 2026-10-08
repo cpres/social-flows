@@ -49,7 +49,7 @@ ENGINE = HERE.parent / "montage" / "montage.py"
 sys.path.insert(0, str(ENGINE.parent))
 sys.path.insert(0, str(HERE))
 from db import DEFAULT_SETTINGS, Library, default_start, now, settings_of  # noqa: E402
-from music import Shelf, beat_detection_available  # noqa: E402
+from music import AUDIO_EXTS, Shelf, beat_detection_available  # noqa: E402
 from share import Shares  # noqa: E402
 
 ROOT = Path(os.environ.get("FOOTAGE_DIR", "~/Footage")).expanduser().resolve()
@@ -852,11 +852,31 @@ def arrived(st):
     return max(st.st_mtime, st.st_ctime)
 
 
-def download_path(name):
+def is_song(path):
+    return path.is_file() and not path.name.startswith(".") and path.suffix.lower() in AUDIO_EXTS
+
+
+def download_path(name, ok=importable):
     path = (DOWNLOADS / name).resolve()
-    if path.parent != DOWNLOADS or not path.exists() or not importable(path):
+    if path.parent != DOWNLOADS or not path.exists() or not ok(path):
         raise HTTPException(404, f"Not in Downloads: {name}")
     return path
+
+
+def in_shelf(src):
+    """The music-folder track with the same content as this download, if any."""
+    if not shelf.folder.is_dir():
+        return None
+    size, fp = src.stat().st_size, None
+    for p in shelf.folder.iterdir():
+        try:
+            if is_song(p) and p.stat().st_size == size:
+                fp = fp or fingerprint(src)
+                if fingerprint(p) == fp:
+                    return p.name
+        except OSError:
+            continue
+    return None
 
 
 def folder_name_ok(name):
@@ -887,13 +907,55 @@ def import_list():
                           "importedTo": in_footage(db, p),
                           "copyOf": copy_in_batch(p, seen)})
     files.sort(key=lambda f: f["arrived"])
+    # Songs downloaded for the music folder, listed apart from the footage.
+    songs = []
+    for p in DOWNLOADS.iterdir():
+        if not is_song(p):
+            continue
+        at = arrived(p.stat())
+        if at >= since.timestamp():
+            songs.append({"name": p.name, "arrived": at,
+                          "day": datetime.fromtimestamp(at).strftime("%Y-%m-%d"),
+                          "inShelf": in_shelf(p)})
+    songs.sort(key=lambda f: f["arrived"])
     days = {}
     for f in files:
-        d = days.setdefault(f["day"], {"day": f["day"], "photos": 0, "videos": 0, "new": 0})
+        d = days.setdefault(f["day"], {"day": f["day"], "photos": 0, "videos": 0, "songs": 0, "new": 0})
         d["videos" if f["kind"] == "video" else "photos"] += 1
         d["new"] += not (f["importedTo"] or f["copyOf"])
-    return {"dir": str(DOWNLOADS), "today": date.today().isoformat(),
-            "days": sorted(days.values(), key=lambda d: d["day"], reverse=True), "files": files}
+    for f in songs:
+        d = days.setdefault(f["day"], {"day": f["day"], "photos": 0, "videos": 0, "songs": 0, "new": 0})
+        d["songs"] += 1
+    return {"dir": str(DOWNLOADS), "today": date.today().isoformat(), "musicDir": str(shelf.folder),
+            "days": sorted(days.values(), key=lambda d: d["day"], reverse=True),
+            "files": files, "songs": songs}
+
+
+@app.post("/api/import/music")
+def import_music(body: dict = Body(...)):
+    """Move songs from Downloads into the music folder. {files: [names]}
+
+    A song the music folder already has is just deleted from Downloads.
+    """
+    sources = [download_path(f, is_song) for f in body.get("files") or []]
+    if not sources:
+        raise HTTPException(400, "Pick at least one song")
+    shelf.folder.mkdir(parents=True, exist_ok=True)
+    moved, removed, failed = [], [], []
+    for src in sources:
+        try:
+            if in_shelf(src):
+                src.unlink()
+                removed.append(src.name)
+                continue
+            target = shelf.folder / src.name
+            if target.exists():
+                target = free_name(target)
+            shutil.move(str(src), str(target))
+            moved.append(target.name)
+        except Exception as e:   # one bad file shouldn't stop the rest
+            failed.append({"name": src.name, "error": str(e)})
+    return {"dir": str(shelf.folder), "moved": moved, "removed": removed, "failed": failed}
 
 
 @app.get("/api/import/thumb/{file}")
