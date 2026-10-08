@@ -993,6 +993,7 @@ const frameProps = computed(() => ({
 }))
 const frameOn = {
   loaded: (e) => onFrameLoaded(e), play: () => player.events.onPlay(), pause: () => player.events.onPause(),
+  ended: () => onFrameEnded(),
   error: () => player.events.onError(), toggle: () => player.toggle(), focus: (f) => setFocus(f),
 }
 
@@ -1073,6 +1074,15 @@ watch(() => player.playhead.value, (t) => {
     startPart(reelIdx.value + 1)
   }
 })
+
+// The clip ran out before the part's end (the file is a touch shorter than
+// its measured duration): move on rather than freeze on the last frame.
+function onFrameEnded() {
+  player.events.onEnded()
+  if (!reelOn.value || clocked.value) return
+  const p = kept.value[reelIdx.value]
+  if (p && p === current.value && p.media.kind === 'video') startPart(reelIdx.value + 1)
+}
 
 // A Stack reel with fit off ends when its top clip does.
 watch(() => reelTime.value, (t) => {

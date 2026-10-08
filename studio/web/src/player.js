@@ -52,6 +52,10 @@ export function usePlayer(range) {
   const events = {
     onPlay: () => { playing.value = true },
     onPause: () => { playing.value = false },
+    // The file can stop a little short of the length the server measured
+    // (the container's duration, not the last frame), so a part that runs
+    // to the clip's end never reaches it: treat the clip ending as its end.
+    onEnded: () => { playing.value = false; playingPart.value = false },
     onError: () => { failed.value = true },
   }
   return { video, playhead, playing, playingPart, failed, seek, toggle, playPart, reset, events }

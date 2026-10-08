@@ -20,7 +20,7 @@
           v-if="media.kind === 'video'" :ref="bindVideo" :src="api.media(media.folder, media.file)"
           :poster="api.thumb(media.folder, media.file, posterTime, 640)"
           preload="auto" playsinline :muted="muted" @loadedmetadata="onMeta" @play="$emit('play')" @pause="$emit('pause')"
-          @playing="firePending"
+          @ended="$emit('ended')" @playing="firePending"
           @error="$emit('error')" @click="$emit('toggle')"
         ></video>
         <img v-else :src="api.thumb(media.folder, media.file, 0, 1080)" alt="" @load="onImg" />
@@ -70,7 +70,7 @@ const props = defineProps({
   maxH: { type: Number, default: 0 },              // fit inside this height (a Stack pane) instead of the window's
   bindVideo: { type: Function, default: () => {} },
 })
-const emit = defineEmits(['focus', 'play', 'pause', 'error', 'toggle', 'loaded'])
+const emit = defineEmits(['focus', 'play', 'pause', 'ended', 'error', 'toggle', 'loaded'])
 
 // Instagram covers roughly the bottom fifth (caption) and a right-hand column (buttons).
 const Guides = () => h('div', { class: 'guides' }, [
