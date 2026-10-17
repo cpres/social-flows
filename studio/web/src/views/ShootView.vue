@@ -33,11 +33,11 @@
         </button>
       </aside>
 
-      <section class="editor" v-if="current">
+      <section class="editor" :class="{ landscape }" v-if="current">
         <div class="preview-col">
           <ReelFrame
             :key="current.id" :media="current" :fit="current.kind === 'video' && range.layout ? range.layout : 'fill'"
-            :guides="guides" muted
+            :guides="guides && !landscape" muted :out="aspect(frameShape)"
             :focus-x="range.focusX ?? 0.5" :focus-y="range.focusY ?? 0.5" :zoom="range.zoom || 1" :poster-time="range.start"
             :bind-video="(el) => (player.video.value = el)"
             @loaded="onLoaded" @play="player.events.onPlay" @pause="player.events.onPause"
@@ -48,7 +48,16 @@
               Thumbnails and trimming still work.
             </p>
           </ReelFrame>
-          <label class="guides-toggle muted"><input type="checkbox" v-model="guides" /> Show Instagram overlays <kbd>G</kbd></label>
+          <div class="framebar">
+            <span class="shapes" role="group" aria-label="Frame for">
+              <button
+                v-for="sh in SHAPES" :key="sh.v" :class="{ on: frameShape === sh.v }" @click="shootShape = sh.v"
+                :disabled="!!active" :title="active ? `Framed for ${reelName(active.reelId)}, a ${frameShape} reel`
+                  : `Frame clips for ${sh.label.toLowerCase()} reels (${sh.w}×${sh.h})`"
+              >{{ sh.icon }} {{ sh.ratio }}</button>
+            </span>
+            <label class="guides-toggle muted" v-if="!landscape"><input type="checkbox" v-model="guides" /> Show Instagram overlays <kbd>G</kbd></label>
+          </div>
         </div>
 
         <div class="edit-col">
@@ -101,6 +110,7 @@
             >
               <span class="sw" :style="{ background: reelColor(r.id) }"></span>
               {{ r.name }}
+              <span class="shapetag" v-if="r.orientation === 'landscape'" title="A landscape reel (16:9)">16:9</span>
               <span class="count" v-if="countIn(r.id)" :title="`${countIn(r.id)} part(s) of this clip already in ${r.name}`">{{ countIn(r.id) }} here</span>
               <kbd v-if="i < 9" class="key" :title="`Press ${i + 1} to add`">{{ i + 1 }}</kbd>
             </button>
@@ -144,6 +154,7 @@ import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
 import { useRefreshOnFocus } from '../refresh'
 import { clockTime, defaultStart, fitRange, fmtTime, folderTitle, reelColor } from '../time'
+import { SHAPES, aspect, shootShape } from '../shape'
 import ClipCard from '../components/ClipCard.vue'
 import ReelFrame from '../components/ReelFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
@@ -188,6 +199,13 @@ function initDraft(m) {
 }
 const draftOf = (m) => (m && drafts[m.id]) || { start: 0, length: DEFAULT_LENGTH, focusX: 0.5, focusY: 0.5, zoom: 1, layout: '' }
 const guides = ref(false)
+// The shape the preview frames clips for: your pick (remembered) for a new
+// selection, or the reel's shape while editing a part already in one. A part
+// keeps its framing when it's added to a reel of either shape.
+const frameShape = computed(() => (active.value
+  ? reels.value.find((r) => r.id === active.value.reelId)?.orientation || 'portrait'
+  : shootShape.value))
+const landscape = computed(() => frameShape.value === 'landscape')
 
 const saver = debouncedSaver((id, patch) => api.updateItem(id, patch))
 
@@ -274,7 +292,7 @@ function setRange({ start, length }) {
   }
 }
 
-// Where the 9:16 window sits in a frame that isn't 9:16.
+// Where the reel-shaped window sits in a frame of another shape.
 function setFocus({ x, y, zoom }) {
   const patch = { focusX: x, focusY: y }
   if (zoom !== undefined) patch.zoom = zoom
@@ -301,11 +319,12 @@ function setOut() {
 
 // ---------------------------------------------------------------- layout
 
-// For landscape footage (a timelapse): crop it, or show it whole over a blurred copy.
-const LAYOUTS = [
+// For footage that isn't the reel's shape (a landscape timelapse in a portrait
+// reel): crop it, or show it whole over a blurred copy.
+const LAYOUTS = computed(() => [
   { v: 'fill', label: 'Fill', hint: 'Crops to fit. Drag the window to reframe, corners to zoom.' },
-  { v: 'blur', label: 'Blur', hint: 'The whole frame, with a blurred copy filling the top and bottom.' },
-]
+  { v: 'blur', label: 'Blur', hint: `The whole frame, with a blurred copy filling the ${landscape.value ? 'sides' : 'top and bottom'}.` },
+])
 function setLayout(v) {
   patchRange({ layout: v === 'fill' ? '' : v })
 }
@@ -390,7 +409,7 @@ function onKey(e) {
   else if (k === 'ArrowLeft' && video) { setRange({ ...range.value, start: range.value.start - (e.shiftKey ? 1 : 0.1) }); player.seek(range.value.start) }
   else if (k === 'ArrowRight' && video) { setRange({ ...range.value, start: range.value.start + (e.shiftKey ? 1 : 0.1) }); player.seek(range.value.start) }
   else if (k === 'Escape') activeId.value = null
-  else if (k === 'g' || k === 'G') guides.value = !guides.value
+  else if ((k === 'g' || k === 'G') && !landscape.value) guides.value = !guides.value
   else if (/^[1-9]$/.test(k) && !active.value && reels.value[Number(k) - 1]) tag(reels.value[Number(k) - 1])
   else return
   e.preventDefault()
@@ -407,6 +426,18 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   background: var(--forest); color: var(--cream);
 }
 .key { opacity: 0.55; }
+.shapetag {
+  font-size: 10px; font-weight: 700; padding: 0 5px; border-radius: 4px;
+  border: 1px solid var(--line); color: var(--muted);
+}
+.framebar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.shapes { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px; background: rgb(128 128 128 / 16%); }
+.shapes button {
+  border: 0; background: transparent; color: var(--muted); font-size: 12px; padding: 2px 9px;
+  border-radius: 999px; cursor: pointer;
+}
+.shapes button.on { background: var(--sage); color: var(--on-sage); font-weight: 600; }
+.shapes button:disabled { cursor: default; }
 .flash { margin: 10px 0 0; font-size: 13px; color: var(--forest); }
 .editing {
   margin: -16px 0 18px; padding: 8px 12px; border-left: 4px solid; background: var(--paper);

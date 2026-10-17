@@ -51,7 +51,7 @@ import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch
 import { api } from '../api'
 import { clamp } from '../time'
 
-const REEL = 9 / 16   // the reel's shape
+const REEL = 9 / 16   // a portrait reel's shape
 const BRAND = { forest: '#344a34', sage: '#8aa37c', cream: '#f7f1e3' }
 
 const props = defineProps({
@@ -64,9 +64,9 @@ const props = defineProps({
   cropped: Boolean,
   effect: { type: Object, default: null },
   lighten: { type: Number, default: 0 },
-  zoom: { type: Number, default: 1 },              // >1 = crop tighter than the full 9:16 window           // 0..1, as the engine's `lighten`          // { type, at }: a transition to play into this shot                                 // show only what the reel shows (while playing it)                                   // matches whether the reel keeps clip audio
+  zoom: { type: Number, default: 1 },              // >1 = crop tighter than the full reel-shaped window           // 0..1, as the engine's `lighten`          // { type, at }: a transition to play into this shot                                 // show only what the reel shows (while playing it)                                   // matches whether the reel keeps clip audio
   posterTime: { type: Number, default: 0 },
-  out: { type: Number, default: REEL },             // the shape this clip fills: a Stack reel's pane is wider than 9:16
+  out: { type: Number, default: REEL },             // the shape this clip fills: 9:16, 16:9 for a landscape reel, or a Stack pane
   maxH: { type: Number, default: 0 },              // fit inside this height (a Stack pane) instead of the window's
   bindVideo: { type: Function, default: () => {} },
 })
@@ -161,7 +161,7 @@ const box = computed(() => {
 
 const mediaStyle = computed(() => {
   if (mode.value === 'crop' && props.cropped) {
-    // scale the source so the 9:16 window fills the box
+    // scale the source so the reel-shaped window fills the box
     const w = win.value
     return {
       width: `${(100 / w.w) * 100}%`, height: `${(100 / w.h) * 100}%`,
@@ -170,7 +170,7 @@ const mediaStyle = computed(() => {
     }
   }
   if (mode.value === 'crop') return { inset: 0 }
-  // contained inside the 9:16 box
+  // contained inside the reel-shaped box
   const a = aspect.value
   if (a > OUT.value) {
     const hPct = (OUT.value / a) * 100
@@ -183,8 +183,7 @@ const mediaStyle = computed(() => {
 const backdrop = computed(() =>
   props.fit === 'pad' ? BRAND.forest : mode.value === 'fit' ? 'var(--stage)' : 'transparent')
 
-// The 9:16 window, as percentages of the source.
-// The 9:16 window as percentages of the source: the largest one that fits,
+// The reel-shaped window as percentages of the source: the largest one that fits,
 // shrunk by the zoom, placed by focus (0 = left/top edge, 1 = right/bottom).
 const MAX_ZOOM = 3
 const CORNERS = ['nw', 'ne', 'sw', 'se']
@@ -240,7 +239,7 @@ function move(e) {
     return
   }
   // Corner: the new width follows the pointer's distance from the anchor; the
-  // window stays 9:16 on screen.
+  // window keeps the reel's shape on screen.
   const px = e.clientX - origin.rect.left
   const py = e.clientY - origin.rect.top
   let nw = Math.max(Math.abs(px - origin.anchor.x), Math.abs(py - origin.anchor.y) * OUT.value)

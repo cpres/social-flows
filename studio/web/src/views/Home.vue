@@ -14,6 +14,7 @@
             <img v-if="r.cover" :src="api.thumb(r.cover.folder, r.cover.name, r.cover.start, 640)" loading="lazy" alt="" />
             <div v-else class="empty">empty</div>
             <span class="badge">{{ fmtTime(r.totalLength) }}</span>
+            <span class="badge shape" v-if="r.orientation === 'landscape'" title="A landscape reel (1920×1080)">▭ 16:9</span>
             <span class="swatch" :style="{ background: reelColor(r.id) }"></span>
           </div>
           <div class="meta">
@@ -184,6 +185,7 @@ h1 { margin: 0; font-size: 26px; color: var(--forest); }
   background: rgb(31 42 31 / 75%); color: var(--on-media); padding: 2px 8px; border-radius: 999px;
 }
 .badge.used { right: auto; left: 8px; background: var(--sage); color: var(--on-sage); }
+.badge.shape { right: auto; left: 8px; }
 .swatch { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; }
 .meta { padding: 12px 14px 14px; }
 h2 { margin: 0 0 4px; font-size: 17px; }

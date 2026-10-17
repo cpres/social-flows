@@ -3,8 +3,44 @@
 #   ./studio/run.sh               # http://localhost:3009
 #   ./studio/run.sh --port 9000
 #   ./studio/run.sh --beat        # also install beat detection (for cutting on the beat)
+#   ./studio/run.sh --alias       # once: then type `studio` in any folder to start it
 set -euo pipefail
 cd "$(dirname "$0")"
+
+# --alias: put `studio` in your shell's startup file, pointing at this script.
+add_alias() {   # $1 = startup file; an earlier studio alias in it is replaced
+  local rc="$1" tmp
+  touch "$rc"
+  tmp="$(mktemp)"
+  grep -v -e '^alias studio=' -e '^# Footage Studio: start it from any folder$' "$rc" > "$tmp" || true
+  cat "$tmp" > "$rc"   # rewrite in place, so a symlinked dotfile stays a symlink
+  rm -f "$tmp"
+  if [ -s "$rc" ] && [ -n "$(tail -n 1 "$rc")" ]; then echo >> "$rc"; fi
+  printf '# Footage Studio: start it from any folder\n%s\n' "$LINE" >> "$rc"
+  echo "Added to $rc:  $LINE"
+}
+if [ "${1:-}" = "--alias" ]; then
+  LINE="alias studio=$(printf %q "$PWD/run.sh")"
+  add_alias ~/.bashrc
+  case "${SHELL:-}" in
+    *zsh) add_alias ~/.zshrc ;;   # the Mac's default shell reads ~/.zshrc, not ~/.bashrc
+    *bash)
+      # macOS Terminal starts bash as a login shell, which reads the first of
+      # these and never ~/.bashrc unless that file loads it.
+      if [ "$(uname)" = Darwin ]; then
+        profile=~/.bash_profile
+        for f in ~/.bash_profile ~/.bash_login ~/.profile; do
+          if [ -f "$f" ]; then profile="$f"; break; fi
+        done
+        if ! grep -qs 'bashrc' "$profile"; then
+          printf '\n[ -f ~/.bashrc ] && . ~/.bashrc\n' >> "$profile"
+          echo "Made $profile load ~/.bashrc (Terminal reads $profile)."
+        fi
+      fi ;;
+  esac
+  echo "Open a new terminal window, then type:  studio"
+  exit 0
+fi
 
 BEAT=0
 ARGS=()

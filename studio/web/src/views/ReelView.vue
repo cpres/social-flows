@@ -14,6 +14,12 @@
               @click="setFormat(f.v)" :title="f.hint"
             >{{ f.label }}</button>
           </span>
+          <span class="formats" role="group" aria-label="Reel shape">
+            <button
+              v-for="sh in SHAPES" :key="sh.v" class="btn small" :class="{ active: shape.v === sh.v }"
+              @click="setOrientation(sh.v)" :title="`${sh.ratio} · ${sh.w}×${sh.h}`"
+            >{{ sh.icon }} {{ sh.label }}</button>
+          </span>
         </h1>
         <p class="muted">
           {{ kept.length + (topPart ? 1 : 0) }} of {{ items.length }} parts kept ·
@@ -38,7 +44,7 @@
         <p class="muted">{{ stageText }} · {{ elapsed }}s</p>
       </template>
       <div v-else-if="job.status === 'done'" class="result">
-        <video :src="`${api.renderVideo(job.id)}?t=${job.finishedAt}`" controls playsinline></video>
+        <video :src="`${api.renderVideo(job.id)}?t=${job.finishedAt}`" :class="{ wide: landscape }" controls playsinline></video>
         <div>
           <h3>Rendered</h3>
           <p class="mono path">{{ job.output }}</p>
@@ -115,12 +121,12 @@
       </div>
       <template v-if="isStack">
         <label class="field">
-          Split, top / underneath
+          Split, {{ panes.top.toLowerCase() }} / {{ panes.under.toLowerCase() }}
           <input type="range" min="0.3" max="0.7" step="0.05" v-model.number="settings.stackSplit" />
           <small class="mono">{{ Math.round(settings.stackSplit * 100) }} / {{ 100 - Math.round(settings.stackSplit * 100) }}</small>
         </label>
         <label class="field">
-          Divider (px at 1080 wide)
+          Divider (px)
           <input type="number" min="0" max="20" step="2" v-model.number="settings.dividerPx" />
         </label>
         <label class="field">
@@ -128,15 +134,15 @@
           <input type="color" v-model="settings.dividerColor" />
         </label>
         <label class="field check">
-          <span><input type="checkbox" v-model="settings.fitTop" /> Fit timelapse to underneath</span>
-          <small>{{ settings.fitTop ? 'The top clip speeds up or slows down to end with the parts underneath.'
-            : 'The reel runs as long as the top clip at normal speed.' }}</small>
+          <span><input type="checkbox" v-model="settings.fitTop" /> Fit timelapse to the parts</span>
+          <small>{{ settings.fitTop ? 'The timelapse speeds up or slows down to end with the parts.'
+            : 'The reel runs as long as the timelapse at normal speed.' }}</small>
         </label>
       </template>
       <label class="field">
-        {{ isStack ? 'Underneath framing' : 'Framing' }}
+        {{ isStack ? panes.framing : 'Framing' }}
         <select v-model="settings.fit">
-          <option value="fill">Fill (crop to 9:16)</option>
+          <option value="fill">Fill (crop to {{ shape.ratio }})</option>
           <option value="blur">Blurred background</option>
           <option value="pad">Brand colour bars</option>
         </select>
@@ -190,9 +196,9 @@
       <div v-if="isStack" class="strip toptrack">
         <button
           v-if="topPart" class="seg topseg" :class="{ current: topPart === current }"
-          @click="select(items.indexOf(topPart))" :title="`${topPart.media.file}: plays on top for the whole reel`"
+          @click="select(items.indexOf(topPart))" :title="`${topPart.media.file}: plays ${panes.on} for the whole reel`"
         >▤ {{ topPart.media.file }} · {{ topRate.toFixed(2) }}×</button>
-        <span v-else class="muted toptrack-empty">No top clip: drag one to the Top slot</span>
+        <span v-else class="muted toptrack-empty">No timelapse: drag a clip to the {{ panes.top }} slot</span>
         <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
       </div>
       <div class="strip">
@@ -223,7 +229,7 @@
       <aside class="cliplist" ref="listEl">
         <!-- Stack: the clip on top for the whole reel, then the parts underneath -->
         <template v-if="isStack">
-          <div class="slotlabel">Top (timelapse)</div>
+          <div class="slotlabel">{{ panes.top }} (timelapse)</div>
           <div
             class="topslot" :class="{ over: dragOver === 'top', empty: !topPart }"
             @dragover.prevent="dragOver = 'top'" @dragleave="dragOver = null" @drop="dropTop"
@@ -240,9 +246,9 @@
                 @select="select(items.indexOf(topPart))"
               />
             </div>
-            <p v-else class="muted">Drop a clip here to play it on top for the whole reel</p>
+            <p v-else class="muted">Drop a clip here to play it {{ panes.on }} for the whole reel</p>
           </div>
-          <div class="slotlabel">Underneath</div>
+          <div class="slotlabel">{{ panes.under }}</div>
         </template>
         <template v-for="(p, i) in items" :key="p.id">
         <div
@@ -266,8 +272,8 @@
             >{{ p.keep ? '✓' : '–' }}</button>
             <button
               v-if="isStack && p.media.kind === 'video'" class="maketop" @click.stop="makeTop(p)"
-              title="Play this on top for the whole reel"
-            >⤒</button>
+              :title="`Play this ${panes.on} for the whole reel`"
+            >{{ panes.icon }}</button>
           </ClipCard>
           <button
             v-if="hasNext(p)" class="tpill" :class="`t-${effective(p)}`"
@@ -278,7 +284,7 @@
         </template>
       </aside>
 
-      <section class="editor" v-if="current">
+      <section class="editor" :class="{ landscape }" v-if="current">
         <div class="preview-col">
           <div v-if="current.media.missing" class="frame-missing">
             <p class="unplayable">
@@ -290,7 +296,7 @@
           <StackFrame
             v-else-if="isStack && topPart" :split="settings.stackSplit" :divider-px="settings.dividerPx"
             :divider-color="settings.dividerColor" :editing="current === topPart ? 'top' : 'under'"
-            :top-t="topT" :top-rate="topRate" :top-playing="reelOn" :guides="guides"
+            :top-t="topT" :top-rate="topRate" :top-playing="reelOn" :guides="showGuides" :landscape="landscape"
           >
             <template #top="{ maxH, out, bindTop }">
               <ReelFrame
@@ -318,13 +324,13 @@
               Thumbnails and trimming still work.
             </p>
           </StackFrame>
-          <ReelFrame v-else :key="current.mediaId" v-bind="frameProps" v-on="frameOn" :guides="guides">
+          <ReelFrame v-else :key="current.mediaId" v-bind="frameProps" v-on="frameOn" :guides="showGuides" :out="aspect(settings.orientation)">
             <p v-if="player.failed.value" class="unplayable">
               This browser can't play this file's codec (HEVC often won't play in Chrome — try Safari).
               Thumbnails and trimming still work.
             </p>
           </ReelFrame>
-          <label class="guides-toggle muted"><input type="checkbox" v-model="guides" /> Show Instagram overlays <kbd>G</kbd></label>
+          <label class="guides-toggle muted" v-if="!landscape"><input type="checkbox" v-model="guides" /> Show Instagram overlays <kbd>G</kbd></label>
           <audio ref="audioEl" v-if="musicUrl" :src="musicUrl" preload="auto" @ended="onSongEnded"></audio>
           <video
             v-if="reelOn && nextMedia" class="preload" muted preload="auto"
@@ -356,9 +362,9 @@
           :duration="current.media.duration" @update="setRange"
         >
           <p v-if="current === topPart" class="topnote muted">
-            ▤ On top for the whole reel: {{ fmtTime(current.length) }} of the clip
+            ▤ {{ panes.on[0].toUpperCase() + panes.on.slice(1) }} for the whole reel: {{ fmtTime(current.length) }} of the clip
             {{ settings.fitTop ? `over ${fmtTime(underLength)}, at ${topRate.toFixed(2)}×` : 'at normal speed' }}.
-            No cuts or transitions up here; drag the window above to reframe.
+            No cuts or transitions in this pane; drag its window to reframe.
           </p>
           <label class="field check" v-if="current !== topPart">
             <span><input type="checkbox" :checked="current.keep" @change="setKeep(current, $event.target.checked)" /> In the cut <kbd>X</kbd></span>
@@ -402,7 +408,7 @@
             </div>
           </div>
           <button class="btn small" @click="duplicate(current)" v-if="current.media.kind === 'video' && current !== topPart">Use another part of this clip</button>
-          <button class="btn small" @click="unTop" v-if="current === topPart">Move underneath</button>
+          <button class="btn small" @click="unTop" v-if="current === topPart">{{ panes.back }}</button>
           <button class="btn small" @click="remove(current)">Remove from reel</button>
         </TimingFields>
 
@@ -439,6 +445,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
 import { fitRange, fmtTime, folderTitle, parseTime, reelColor } from '../time'
+import { SHAPES, aspect, shapeOf } from '../shape'
 import ClipCard from '../components/ClipCard.vue'
 import SendToPhone from '../components/SendToPhone.vue'
 import ReelFrame from '../components/ReelFrame.vue'
@@ -890,16 +897,28 @@ function lightenAll(v) {
 // ---------------------------------------------------------------- layout
 
 // Per part: the reel's framing, or its own.
-const LAYOUTS = [
+const LAYOUTS = computed(() => [
   { v: '', label: 'Reel default', hint: 'Use the framing set in Settings' },
   { v: 'fill', label: 'Fill', hint: 'Crop to fit; drag the window to reframe' },
-  { v: 'blur', label: 'Blur', hint: 'The whole frame, with a blurred copy above and below' },
-]
+  { v: 'blur', label: 'Blur', hint: `The whole frame, with a blurred copy ${landscape.value ? 'either side' : 'above and below'}` },
+])
 const layoutOf = (p) => p.layout || settings.fit || 'fill'
 const badge = (p) => (p.layout === 'blur' ? '  ◫' : '')
 function setLayout(p, v) {
   p.layout = v
   saver.queue(p.id, { layout: v })
+}
+
+// ---------------------------------------------------------------- shape
+
+// Portrait (1080×1920) by default; landscape renders 1920×1080. The parts keep
+// their framing: the window just takes the new shape.
+const shape = computed(() => shapeOf(settings.orientation))
+const landscape = computed(() => shape.value.v === 'landscape')
+const showGuides = computed(() => guides.value && !landscape.value)   // Instagram's overlays are for portrait
+function setOrientation(v) {
+  stopReel()
+  settings.orientation = v
 }
 
 // ---------------------------------------------------------------- stack format
@@ -909,9 +928,13 @@ function setLayout(p, v) {
 // normal part of the reel, pinned by the reel's topItemId.
 const FORMATS = [
   { v: 'standard', label: 'Standard', hint: 'One clip at a time, full frame' },
-  { v: 'stack', label: 'Stack', hint: 'A clip on top for the whole reel, the parts underneath' },
+  { v: 'stack', label: 'Stack', hint: 'A clip on top for the whole reel, the parts underneath (side by side in landscape)' },
 ]
 const isStack = computed(() => settings.format === 'stack')
+// What the panes are called: one above the other, or side by side in landscape.
+const panes = computed(() => (landscape.value
+  ? { top: 'Left', under: 'Right', on: 'on the left', icon: '⇤', back: 'Move to the right', framing: 'Right pane framing' }
+  : { top: 'Top', under: 'Underneath', on: 'on top', icon: '⤒', back: 'Move underneath', framing: 'Underneath framing' }))
 const underLength = computed(() => bounds.value[bounds.value.length - 1] || 0)
 const topRate = computed(() => (topPart.value && settings.fitTop
   ? topPart.value.length / (underLength.value || 1) : 1))
@@ -925,9 +948,9 @@ const pastEnd = (p) => isStack.value && topPart.value && !settings.fitTop
 const readout = computed(() => {
   const top = topPart.value.length
   const under = underLength.value
-  let line = `Top ${fmtTime(top)} · Underneath ${fmtTime(under)} · `
+  let line = `${panes.value.top} ${fmtTime(top)} · ${panes.value.under} ${fmtTime(under)} · `
   if (settings.fitTop) line += `timelapse at ${(top / (under || 1)).toFixed(2)}×`
-  else if (under > top + 0.05) line += `underneath cut at ${fmtTime(top)}`
+  else if (under > top + 0.05) line += `${panes.value.under.toLowerCase()} cut at ${fmtTime(top)}`
   else if (under < top - 0.05) line += `last part holds ${(top - under).toFixed(1)}s`
   else line += 'same length'
   return line
@@ -986,7 +1009,7 @@ const rowNumber = (p) => items.value.filter((q) => q !== topPart.value).indexOf(
 
 // What every ReelFrame showing the selected clip gets.
 const frameProps = computed(() => ({
-  media: current.value.media, fit: layoutOf(current.value), guides: !isStack.value && guides.value,
+  media: current.value.media, fit: layoutOf(current.value), guides: !isStack.value && showGuides.value,
   muted: !settings.originalAudio, cropped: reelOn.value, effect: effect.value, lighten: current.value.lighten,
   focusX: current.value.focusX, focusY: current.value.focusY, zoom: current.value.zoom || 1,
   posterTime: current.value.start, bindVideo: (el) => { player.video.value = el },
@@ -1206,7 +1229,7 @@ function onKey(e) {
   else if (k === 'ArrowLeft' && video) { setRange({ ...current.value, start: current.value.start - (e.shiftKey ? 1 : 0.1) }); player.seek(current.value.start) }
   else if (k === 'ArrowRight' && video) { setRange({ ...current.value, start: current.value.start + (e.shiftKey ? 1 : 0.1) }); player.seek(current.value.start) }
   else if (k === 'Escape') exportResult.value = null
-  else if (k === 'g' || k === 'G') guides.value = !guides.value
+  else if ((k === 'g' || k === 'G') && !landscape.value) guides.value = !guides.value
   else if ((k === 't' || k === 'T') && hasNext(current.value)) cycle(current.value)
   else if (k === 'l' || k === 'L') cycleLighten(current.value)
   else return
@@ -1217,7 +1240,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 </script>
 
 <style scoped>
-h1 { display: flex; align-items: center; gap: 10px; }
+h1 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .rename { cursor: text; border-bottom: 1px dashed transparent; }
 .rename:hover { border-bottom-color: var(--sage); }
@@ -1307,6 +1330,7 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .render p { margin: 8px 0 0; }
 .result { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
 .result video { height: 360px; aspect-ratio: 9 / 16; background: var(--stage); border-radius: 8px; }
+.result video.wide { height: 270px; aspect-ratio: 16 / 9; max-width: 100%; }
 .result .path { word-break: break-all; }
 .log { background: var(--cream); padding: 12px; border-radius: 8px; font-size: 12px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
 .legend { font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }

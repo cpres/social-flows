@@ -56,12 +56,12 @@ CREATE TABLE IF NOT EXISTS reel_items (
     start    REAL NOT NULL DEFAULT 0,
     length   REAL NOT NULL,
     keep     INTEGER NOT NULL DEFAULT 1,
-    focus_x  REAL NOT NULL DEFAULT 0.5,     -- where the 9:16 window sits in the frame
+    focus_x  REAL NOT NULL DEFAULT 0.5,     -- where the reel-shaped window sits in the frame
     focus_y  REAL NOT NULL DEFAULT 0.5,     -- (0 = left/top, 1 = right/bottom)
     transition TEXT NOT NULL DEFAULT '',    -- into the next part; '' = reel default
     lighten  REAL NOT NULL DEFAULT 0,       -- 0..1, lifts shadows and midtones
     beats    INTEGER NOT NULL DEFAULT 0,    -- with beat sync: beats long; 0 = reel default
-    zoom     REAL NOT NULL DEFAULT 1,       -- >1 crops tighter than the full 9:16 window
+    zoom     REAL NOT NULL DEFAULT 1,       -- >1 crops tighter than the full reel-shaped window
     layout   TEXT NOT NULL DEFAULT ''       -- fill | blur; '' = the reel's framing
 );
 CREATE INDEX IF NOT EXISTS items_reel ON reel_items(reel_id, position);
@@ -77,6 +77,7 @@ DEFAULT_SETTINGS = {
     "musicInVideo": True,   # False: cut to the song but leave it out (add it in Instagram)
     "beatSync": False,      # when on, parts are whole beats long
     "beatsPerCut": 4,       # default beats per part
+    "orientation": "portrait",   # portrait (1080×1920) | landscape (1920×1080)
     "fit": "fill",
     "transition": "cut",    # between parts, unless a part picks its own
     "originalAudio": False,  # glasses audio off unless a reel turns it on

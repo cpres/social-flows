@@ -138,7 +138,9 @@ kbd {
   min-width: 0; display: grid; grid-template-columns: minmax(260px, 440px) minmax(0, 1fr);
   gap: 20px; align-items: start;
 }
-/* portrait preview: the reel is 9:16, so the stage is a tall column */
+/* portrait preview: the reel is 9:16, so the stage is a tall column; a
+   landscape reel (16:9) gets a wider one */
+.editor.landscape { grid-template-columns: minmax(320px, 640px) minmax(0, 1fr); }
 .preview-col { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 6px; }
 .edit-col { min-width: 0; }
 .guides-toggle { font-size: 12px; display: flex; align-items: center; gap: 6px; }
@@ -168,7 +170,7 @@ kbd {
 .dialog pre { background: var(--cream); padding: 12px; border-radius: 8px; font-size: 12px; overflow-x: auto; max-height: 50vh; white-space: pre-wrap; }
 @media (max-width: 860px) {
   .workspace { grid-template-columns: 1fr; }
-  .editor { grid-template-columns: 1fr; }
+  .editor, .editor.landscape { grid-template-columns: 1fr; }
   .preview-col { position: static; }
   .cliplist { position: static; max-height: 40vh; }
 }

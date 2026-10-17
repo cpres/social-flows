@@ -12,7 +12,7 @@
     </p>
 
     <div class="list">
-      <div v-for="v in videos" :key="v.name" class="row">
+      <div v-for="v in videos" :key="v.name" class="row" :class="{ wide: v.width > v.height }">
         <button class="thumb" @click="playing = v" title="Play">
           <img :src="api.renderedThumb(v.name, v.modified)" alt="" loading="lazy" />
           <span class="dur">{{ fmtTime(v.duration) }}</span>
@@ -33,7 +33,7 @@
     </div>
 
     <div class="modal" v-if="playing" @click.self="playing = null">
-      <div class="dialog player">
+      <div class="dialog player" :class="{ wide: playing.width > playing.height }">
         <video :src="api.renderedFile(playing.name)" controls autoplay playsinline></video>
         <div class="controls">
           <span class="mono">{{ playing.name }}</span>
@@ -99,6 +99,8 @@ function when(epoch) {
   position: relative; width: 72px; aspect-ratio: 9 / 16; border: 0; padding: 0; border-radius: 8px;
   overflow: hidden; background: var(--stage); cursor: pointer;
 }
+.row.wide { grid-template-columns: 128px 1fr auto; }
+.row.wide .thumb { width: 128px; aspect-ratio: 16 / 9; }
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .dur {
   position: absolute; right: 3px; bottom: 3px; font-size: 10px; padding: 0 4px; border-radius: 3px;
@@ -110,9 +112,12 @@ function when(epoch) {
 .sub a { text-decoration: underline; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .player { width: min(480px, 100%); }
+.player.wide { width: min(960px, 100%); }
 .player video { width: 100%; max-height: 72vh; background: var(--stage); border-radius: 8px; display: block; }
 @media (max-width: 720px) {
   .row { grid-template-columns: 60px 1fr; }
+  .row.wide { grid-template-columns: 96px 1fr; }
+  .row.wide .thumb { width: 100%; }
   .actions { grid-column: 1 / -1; justify-content: flex-start; }
 }
 </style>

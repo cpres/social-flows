@@ -13,6 +13,19 @@ brew install ffmpeg node python@3.12   # once
 ./studio/run.sh                        # opens http://localhost:3009
 ```
 
+To start it from any folder by typing `studio`, run this once:
+
+```
+./studio/run.sh --alias
+```
+
+It adds `alias studio=…/studio/run.sh` to `~/.bashrc`, and to `~/.zshrc` if
+zsh is your shell (the Mac's default). On a Mac with bash it also makes sure
+your login profile loads `~/.bashrc`, since Terminal doesn't otherwise read it.
+Running it again just updates the alias, for example after moving the folder.
+Open a new terminal window afterwards. `studio --port 9000` and `studio --beat`
+work too.
+
 Beat detection (for *Cut on the beat*) is optional and fairly large:
 `./studio/run.sh --beat` installs it once. Plain `./studio/run.sh` skips it,
 and everything else works the same.
@@ -95,19 +108,30 @@ python3 studio/server.py --open
   `~/Movies/Footage Studio/` (set `RENDER_DIR` to change). *Preview cut list*
   shows the engine's dry run first if you want to check timings.
 
-**Portrait & framing.** Reels are 1080×1920 (9:16). The preview shows each clip
-as it will appear in the reel. When a clip isn't exactly 9:16 (glasses footage
-is often 3:4), the part the reel keeps is outlined and the rest dimmed. Drag
+**Portrait or landscape.** Reels are portrait, 1080×1920 (9:16), unless you
+switch one to **Landscape** (1920×1080, 16:9) with *Portrait | Landscape* next
+to its name. The preview, the framing window, the cut list and the render all
+follow. Parts keep their framing when you switch: the window just takes the
+new shape. To make a landscape version of a reel you already have, *Duplicate*
+it and switch the copy. On a shoot page, *9:16 | 16:9* under the preview sets
+which shape you frame clips for before adding them (remembered); reels that
+are landscape show *16:9* on their chips and cards. Instagram overlays (`G`)
+are only for portrait.
+
+**Framing.** The preview shows each clip as it will appear in the reel. When a
+clip isn't the reel's shape (glasses footage is often 3:4), the part the reel
+keeps is outlined and the rest dimmed. Drag
 that window to keep the subject in frame; it's saved per part, so the same clip
-can be framed differently in different reels. Drag a corner of the window to zoom in (up to 3×; also works on clips that are already 9:16), then drag the window to place it; double-click it to zoom back out. Press `G` to see where Instagram's
+can be framed differently in different reels. Drag a corner of the window to zoom in (up to 3×; also works on clips that are already the reel's shape), then drag the window to place it; double-click it to zoom back out. Press `G` to see where Instagram's
 caption and buttons will cover the picture. Files stored sideways with a
 rotation flag (common from phones) are handled.
 
-**Layout per part** (for landscape footage like a day's timelapse): each part
-can override the reel's framing, chosen under *Layout* on the shoot page
-(before adding the part) or in the reel's part editor. *Fill* crops as above;
-*Blur* shows the whole frame with a blurred copy filling the top and bottom
-(marked ◫ in the list).
+**Layout per part** (for footage that isn't the reel's shape, like a landscape
+timelapse in a portrait reel): each part can override the reel's framing,
+chosen under *Layout* on the shoot page (before adding the part) or in the
+reel's part editor. *Fill* crops as above; *Blur* shows the whole frame with a
+blurred copy filling the top and bottom (the sides, in a landscape reel;
+marked ◫ in the list).
 
 **Stack reels.** Switch a reel from *Standard* to *Stack* next to its name.
 One clip (a timelapse, say) plays in the top pane for the whole reel, and the
@@ -120,11 +144,13 @@ with "timelapse" in its name, else the longest; switching back to Standard
 makes the top clip the first part again. The top clip's start and length pick
 which stretch of it plays; drag its window to frame it. Settings has the
 split (50/50 by default), the divider's thickness and colour, and *Fit
-timelapse to underneath* (on): the top clip speeds up or slows down to end with
+timelapse to the parts* (on): the top clip speeds up or slows down to end with
 the parts. Turned off, the reel runs as long as the top clip at normal speed;
 the parts are cut where it ends, or the last one holds. The line under the
 timeline shows the lengths and the speed. The top clip is silent; the parts
-keep their sound.
+keep their sound. In a landscape reel the panes sit side by side instead: the
+timelapse on the left (the *Left* slot), the parts on the right, and the split
+sets the left pane's share of the width.
 
 Everything is stored in one SQLite file, `~/Footage/.studio/studio.db`
 (no database server to run). Files are never copied or moved. If you rename a

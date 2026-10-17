@@ -68,6 +68,8 @@ ITEM_COLUMNS = ("media_id", "position", "start", "length", "keep", "focus_x", "f
                 "transition", "lighten", "beats", "zoom", "layout")
 LAYOUTS = ("", "fill", "blur")   # per part; '' = the reel's framing
 FORMATS = ("standard", "stack")
+# The reel's shape, and the size the engine renders it at.
+ORIENTATIONS = {"portrait": (1080, 1920), "landscape": (1920, 1080)}
 app = FastAPI(title="Footage Studio")
 
 
@@ -107,9 +109,11 @@ def top_item(db, reel_id, s):
 
 
 def clean_settings(db, reel_id, s):
-    """Keep the Stack settings in range."""
+    """Keep the format, shape and Stack settings in range."""
     if s.get("format") not in FORMATS:
         raise HTTPException(400, f"Unknown format: {s.get('format')}")
+    if s.get("orientation") not in ORIENTATIONS:
+        raise HTTPException(400, f"Unknown orientation: {s.get('orientation')}")
     s["stackSplit"] = round(min(max(float(s.get("stackSplit") or 0.5), 0.3), 0.7), 3)
     s["dividerPx"] = min(max(int(round(float(s.get("dividerPx") or 0) / 2)) * 2, 0), 20)
     if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(s.get("dividerColor") or "")):
@@ -169,6 +173,7 @@ def reel_summaries(db):
                            (r["id"],)).fetchone()
         out.append({"id": r["id"], "name": r["name"], "itemCount": r["items"],
                     "totalLength": round(r["total"], 2), "updatedAt": r["updated_at"],
+                    "orientation": settings_of(r)["orientation"],
                     "cover": dict(cover) if cover else None})
     return out
 
@@ -538,7 +543,9 @@ def build_config(reel, rows):
             entry["transition"] = row["transition"] or s.get("transition") or "cut"
         sources.append(entry)
 
-    cfg = {"output": str(RENDERS / f"{slug(reel['name'])}.mp4"), "rounds": 1, "sources": sources}
+    width, height = ORIENTATIONS.get(s.get("orientation"), ORIENTATIONS["portrait"])
+    cfg = {"output": str(RENDERS / f"{slug(reel['name'])}.mp4"), "width": width, "height": height,
+           "rounds": 1, "sources": sources}
     if top:
         cfg["top"] = {"file": str(ROOT / top["path"]), "start": round(top["start"], 2),
                       "length": round(top["length"], 2)}
@@ -741,24 +748,30 @@ def list_rendered():
             continue
         st = p.stat()
         videos.append({"name": p.name, "size": st.st_size, "modified": st.st_mtime,
-                       "duration": duration_of(p), "reel": by_slug.get(p.stem)})
+                       **video_info(p), "reel": by_slug.get(p.stem)})
     videos.sort(key=lambda v: v["modified"], reverse=True)
     return {"dir": str(RENDERS), "videos": videos}
 
 
-_durations = {}
+_video_info = {}
 
 
-def duration_of(path):
+def video_info(path):
+    """A rendered video's duration and size (so a landscape one shows wide)."""
     key = (str(path), path.stat().st_mtime)
-    if key not in _durations:
-        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                              "-of", "csv=p=0", str(path)], capture_output=True, text=True).stdout
+    if key not in _video_info:
+        out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                              "format=duration:stream=width,height", "-of", "json", str(path)],
+                             capture_output=True, text=True).stdout
         try:
-            _durations[key] = round(float(out.strip()), 1)
-        except ValueError:
-            _durations[key] = 0.0
-    return _durations[key]
+            data = json.loads(out or "{}")
+            stream = (data.get("streams") or [{}])[0]
+            _video_info[key] = {"duration": round(float(data["format"]["duration"]), 1),
+                                "width": int(stream.get("width") or 0),
+                                "height": int(stream.get("height") or 0)}
+        except (ValueError, KeyError):
+            _video_info[key] = {"duration": 0.0, "width": 0, "height": 0}
+    return _video_info[key]
 
 
 @app.get("/api/rendered/{name}/file")
