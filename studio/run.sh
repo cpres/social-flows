@@ -58,6 +58,18 @@ if [ "$BEAT" = 1 ] && { [ ! -f .venv/.music-installed ] || [ requirements-music.
     echo "  The studio works without it; cuts just won't snap to beats." >&2
   fi
 fi
+# Finding people and animals in photos (Smart hold) uses macOS's own Vision
+# framework: small, so it's tried once on every Mac, but never required.
+if [ "$(uname)" = Darwin ] && [ requirements-looks.txt -nt .venv/.looks-tried ]; then
+  echo "Installing people and animal detection ..."
+  if .venv/bin/python -m pip install --only-binary=:all: -r requirements-looks.txt > .venv/looks-install.log 2>&1; then
+    echo ok > .venv/.looks-tried
+  else
+    echo failed > .venv/.looks-tried
+    echo "  People and animal detection isn't available here (details: studio/.venv/looks-install.log)." >&2
+    echo "  Smart hold still works; photos just all hold as if someone's in them." >&2
+  fi
+fi
 
 # Build the web app when it's missing or the source changed.
 if [ ! -f web/dist/index.html ] || [ -n "$(find web/src web/index.html web/package.json -newer web/dist/index.html -print -quit)" ]; then

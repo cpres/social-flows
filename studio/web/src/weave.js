@@ -86,10 +86,12 @@ export const partKey = (mediaId, j) => `${mediaId}:${j}`
 // The woven order. Rounds = the most parts any clip has; each clip's parts
 // are spread evenly across them, so every clip appears in the first round and
 // ends in the last. Photos, in order, go in the gaps after rounds, the last
-// one closing the reel. A softer transition (`between`) marks each gap.
+// one closing the reel; photos next to each other with the same groupOf (a
+// burst of look-alikes) stay together in one gap. A softer transition
+// (`between`) marks each gap.
 //
 // Returns [{ key, clip, part, j, label, number, round, kind, transition }].
-export function weave(clips, between = 'dissolve') {
+export function weave(clips, between = 'dissolve', groupOf = (c) => c.mediaId) {
   const on = clips.filter((c) => c.on)
   const videos = on.filter((c) => c.kind === 'video' && c.parts.length)
   const photos = on.filter((c) => c.kind === 'photo')
@@ -103,11 +105,19 @@ export function weave(clips, between = 'dissolve') {
                        label: `${vi + 1}${letter(j)}`, round: r + 1, kind: 'video' })
     })
   })
+  const units = []
+  photos.forEach((p) => {
+    const g = groupOf(p)
+    if (units.length && units[units.length - 1].g === g) units[units.length - 1].photos.push(p)
+    else units.push({ g, photos: [p] })
+  })
   const gaps = Array.from({ length: R }, () => [])
-  photos.forEach((p, k) => {
-    const g = clamp(Math.round(((k + 1) * R) / photos.length) - 1, 0, R - 1)
-    gaps[g].push({ key: String(p.mediaId), clip: p, part: null, j: 0, number: 0,
-                   label: '▣', round: g + 1, kind: 'photo' })
+  units.forEach((u, k) => {
+    const g = clamp(Math.round(((k + 1) * R) / units.length) - 1, 0, R - 1)
+    for (const p of u.photos) {
+      gaps[g].push({ key: String(p.mediaId), clip: p, part: null, j: 0, number: 0,
+                     label: '▣', round: g + 1, kind: 'photo' })
+    }
   })
   // Rounds and photo gaps take turns; the last entry of each group leads into
   // the next with the softer transition. A round that would open with the

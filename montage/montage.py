@@ -169,6 +169,21 @@ def load_beats(cfg, base_dir):
     return beats, music_start + first
 
 
+def beat_time(beats, at):
+    """Where beat number `at` falls; a fraction (0.5, 0.25) is that share of
+    the way to the next beat, so quick photos can cut on half and quarter beats."""
+    i = int(at)
+    if at == i:
+        return beats[i]
+    return beats[i] + (at - i) * (beats[i + 1] - beats[i])
+
+
+def beat_count(value, default):
+    """A cut's length in beats: whole beats, or ½ and ¼ for quick ones."""
+    n = round(float(value if value is not None else default) * 4) / 4
+    return max(n, 0.25)
+
+
 # ---------------------------------------------------------------- folder sources
 
 def capture_time(path):
@@ -324,7 +339,7 @@ def build_plan(cfg, base_dir, beats):
                                  "zoom": float(src.get("zoom", 1) or 1),
                                  "fit": src.get("fit"),
                                  "seconds": float(src.get("hold", default_hold)),
-                                 "beats": int(src.get("hold_beats", beats_per_cut * 2))})
+                                 "beats": beat_count(src.get("hold_beats"), beats_per_cut * 2)})
                 continue
             if "times" in src:
                 if r > len(src["times"]):
@@ -345,7 +360,7 @@ def build_plan(cfg, base_dir, beats):
                          "fit": src.get("fit"),
                          "has_audio": src["_has_audio"],
                          "seconds": float(src.get("length", default_len)),
-                         "beats": int(src.get("beats", beats_per_cut))})
+                         "beats": beat_count(src.get("beats"), beats_per_cut)})
 
     # 2. Where each cut lands on the timeline, snapped to whole frames
     #    (and to beats when beat sync is on) so nothing drifts.
@@ -353,7 +368,7 @@ def build_plan(cfg, base_dir, beats):
     for seg in plan:
         if beats is not None:
             cursor_beat += seg["beats"]
-            t = beats[cursor_beat]
+            t = beat_time(beats, cursor_beat)
         else:
             t += seg["seconds"]
         cut_points.append(t)

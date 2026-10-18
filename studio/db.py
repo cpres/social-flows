@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS reel_items (
     focus_y  REAL NOT NULL DEFAULT 0.5,     -- (0 = left/top, 1 = right/bottom)
     transition TEXT NOT NULL DEFAULT '',    -- into the next part; '' = reel default
     lighten  REAL NOT NULL DEFAULT 0,       -- 0..1, lifts shadows and midtones
-    beats    INTEGER NOT NULL DEFAULT 0,    -- with beat sync: beats long; 0 = reel default
+    beats    INTEGER NOT NULL DEFAULT 0,    -- with beat sync: beats long (½, ¼ too); 0 = reel default
     zoom     REAL NOT NULL DEFAULT 1,       -- >1 crops tighter than the full 9:16 window
     layout   TEXT NOT NULL DEFAULT ''       -- fill | blur; '' = the reel's framing
 );

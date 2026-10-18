@@ -83,9 +83,13 @@ python3 studio/server.py --open
   through the parts in time with it.
 - **Cut on the beat:** the studio finds the song's beats once (cached), then each
   part lasts a whole number of beats: 1, 2, 4 or 8 (default 4, set per reel).
-  Change a part's beats in its editor, or drag its end, which snaps to whole beats. The
-  strip shows beat ticks, with a longer one every 4 beats. The render uses
-  the same beats, so it cuts exactly where the preview does.
+  A photo can also be ½ or ¼ of a beat, for quick ones. Change a part's beats in
+  its editor, or drag its end, which snaps to whole beats (or ½ and ¼ for a
+  photo). The strip shows beat ticks, with a longer one every 4 beats. The render
+  uses the same beats, so it cuts exactly where the preview does.
+- **Smart photo holds** (reel *Settings*): each kept photo holds for as long as
+  what's in it needs, next to the reel's cut length; clips keep theirs. See
+  *Smart hold* below.
 - **Put the song in the video** (on by default). Turn it off to render the cuts
   timed to the song but without it, then add the same song in Instagram, which
   licenses it. The render tells you where in the song to start.
@@ -139,18 +143,21 @@ at once. It's a four-step wizard that makes a normal reel:
    goes through the clips in this order.
 2. **Pace**: the length of every part (1–4s, or *Aim for* 15/30/45/60s), and a
    song. With a song and beat detection, every part is a whole number of beats
-   (1, 2, 4 or 8) and photos hold twice as many. Clips longer than *Split clips
-   longer than* (1:00) get about one part per 30s of footage (2–6); shorter ones
-   get one. *Between rounds* picks the transition that marks time moving on.
+   (1, 2, 4 or 8). *Photo hold* is *Smart* (below) or *Even*, every photo a bit
+   shorter than a part. Clips longer than *Split clips longer than* (1:00) get
+   about one part per 30s of footage (2–6); shorter ones get one. *Between
+   rounds* picks the transition that marks time moving on.
 3. **Moments**: one clip at a time. Its parts are windows on the filmstrip
    (a, b, c…) that slide but never cross, so a always comes before b; `+`/`−`
    changes how many. The lane under the filmstrip shows how much is moving where
    (measured once from the keyframes, cached), and *Suggest busy moments* starts
    each part on the liveliest stretch of its share of the clip. Framing set here
-   applies to every part of the clip.
+   applies to every part of the clip. For a photo, pick its hold (Medium, Small
+   or Burst); it says why it got the one it has.
 4. **Stitch**: the woven order as tiles. Every clip shows up in the first round
    and ends in the last; a clip with more parts than the others is spread across
-   the rounds, and photos go between rounds, the last one closing the reel. Drag
+   the rounds, and photos go between rounds, the last one closing the reel (a
+   burst stays together). Drag
    tiles to change it, and click the marks between them to switch a cut to the
    between-rounds transition. *Create reel* opens it as a normal reel to play,
    fine-tune and render.
@@ -165,6 +172,27 @@ draft waits at the front of *Reels*; click it, or *Continue weave draft* on the
 shoot's page, to pick up on the step and clip you left. There's one draft per
 shoot (and one per reel being re-woven). Files imported since are added to it.
 *Start over* throws a draft away; making the reel (or saving it) clears it.
+
+**Smart hold.** Clips hold longest; a photo holds for as long as what's in it
+needs:
+
+| Style | What | Off the beat (2s parts) | On the beat (4-beat parts) |
+|---|---|---|---|
+| ▶ Clip | a part of a clip | the pace: 2s | 4 beats |
+| ◉ Medium | a photo with people or animals in it | ≈ 0.7 × (1.4s) | 2 beats |
+| ○ Small | a photo with neither | ≈ 0.45 × (0.9s) | 1 beat |
+| ⁂ Burst | look-alike photos shot together | 0.2–0.5s each | ½ beat each |
+
+On the beat, each is half the one above it, but never too quick to see (it
+goes up to the next division, so at 160 bpm a burst is one beat), and a run of
+photos that would end between beats holds its last one to the next beat, so the
+clips after it still cut on the beat. Photos next to each other that look
+alike (the same light, dark and colours, allowing a small reframe) and were
+taken within 15 minutes are a burst; in Weave a burst stays together in one gap
+between rounds. People and animals are found by macOS's own Vision framework
+(faces, people, cats and dogs, and scene labels like *bird* or *insect*), which
+`run.sh` installs on a Mac (PyObjC, small); without it, photos hold Medium
+unless you pick, and bursts still work. What it finds is cached per photo.
 
 Everything is stored in one SQLite file, `~/Footage/.studio/studio.db`
 (no database server to run). Files are never copied or moved. If you rename a

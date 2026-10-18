@@ -51,6 +51,20 @@ export function clockTime(epochSeconds) {
 
 export const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
+// Beats as a musician writes them: 0.5 -> "½", 1.5 -> "1½", 4 -> "4"
+export function fmtBeats(n) {
+  const whole = Math.floor(n + 1e-6)
+  const frac = { 1: '¼', 2: '½', 3: '¾' }[Math.round((n - whole) * 4)] || ''
+  return whole || !frac ? `${whole}${frac}` : frac
+}
+
+// A length in beats, snapped to what a part can be: whole beats, or ½ or ¼
+// of one for a quick photo (shortest: 1 for a clip).
+export function snapBeats(beats, photo = false) {
+  if (!photo || beats >= 0.75) return Math.max(1, Math.round(beats))
+  return beats >= 0.375 ? 0.5 : 0.25
+}
+
 // Filmstrip frames: a thumbnail every ~20s of footage, between 6 and 14.
 export function stripTimes(duration) {
   if (!duration) return []

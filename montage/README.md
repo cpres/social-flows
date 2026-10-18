@@ -20,7 +20,7 @@ librosa detects the beat automatically. If you skip it, set `bpm:` in the config
 
 ## Tuning the feel
 
-- **Pace:** `beats_per_cut` (1 = frantic, 2 = lively, 4 = calm). Give single clips `beats: 4` to let them breathe.
+- **Pace:** `beats_per_cut` (1 = frantic, 2 = lively, 4 = calm). Give single clips `beats: 4` to let them breathe. A photo's `hold_beats` (and a clip's `beats`) can be `0.5` or `0.25` too, to flick through photos on half or quarter beats.
 - **Framing:** `focus: [x, y]` (0–1) picks which part of the frame a fill crop keeps; `zoom: 1.5` (1–3) crops tighter.
 - **Layout per source:** `fit: fill | blur | pad` overrides the config's `fit` for one source.
 - **Stack:** `top: {file: footage/timelapse.mp4, start: 0, length: 60, focus: [0.5, 0.5]}` plays that clip in the top pane for the entire piece while the cuts play underneath. `stack: {split: 0.5, divider: 4, divider_color: "#f7f1e3", fit: true}` sets the top pane's share, the line between the panes, and whether the top clip is sped up or slowed down to end with the cuts (`fit: false`: the piece runs as long as the top clip at normal speed; the cuts are cut short or the last one holds).

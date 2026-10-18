@@ -58,6 +58,8 @@ export const api = {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive: true,
   }).then(json),
   deleteWeaveDraft: (q) => send('DELETE', `/api/weave/draft?${new URLSearchParams(q)}`),
+  // What's in these photos, for Smart hold: { detects, looks: { mediaId: { people, animals, look } } }.
+  looks: (mediaIds) => send('POST', '/api/looks', { mediaIds }),
 
   // AirDropped files waiting in ~/Downloads, and moving them into a shoot.
   importList: () => fetch('/api/import').then(json),

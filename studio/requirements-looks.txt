@@ -1,0 +1,3 @@
+# Finding people and animals in photos, for Smart hold: macOS's own Vision
+# framework, through PyObjC. Mac only; run.sh installs it when it can.
+pyobjc-framework-Vision>=9

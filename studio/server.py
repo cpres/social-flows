@@ -24,6 +24,7 @@ import subprocess
 import sys
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -48,6 +49,7 @@ HERE = Path(__file__).resolve().parent
 ENGINE = HERE.parent / "montage" / "montage.py"
 sys.path.insert(0, str(ENGINE.parent))
 sys.path.insert(0, str(HERE))
+import looks  # noqa: E402
 from db import DEFAULT_SETTINGS, Library, default_start, now, settings_of  # noqa: E402
 from music import AUDIO_EXTS, Shelf, beat_detection_available  # noqa: E402
 from share import Shares  # noqa: E402
@@ -148,6 +150,12 @@ def zoom_of(v):
 
 def unit(v):
     return round(min(max(float(v), 0.0), 1.0), 4)
+
+
+def beats_of(v):
+    """A part's beats: whole ones, or ½ and ¼ for quick photos (0 = the reel's)."""
+    n = round(min(max(float(v or 0), 0.0), 64.0) * 4) / 4
+    return int(n) if n == int(n) else n
 
 
 def slug(name):
@@ -369,7 +377,7 @@ def item_values(m, body, s):
     return {"media_id": m["id"], "start": start, "length": length,
             "focus_x": unit(body.get("focusX", 0.5)), "focus_y": unit(body.get("focusY", 0.5)),
             "lighten": unit(body.get("lighten", 0)),
-            "beats": max(0, min(int(body.get("beats") or 0), 64)),
+            "beats": beats_of(body.get("beats")),
             "zoom": zoom_of(body.get("zoom", 1)), "layout": layout, "transition": transition,
             "keep": int(bool(body.get("keep", True)))}
 
@@ -441,7 +449,7 @@ def update_item(item_id: int, body: dict = Body(...)):
     if "lighten" in body:
         fields["lighten"] = unit(body["lighten"])
     if "beats" in body:
-        fields["beats"] = max(0, min(int(body["beats"]), 64))
+        fields["beats"] = beats_of(body["beats"])
     if "zoom" in body:
         fields["zoom"] = zoom_of(body["zoom"])
     if "layout" in body:
@@ -657,7 +665,7 @@ def build_config(reel, rows):
             entry["in_round"] = "all"
         if synced:
             entry["hold_beats" if row["kind"] == "photo" else "beats"] = (
-                row["beats"] or int(s.get("beatsPerCut", 4)))
+                beats_of(row["beats"]) or int(s.get("beatsPerCut", 4)))
         if n + 1 < len(kept):
             entry["transition"] = row["transition"] or s.get("transition") or "cut"
         sources.append(entry)
@@ -955,6 +963,42 @@ def activity(name: str, file: str):
     return json.loads(out.read_text())
 
 
+@app.post("/api/looks")
+def photo_looks(body: dict = Body(...)):
+    """What's in each photo, for Smart hold: {detects, looks: {mediaId:
+    {people, animals, look}}} (see looks.py). people and animals are null
+    where it can't tell; detects says whether it ever can. Cached per file."""
+    ids = [int(i) for i in body.get("mediaIds") or []][:500]
+    if not ids:
+        return {"detects": looks.can_detect(), "looks": {}}
+    with lib.connect() as db:
+        rows = db.execute(f"SELECT id, path FROM media WHERE kind = 'photo' AND missing = 0 "
+                          f"AND id IN ({', '.join('?' * len(ids))})", ids).fetchall()
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        found = pool.map(lambda r: look_of(ROOT / r["path"]), rows)
+        return {"detects": looks.can_detect(), "looks": {r["id"]: f for r, f in zip(rows, found)}}
+
+
+def look_of(path):
+    if not path.exists():
+        return {"look": None, "people": None, "animals": None}
+    key = hashlib.sha1(f"look|{looks.can_detect()}|{path}|{path.stat().st_mtime}".encode()).hexdigest()
+    out = CACHE / f"{key}.json"
+    if not out.exists():
+        try:
+            found = {"look": looks.look(thumb_file(path, 0.0, 320))}
+        except HTTPException:
+            found = {"look": None}
+        try:
+            found.update(looks.subjects(path) or {"people": None, "animals": None})
+        except Exception:   # Vision couldn't read it; the photo just isn't known
+            found.update(people=None, animals=None)
+        tmp = out.with_name(f"{key}.{uuid.uuid4().hex}.tmp")
+        tmp.write_text(json.dumps(found))
+        tmp.replace(out)
+    return json.loads(out.read_text())
+
+
 def movement(path):
     """The mean difference between successive keyframes (scdet's mafd), which
     is cheap: only keyframes are decoded. Clips with too few keyframes are
@@ -991,6 +1035,11 @@ def movement(path):
 
 
 def make_thumb(path, t=0.0, w=480):
+    return FileResponse(thumb_file(path, t, w), headers={"Cache-Control": "max-age=86400"})
+
+
+def thumb_file(path, t=0.0, w=480):
+    """A cached JPEG of a photo, or of a video's frame at t, w pixels wide."""
     w = max(64, min(w, 1280))
     key = hashlib.sha1(f"{path}|{path.stat().st_mtime}|{t:.2f}|{w}".encode()).hexdigest()
     out = CACHE / f"{key}.jpg"
@@ -1006,7 +1055,7 @@ def make_thumb(path, t=0.0, w=480):
                            capture_output=True, timeout=60)
         if not out.exists():
             raise HTTPException(500, "Could not make a thumbnail")
-    return FileResponse(out, headers={"Cache-Control": "max-age=86400"})
+    return out
 
 
 # ---------------------------------------------------------------- import

@@ -61,6 +61,9 @@
           <span class="tag" v-if="c.kind === 'video'">▶ {{ fmtTime(c.media.duration) }}</span>
           <span class="tag" v-else>photo</span>
           <span class="badge" v-if="c.on && c.kind === 'video' && c.parts.length > 1">{{ c.parts.length }} parts</span>
+          <span class="badge" v-else-if="c.on && c.kind === 'photo' && smart" :title="STYLES[styleOf(c)].hint">
+            {{ STYLES[styleOf(c)].icon }} {{ STYLES[styleOf(c)].label }}
+          </span>
           <span class="time">{{ clockTime(c.media.capturedAt) }}</span>
         </div>
       </div>
@@ -109,10 +112,33 @@
             <button v-for="t in TARGETS" :key="t" class="btn small" @click="aimFor(t)">{{ t }}s</button>
           </div>
         </div>
-        <p class="muted small">
-          Reels that hold attention usually cut every 1.5–3 seconds. Photos hold
-          {{ synced ? 'twice as many beats' : '1½ times as long' }} ({{ hold.toFixed(1) }}s), as a breather.
-        </p>
+        <p class="muted small">Reels that hold attention usually cut every 1.5–3 seconds.</p>
+        <div class="field" v-if="photos.length">
+          Photo hold
+          <div class="chips">
+            <button class="btn small" :class="{ active: smart }" @click="pace.hold = 'smart'" title="Each photo holds as long as what's in it needs">✦ Smart</button>
+            <button class="btn small" :class="{ active: !smart }" @click="pace.hold = 'even'" title="Every photo holds the same">Even</button>
+          </div>
+          <table class="holds">
+            <tr v-for="r in holdRows" :key="r.style">
+              <td>{{ STYLES[r.style].icon }} <b>{{ STYLES[r.style].label }}</b></td>
+              <td class="muted">{{ r.hint }}</td>
+              <td class="mono">{{ sizeLabel(r.style) }}</td>
+              <td class="muted">{{ r.count }}</td>
+            </tr>
+          </table>
+          <small v-if="smart && looking">Looking for people and animals… {{ photos.length - looking }} of {{ photos.length }}</small>
+          <small v-else-if="smart && detects === false">
+            This computer can't look for people and animals (it needs macOS's Vision framework, which
+            <code>./studio/run.sh</code> sets up on a Mac), so photos hold Medium unless you pick. Bursts still work.
+          </small>
+          <small v-else-if="smart">
+            Clips hold longest. Photos with people or animals in them hold Medium, ones without are Small,
+            and look-alike shots taken together flick by as a Burst{{ synced ? ' on half or quarter beats, landing back on the beat' : '' }}.
+            Change any photo under Moments.
+          </small>
+          <small v-else>Every photo holds Medium, a little shorter than a clip.</small>
+        </div>
       </div>
 
       <div class="col">
@@ -222,10 +248,22 @@
               Lengths follow the pace ({{ len.toFixed(1) }}s); fine-tune any part later in the reel.
             </p>
           </template>
-          <p v-else class="muted">
-            This photo holds for {{ hold.toFixed(1) }}s between rounds. Drag the window on the left to frame it,
-            or go back to <button class="link" @click="go(0)">Order</button> to leave it out.
-          </p>
+          <template v-else>
+            <div class="field" v-if="smart">
+              Hold
+              <div class="chips">
+                <button
+                  v-for="s in PHOTO_STYLES" :key="s" class="btn small" :class="{ active: styleOf(moment) === s }"
+                  :title="STYLES[s].hint" @click="choose(moment, s)"
+                >{{ STYLES[s].icon }} {{ STYLES[s].label }} · {{ sizeLabel(s) }}</button>
+              </div>
+              <small>{{ whyText(moment) }}</small>
+            </div>
+            <p class="muted">
+              This photo holds for {{ holdText(moment) }} between rounds. Drag the window on the left to frame it,
+              or go back to <button class="link" @click="go(0)">Order</button> to leave it out.
+            </p>
+          </template>
 
           <div class="controls">
             <button class="btn" @click="pick(cur - 1)" :disabled="cur === 0">↑ Previous</button>
@@ -252,14 +290,14 @@
       <div class="seq">
         <template v-for="(e, i) in seq" :key="e.key">
           <div
-            class="stile" :class="{ photo: e.kind === 'photo', over: dragOver === i, newround: startsRound(i) }"
+            class="stile" :class="{ photo: e.kind === 'photo', burst: e.kind === 'photo' && smart && styleOf(e.clip) === 'burst', over: dragOver === i, newround: startsRound(i) }"
             draggable="true" @dragstart="dragFrom = i" @dragover.prevent="dragOver = i"
             @dragleave="dragOver = null" @drop="dropTile(i)" @dragend="dragOver = null"
             :title="`${e.clip.media.file}${e.part ? ` · ${fmtTime(e.part.start)}` : ''}`"
           >
             <img :src="e.kind === 'video' ? api.thumb(e.clip.media.folder, e.clip.media.file, e.part.start + len / 2, 240) : thumbOf(e.clip)" alt="" draggable="false" />
             <span class="slabel" :style="{ background: e.kind === 'video' ? reelColor(e.number) : null }">{{ e.label }}</span>
-            <span class="slen">{{ synced ? `${e.kind === 'video' ? pace.beatsPerCut : pace.beatsPerCut * 2}♩` : `${lengthOf(e).toFixed(1)}s` }}</span>
+            <span class="slen">{{ synced ? `${fmtBeats(timing.get(e.key).beats)}♩` : `${lengthOf(e).toFixed(1)}s` }}</span>
           </div>
           <button
             v-if="i < seq.length - 1" class="tmark" :class="{ soft: e.transition }"
@@ -291,7 +329,8 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
-import { clamp, clockTime, fmtTime, folderTitle, reelColor, savedAt } from '../time'
+import { clamp, clockTime, fmtBeats, fmtTime, folderTitle, reelColor, savedAt } from '../time'
+import { PHOTO_STYLES, STYLES, holdLengths, photoStyles, timeline } from '../hold'
 import {
   MAX_PARTS, MIN_PARTS, SECONDS_PER_PART, autoParts, busyStarts, fromReel, inOrder, letter,
   maxParts, settle, spreadStarts, weave,
@@ -332,7 +371,8 @@ const step = ref(0)
 const clips = ref([])
 const existingName = ref('')
 const newName = ref(`${props.folder} weave`)
-const PACE = { len: 2, splitOver: 60, between: 'dissolve', music: '', musicStart: 0, beatSync: false, beatsPerCut: 4 }
+const PACE = { len: 2, splitOver: 60, between: 'dissolve', music: '', musicStart: 0, beatSync: false, beatsPerCut: 4,
+               hold: 'smart' }   // hold: how photos hold, smart | even
 const pace = reactive({ ...PACE })
 const order = ref(null)          // the keys in the order dragged in Stitch; null = woven
 const overrides = reactive({})   // key -> transition clicked in Stitch (or the reel's, re-weaving)
@@ -360,7 +400,8 @@ const period = computed(() => {
 })
 const synced = computed(() => !!(pace.music && pace.beatSync && period.value))
 const len = computed(() => (synced.value ? pace.beatsPerCut * period.value : pace.len))   // every part
-const hold = computed(() => (synced.value ? 2 * pace.beatsPerCut * period.value : Math.round(pace.len * 15) / 10))
+// How long each style holds (see hold.js); a part of a clip is len, the longest.
+const sizes = computed(() => holdLengths(pace.len, synced.value ? period.value : 0, pace.beatsPerCut))
 
 async function loadBeats() {
   beatData.value = null
@@ -383,13 +424,14 @@ watch(() => pace.music, (m, was) => { if (ready && m && !was && shelf.value.beat
 // Set the pace so the reel comes out about this long.
 function aimFor(seconds) {
   const v = videos.value.length ? partCount.value : 0
-  const p = photos.value.length
+  // The photos, counted in parts: how long they hold now, over a part's length.
+  const p = seq.value.filter((e) => e.kind === 'photo').reduce((a, e) => a + lengthOf(e), 0) / len.value
   if (!v && !p) return
   if (synced.value) {
-    const want = seconds / ((v + 2 * p) * period.value)
+    const want = seconds / ((v + p) * period.value)
     pace.beatsPerCut = BEAT_CHOICES.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a))
   } else {
-    pace.len = Math.round(clamp(seconds / (v + 1.5 * p), 1, 4) * 10) / 10
+    pace.len = Math.round(clamp(seconds / (v + p), 1, 4) * 10) / 10
   }
 }
 
@@ -485,6 +527,77 @@ async function suggestAll() {
   measuring.value = ''
 }
 
+// ---------------------------------------------------------------- photo holds
+
+const looks = reactive({})    // mediaId -> what's in the photo (see hold.js); null while looking
+const detects = ref(null)     // whether this computer can find people and animals at all
+const chosen = reactive({})   // mediaId -> a photo's style, picked by hand
+const smart = computed(() => pace.hold === 'smart')
+const looking = computed(() => photos.value.filter((c) => !looks[c.mediaId]).length)
+
+// A few photos at a time, so the count goes up as they come in.
+async function lookAt(list) {
+  const ids = list.filter((c) => c.kind === 'photo' && !(c.mediaId in looks)).map((c) => c.mediaId)
+  for (const id of ids) looks[id] = null
+  for (let i = 0; i < ids.length; i += 8) {
+    const batch = ids.slice(i, i + 8)
+    let found = {}
+    try {
+      const r = await api.looks(batch)
+      detects.value = r.detects
+      found = r.looks
+    } catch { /* not known: it holds as Medium */ }
+    for (const id of batch) looks[id] = found[id] || { look: null, people: null, animals: null }
+  }
+}
+watch(() => [smart.value, photos.value.map((c) => c.mediaId).join()], () => { if (smart.value) lookAt(photos.value) })
+
+const photoInfo = computed(() => photoStyles(photos.value, looks, smart.value ? chosen : {}))
+const styleOf = (c) => (smart.value && photoInfo.value.get(c.mediaId)?.style) || 'medium'
+function choose(c, style) {
+  if (style === photoInfo.value.get(c.mediaId)?.auto) delete chosen[c.mediaId]
+  else chosen[c.mediaId] = style
+}
+
+function sizeLabel(style) {
+  const z = sizes.value[style]
+  const each = style === 'burst' ? ' each' : ''
+  return synced.value ? `${fmtBeats(z.beats)}♩ ≈ ${z.seconds.toFixed(2)}s${each}` : `${z.seconds.toFixed(1)}s${each}`
+}
+const holdRows = computed(() => {
+  const n = (k, one, many) => `${k} ${k === 1 ? one : many}`
+  const rows = [{ style: 'clip', hint: STYLES.clip.hint, count: n(partCount.value, 'part', 'parts') }]
+  for (const s of smart.value ? PHOTO_STYLES : ['medium']) {
+    let count = n(photos.value.filter((c) => styleOf(c) === s).length, 'photo', 'photos')
+    if (s === 'burst') {
+      const bursts = new Set([...photoInfo.value.values()].filter((i) => i.style === 'burst').map((i) => i.group))
+      if (bursts.size) count += ` in ${n(bursts.size, 'burst', 'bursts')}`
+    }
+    rows.push({ style: s, hint: smart.value ? STYLES[s].hint : 'every photo', count })
+  }
+  return rows
+})
+
+const WHY = {
+  alike: 'It looks like the photo next to it, so they flick by together as a burst.',
+  people: 'There are people in it, so it holds a little longer.',
+  animals: "There's an animal in it, so it holds a little longer.",
+  none: 'No people or animals in it, so it can go by quicker.',
+  unknown: "This computer can't tell what's in it, so it holds as if someone's in it.",
+}
+function whyText(c) {
+  const info = photoInfo.value.get(c.mediaId)
+  if (!looks[c.mediaId] || !info) return 'Looking at it…'
+  const why = WHY[info.why]
+  if (!chosen[c.mediaId]) return why
+  return `Picked by hand. On its own it would be ${STYLES[info.auto].label}: ${why[0].toLowerCase()}${why.slice(1)}`
+}
+function holdText(c) {
+  const t = timing.value.get(String(c.mediaId))
+  if (!t) return '…'
+  return synced.value ? `${fmtBeats(t.beats)} beat${t.beats > 1 ? 's' : ''} (${t.seconds.toFixed(2)}s)` : `${t.seconds.toFixed(1)}s`
+}
+
 // ---------------------------------------------------------------- order
 
 function dropClip(to) {
@@ -516,10 +629,17 @@ const datesLookOff = computed(() => {
 
 // ---------------------------------------------------------------- the weave
 
-const woven = computed(() => weave(clips.value, pace.between))
+// A burst of look-alike photos stays together in one gap between rounds.
+const woven = computed(() => weave(clips.value, pace.between,
+                                   (c) => (smart.value && photoInfo.value.get(c.mediaId)?.group) || c.mediaId))
 const seq = computed(() => inOrder(woven.value, order.value)
   .map((e) => ({ ...e, transition: e.key in overrides ? overrides[e.key] : e.transition })))
-const lengthOf = (e) => (e.kind === 'video' ? len.value : hold.value)
+// How long each entry plays, in the order it plays: key -> { seconds, beats }.
+const timing = computed(() => {
+  const t = timeline(seq.value.map((e) => (e.kind === 'video' ? 'clip' : styleOf(e.clip))), sizes.value)
+  return new Map(seq.value.map((e, i) => [e.key, t[i]]))
+})
+const lengthOf = (e) => timing.value.get(e.key)?.seconds ?? len.value
 const total = computed(() => seq.value.reduce((a, e) => a + lengthOf(e), 0))
 const lengthHint = computed(() => {
   const t = total.value
@@ -659,6 +779,7 @@ function mediaById() {
 function startFresh(imported) {
   Object.assign(pace, PACE)
   for (const k of Object.keys(overrides)) delete overrides[k]
+  for (const k of Object.keys(chosen)) delete chosen[k]
   order.value = null
   step.value = 0
   cur.value = 0
@@ -672,8 +793,9 @@ function startFresh(imported) {
   Object.assign(pace, {
     len: Number(w.pace || s.defaultLength) || 2, splitOver: w.splitOver ?? 60, between: w.between || 'dissolve',
     music: s.music || '', musicStart: Number(s.musicStart) || 0, beatSync: !!s.beatSync,
-    beatsPerCut: Number(s.beatsPerCut) || 4,
+    beatsPerCut: Number(s.beatsPerCut) || 4, hold: w.hold || 'smart',
   })
+  Object.assign(chosen, w.styles || {})
   const back = fromReel(reelData.items.filter(managed), w)
   const inReel = new Set(back.clips.map((c) => c.mediaId))
   clips.value = [...back.clips, ...folderMedia.filter((m) => !inReel.has(m.id)).map((m) => newClip(m, false))]
@@ -704,7 +826,7 @@ const draftState = computed(() => {
 function snapshot() {
   return {
     v: 1, step: step.value, cur: cur.value, newName: newName.value,
-    pace: { ...pace }, order: order.value, overrides: { ...overrides },
+    pace: { ...pace }, order: order.value, overrides: { ...overrides }, chosen: { ...chosen },
     clips: clips.value.map((c) => ({
       mediaId: c.mediaId, kind: c.kind, on: c.on, auto: c.auto, placed: c.placed, framed: c.framed,
       focusX: c.focusX, focusY: c.focusY, zoom: c.zoom, id: c.id,
@@ -735,6 +857,8 @@ function restore(state, media, imported) {
   order.value = state.order || null
   for (const k of Object.keys(overrides)) delete overrides[k]
   Object.assign(overrides, state.overrides || {})
+  for (const k of Object.keys(chosen)) delete chosen[k]
+  Object.assign(chosen, state.chosen || {})
   newName.value = state.newName || newName.value
   step.value = state.step || 0
   cur.value = state.cur || 0
@@ -829,20 +953,22 @@ async function save() {
   failure.value = ''
   const settings = {
     music: pace.music, musicStart: pace.musicStart, beatSync: !!(pace.music && pace.beatSync),
-    beatsPerCut: pace.beatsPerCut, defaultLength: pace.len, defaultHold: Math.round(pace.len * 15) / 10,
+    beatsPerCut: pace.beatsPerCut, defaultLength: pace.len, defaultHold: holdLengths(pace.len).medium.seconds,
     weave: { folder: props.folder, clips: included.value.map((c) => c.mediaId), splitOver: pace.splitOver,
-             between: pace.between, pace: pace.len },
+             between: pace.between, pace: pace.len, hold: pace.hold,
+             styles: Object.fromEntries(photos.value.filter((c) => chosen[c.mediaId]).map((c) => [c.mediaId, chosen[c.mediaId]])) },
   }
   const items = seq.value.map((e) => {
     const c = e.clip
     const id = e.kind === 'video' ? e.part.id : c.id
-    const item = { mediaId: c.mediaId, transition: e.transition, length: Math.round(lengthOf(e) * 100) / 100 }
+    const t = timing.value.get(e.key)
+    const item = { mediaId: c.mediaId, transition: e.transition, length: Math.round(t.seconds * 100) / 100 }
     if (id) item.id = id
     if (e.kind === 'video') {
       item.start = e.part.start
       item.beats = 0                     // the reel's beats per part
     } else {
-      item.beats = synced.value ? pace.beatsPerCut * 2 : 0
+      item.beats = synced.value ? t.beats : 0
     }
     // Framing set here goes on every part; parts framed in the reel keep theirs.
     if (!id || c.framed) Object.assign(item, { focusX: c.focusX, focusY: c.focusY, zoom: c.zoom || 1 })
@@ -940,6 +1066,9 @@ async function save() {
   display: grid; place-items: center; overflow: hidden; white-space: nowrap;
 }
 .mseg.photo { background: var(--paper); color: var(--muted); }
+.holds { border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+.holds td { padding: 2px 10px 2px 0; white-space: nowrap; }
+.holds td:nth-child(2) { white-space: normal; }
 
 /* 3. moments */
 .dots { display: flex; gap: 6px; overflow-x: auto; margin-top: 14px; padding: 2px; }
@@ -972,6 +1101,7 @@ async function save() {
 .stile.over { box-shadow: -5px 0 0 var(--forest); }
 .stile img { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
 .stile.photo { outline: 2px dashed var(--sage); outline-offset: -2px; }
+.stile.burst { outline-style: dotted; outline-color: var(--forest); }
 .slabel {
   position: absolute; top: 4px; left: 4px; padding: 0 6px; border-radius: 999px; font-size: 12px;
   font-weight: 700; color: #fff; background: rgb(20 28 20 / 70%);

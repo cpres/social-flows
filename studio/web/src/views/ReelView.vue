@@ -101,7 +101,7 @@
           <label class="field check">
             <span><input type="checkbox" v-model="settings.beatSync" :disabled="!shelf.beatDetection" /> Cut on the beat</span>
             <small v-if="!shelf.beatDetection">Needs beat detection: start the studio with <code>./studio/run.sh --beat</code></small>
-            <small v-else-if="settings.beatSync">Each part lasts whole beats; drag or pick beats per part.</small>
+            <small v-else-if="settings.beatSync">Each part lasts whole beats (a photo can be ½ or ¼); drag or pick beats per part.</small>
             <small v-else>Your lengths are used exactly; the song plays underneath.</small>
           </label>
           <label class="field" v-if="settings.beatSync">
@@ -175,6 +175,14 @@
         &nbsp;
         <button class="btn small" @click="applyLengthToAll">Set every kept cut to {{ settings.defaultLength }}s</button>
       </div>
+      <div class="field" v-if="kept.some((p) => p.media.kind === 'photo')">
+        &nbsp;
+        <button
+          class="btn small" @click="smartHolds" :disabled="timingPhotos"
+          title="Photos with people or animals hold Medium, the rest Small, and look-alike shots taken together flick by as a Burst. Clips keep their lengths."
+        >{{ timingPhotos ? 'Looking at the photos…' : '✦ Smart photo holds' }}</button>
+        <small v-if="smartNote">{{ smartNote }}</small>
+      </div>
       <div class="field">
         &nbsp;
         <button class="btn small danger" @click="removeReel">Delete this reel</button>
@@ -206,7 +214,7 @@
           :style="{ flexGrow: len(p) }" :title="`${p.media.file} · ${len(p).toFixed(1)}s`"
           :data-past="pastEnd(p) || null"
           @click="jumpTo(p)"
-        >{{ synced ? `${beatsOf(p)}♩` : len(p).toFixed(1) }}</button>
+        >{{ synced ? `${fmtBeats(beatsOf(p))}♩` : len(p).toFixed(1) }}</button>
         <div
           v-for="(x, i) in beatTicks" :key="i" class="tick" :class="{ bar: i % 4 === 0 }"
           :style="{ left: `${x}%` }"
@@ -261,7 +269,7 @@
             :sub="folderTitle(p.media.folder)"
             :chip="(p.media.kind === 'video'
               ? `${fmtTime(p.start)} → ${fmtTime(p.start + len(p))}  ${len(p).toFixed(1)}s`
-              : `hold ${len(p).toFixed(1)}s`) + (synced ? `  ${beatsOf(p)}♩` : '') + (p.lighten ? '  ☀' : '') + badge(p)"
+              : `hold ${len(p).toFixed(1)}s`) + (synced ? `  ${fmtBeats(beatsOf(p))}♩` : '') + (p.lighten ? '  ☀' : '') + badge(p)"
             @select="select(i)"
           >
             <button
@@ -371,10 +379,10 @@
             <span class="muted">Beats (one beat = {{ period.toFixed(2) }}s)</span>
             <div>
               <button
-                v-for="b in BEAT_CHOICES" :key="b" class="btn small" :class="{ active: beatsOf(current) === b }"
+                v-for="b in beatChoices(current)" :key="b" class="btn small" :class="{ active: beatsOf(current) === b }"
                 @click="setBeats(current, b)"
-              >{{ b }}</button>
-              <button class="btn small" @click="beatsAll(beatsOf(current))" :title="`Make every part ${beatsOf(current)} beats`">Use on every part</button>
+              >{{ fmtBeats(b) }}</button>
+              <button class="btn small" @click="beatsAll(beatsOf(current))" :title="`Make every part ${fmtBeats(beatsOf(current))} beats`">Use on every part</button>
             </div>
           </div>
           <div class="tpick">
@@ -442,7 +450,8 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
-import { fitRange, fmtTime, folderTitle, parseTime, reelColor } from '../time'
+import { fitRange, fmtBeats, fmtTime, folderTitle, parseTime, reelColor, snapBeats } from '../time'
+import { holdLengths, photoStyles, timeline } from '../hold'
 import ClipCard from '../components/ClipCard.vue'
 import SendToPhone from '../components/SendToPhone.vue'
 import ReelFrame from '../components/ReelFrame.vue'
@@ -574,7 +583,7 @@ function pickSegment(segId) {
 function setRange({ start, length }) {
   const p = current.value
   if (synced.value && Math.abs(length - len(p)) > 0.01) {
-    setBeats(p, Math.max(1, Math.round(length / period.value)))
+    setBeats(p, snapBeats(length / period.value, p.media.kind === 'photo'))
     length = len(p)
   }
   const r = p.media.kind === 'video'
@@ -718,6 +727,7 @@ async function doExport() {
 // ---------------------------------------------------------------- music & beats
 
 const BEAT_CHOICES = [1, 2, 4, 8]
+const beatChoices = (p) => (p.media.kind === 'photo' ? [0.25, 0.5, ...BEAT_CHOICES] : BEAT_CHOICES)   // quick photos: ¼, ½
 const shelf = ref({ tracks: [], dir: '', exists: true, beatDetection: false })
 const beatData = ref(null)
 const analyzing = ref(false)
@@ -746,9 +756,12 @@ const grid = computed(() => {
   return { rel, step, songT0: first }
 })
 const period = computed(() => grid.value?.step || (beatData.value ? 60 / beatData.value.bpm : 0))
+// Where beat i falls; a fraction (½, ¼) is that share of the way to the next.
 const beatAt = (i) => {
   const g = grid.value
-  return i < g.rel.length ? g.rel[i] : g.rel[g.rel.length - 1] + (i - g.rel.length + 1) * g.step
+  const at = (k) => (k < g.rel.length ? g.rel[k] : g.rel[g.rel.length - 1] + (k - g.rel.length + 1) * g.step)
+  const k = Math.floor(i)
+  return i === k ? at(k) : at(k) + (i - k) * (at(k + 1) - at(k))
 }
 const beatsOf = (p) => p.beats || Number(settings.beatsPerCut) || 4
 
@@ -763,7 +776,7 @@ const bounds = computed(() => {
   }
   return out
 })
-// How long a part plays: whole beats when cutting on the beat, else its length.
+// How long a part plays: its beats when cutting on the beat, else its length.
 function len(p) {
   if (!p) return 0
   if (p === topPart.value) return p.length
@@ -788,6 +801,40 @@ function setBeats(p, n) {
 }
 function beatsAll(n) {
   for (const p of items.value) if (p.beats !== n) setBeats(p, n)
+}
+
+// Smart photo holds (see hold.js): each kept photo holds as long as what's
+// in it needs, against the reel's cut length (or beats per part). Clips keep
+// their own lengths.
+const timingPhotos = ref(false)
+const smartNote = ref('')
+async function smartHolds() {
+  const photos = kept.value.filter((p) => p.media.kind === 'photo')
+  if (!photos.length || timingPhotos.value) return
+  timingPhotos.value = true
+  smartNote.value = ''
+  try {
+    const { looks, detects } = await api.looks([...new Set(photos.map((p) => p.mediaId))])
+    const entries = kept.value.map((p) => ({ mediaId: p.mediaId, kind: p.media.kind, media: p.media }))
+    const styles = photoStyles(entries, looks)
+    const sizes = holdLengths(Number(settings.defaultLength) || 2, synced.value ? period.value : 0,
+                              Number(settings.beatsPerCut) || 4)
+    const t = timeline(entries.map((e) => (e.kind === 'photo' ? styles.get(e.mediaId).style : 'clip')), sizes)
+    kept.value.forEach((p, i) => {
+      if (p.media.kind !== 'photo') return
+      const r = { length: Math.round(t[i].seconds * 100) / 100 }
+      if (synced.value) r.beats = t[i].beats
+      Object.assign(p, r)
+      saver.queue(p.id, r)
+    })
+    const count = (s) => photos.filter((p) => styles.get(p.mediaId).style === s).length
+    smartNote.value = `${count('medium')} Medium · ${count('small')} Small · ${count('burst')} in bursts`
+      + (detects ? '' : " (this computer can't look for people and animals, so Medium stands in for Small)")
+  } catch (e) {
+    smartNote.value = `Couldn't look at the photos: ${e.message}`
+  } finally {
+    timingPhotos.value = false
+  }
 }
 function setMusicStart(e) {
   const t = parseTime(e.target.value)
