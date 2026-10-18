@@ -1,0 +1,840 @@
+<template>
+  <main v-if="error" class="screen-msg">{{ error }} · <RouterLink to="/">back</RouterLink></main>
+  <main v-else-if="loading" class="screen-msg muted">Loading clips…</main>
+  <main v-else class="screen">
+    <section class="headbar">
+      <RouterLink :to="backTo" class="back" title="Back">←</RouterLink>
+      <div class="title">
+        <h1>{{ reelId ? `Re-weave ${existingName}` : 'Weave a reel' }}</h1>
+        <p class="muted">
+          {{ folderTitle(folder) }} · {{ videos.length }} clip{{ videos.length === 1 ? '' : 's' }} →
+          {{ partCount }} part{{ partCount === 1 ? '' : 's' }}<template v-if="photos.length"> + {{ photos.length }} photo{{ photos.length === 1 ? '' : 's' }}</template>
+          · ≈ <b class="mono total">{{ fmtTime(total) }}</b>
+        </p>
+      </div>
+      <nav class="steps" aria-label="Steps">
+        <button
+          v-for="(s, i) in STEPS" :key="s" class="stepchip" :class="{ on: i === step, done: i < step }"
+          :disabled="i > 0 && !videos.length" @click="go(i)"
+        ><span class="n">{{ i + 1 }}</span> {{ s }}</button>
+      </nav>
+      <button class="btn" @click="go(step - 1)" :disabled="step === 0">Back</button>
+      <button class="btn primary" v-if="step < 3" @click="go(step + 1)" :disabled="!videos.length">Next</button>
+    </section>
+    <p v-if="notice" class="notice">{{ notice }}</p>
+
+    <!-- 1. Order: what goes in, and in what order -->
+    <section v-if="step === 0" class="panel">
+      <h3>Pick the clips and photos, and put them in order</h3>
+      <p class="muted lead">
+        They're in the order they were shot. This is the order each round goes through them,
+        so drag to change it. Click a tile to leave it out.
+      </p>
+      <p v-if="datesLookOff" class="warnnote">
+        Several of these have almost the same time, which usually means it's when they were
+        copied, not when they were filmed. Drag them into the order they happened.
+      </p>
+      <div class="selbar">
+        <span><b>{{ videos.length }}</b> clip{{ videos.length === 1 ? '' : 's' }} · <b>{{ photos.length }}</b> photo{{ photos.length === 1 ? '' : 's' }} in</span>
+        <span class="spacer"></span>
+        <button class="btn small" @click="sortByTime">Sort by time</button>
+        <button class="btn small" @click="setAll(true)">All</button>
+        <button class="btn small" @click="setAll(false)">None</button>
+      </div>
+      <div class="tiles">
+        <div
+          v-for="(c, i) in clips" :key="c.mediaId" class="tile" :class="{ on: c.on, over: dragOver === i }"
+          role="button" tabindex="0" draggable="true" :aria-pressed="c.on" :title="c.media.file"
+          @click="c.on = !c.on" @keydown.enter.space.prevent="c.on = !c.on"
+          @dragstart="dragFrom = i" @dragover.prevent="dragOver = i"
+          @dragleave="dragOver = null" @drop="dropClip(i)" @dragend="dragOver = null"
+        >
+          <img :src="thumbOf(c)" loading="lazy" alt="" draggable="false" />
+          <span class="check">{{ c.on ? '✓' : '' }}</span>
+          <span class="tag" v-if="c.kind === 'video'">▶ {{ fmtTime(c.media.duration) }}</span>
+          <span class="tag" v-else>photo</span>
+          <span class="badge" v-if="c.on && c.kind === 'video' && c.parts.length > 1">{{ c.parts.length }} parts</span>
+          <span class="time">{{ clockTime(c.media.capturedAt) }}</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. Pace: how long each part is, and the music it cuts to -->
+    <section v-if="step === 1" class="panel pace">
+      <div class="col">
+        <h3>Music</h3>
+        <label class="field">
+          Song
+          <select v-model="pace.music">
+            <option value="">No music</option>
+            <option v-if="pace.music && !shelfHas(pace.music)" :value="pace.music">{{ pace.music }}</option>
+            <option v-for="t in shelf.tracks" :key="t.name" :value="t.name">
+              {{ t.name.replace(/\.[^.]+$/, '') }}{{ t.bpm ? ` · ${Math.round(t.bpm)} bpm` : '' }}
+            </option>
+          </select>
+        </label>
+        <label class="field check" v-if="pace.music">
+          <span><input type="checkbox" v-model="pace.beatSync" :disabled="!shelf.beatDetection" /> Cut on the beat</span>
+          <small v-if="!shelf.beatDetection">Needs beat detection: start the studio with <code>./studio/run.sh --beat</code></small>
+          <small v-else-if="analyzing">Finding the beat…</small>
+          <small v-else-if="synced">{{ Math.round(60 / period) }} bpm · every part lasts whole beats.</small>
+          <small v-else-if="musicError" class="warn">{{ musicError }}</small>
+        </label>
+        <p class="muted small" v-if="!shelf.tracks.length">Songs come from <code>{{ shelf.dir }}</code>.</p>
+
+        <h3 class="gap">Pace</h3>
+        <div class="field" v-if="synced">
+          Beats per part
+          <div class="chips">
+            <button
+              v-for="b in BEAT_CHOICES" :key="b" class="btn small" :class="{ active: pace.beatsPerCut === b }"
+              @click="pace.beatsPerCut = b"
+            >{{ b }} ≈ {{ (b * period).toFixed(1) }}s</button>
+          </div>
+        </div>
+        <label class="field" v-else>
+          Average part length <b class="mono">{{ pace.len.toFixed(1) }}s</b>
+          <input type="range" min="1" max="4" step="0.1" v-model.number="pace.len" />
+        </label>
+        <div class="field">
+          Or aim for a reel about
+          <div class="chips">
+            <button v-for="t in TARGETS" :key="t" class="btn small" @click="aimFor(t)">{{ t }}s</button>
+          </div>
+        </div>
+        <p class="muted small">
+          Reels that hold attention usually cut every 1.5–3 seconds. Photos hold
+          {{ synced ? 'twice as many beats' : '1½ times as long' }} ({{ hold.toFixed(1) }}s), as a breather.
+        </p>
+      </div>
+
+      <div class="col">
+        <h3>Splitting</h3>
+        <label class="field">
+          Split clips longer than
+          <select v-model.number="pace.splitOver">
+            <option v-for="o in SPLIT_CHOICES" :key="o.v" :value="o.v">{{ o.label }}</option>
+          </select>
+          <small>Longer clips get about one part per {{ SECONDS_PER_PART }}s of footage ({{ MIN_PARTS }}–{{ MAX_PARTS }}); you can change it per clip next.</small>
+        </label>
+        <div class="field">
+          Between rounds
+          <div class="chips">
+            <button
+              v-for="t in TRANSITIONS" :key="t.v" class="btn small" :class="{ active: pace.between === t.v }"
+              :title="t.hint" @click="pace.between = t.v"
+            >{{ t.icon }} {{ t.label }}</button>
+          </div>
+          <small>Inside a round the parts cut straight to each other; this marks time moving on.</small>
+        </div>
+        <div class="field">
+          Where to cut
+          <div class="chips">
+            <button class="btn small" @click="suggestAll" :disabled="!!measuring">
+              {{ measuring ? `Measuring ${measuring}…` : 'Suggest busy moments in every clip' }}
+            </button>
+            <button class="btn small" @click="spreadAll">Spread evenly</button>
+          </div>
+          <small>Busy moments start each part where the most is happening in its stretch of the clip.</small>
+        </div>
+
+        <div class="estimate">
+          <b>{{ videos.length }} clip{{ videos.length === 1 ? '' : 's' }} → {{ partCount }} part{{ partCount === 1 ? '' : 's' }}<template
+            v-if="photos.length"> + {{ photos.length }} photo{{ photos.length === 1 ? '' : 's' }}</template> ≈ {{ fmtTime(total) }}</b>
+          <span class="muted">{{ rounds }} round{{ rounds === 1 ? '' : 's' }} · {{ lengthHint }}</span>
+          <div class="mini">
+            <span
+              v-for="e in seq" :key="e.key" class="mseg" :class="{ photo: e.kind === 'photo' }"
+              :style="{ flexGrow: lengthOf(e), background: e.kind === 'video' ? reelColor(e.number) : null }"
+              :title="e.label"
+            >{{ e.label }}</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. Moments: where each part of each clip is -->
+    <template v-if="step === 2 && moment">
+      <div class="dots">
+        <button
+          v-for="(c, i) in included" :key="c.mediaId" class="dot" :class="{ on: i === cur }"
+          :title="c.media.file" @click="pick(i)"
+        >
+          <img :src="thumbOf(c)" alt="" loading="lazy" />
+          <span>{{ c.kind === 'video' ? videoNumber(c) : '▣' }}</span>
+        </button>
+      </div>
+      <section class="editor moments">
+        <div class="preview-col">
+          <ReelFrame
+            :key="moment.mediaId" :media="moment.media" fit="fill" muted
+            :focus-x="moment.focusX" :focus-y="moment.focusY" :zoom="moment.zoom || 1"
+            :poster-time="active ? active.start : 0" :bind-video="(el) => (player.video.value = el)"
+            @loaded="onLoaded" @play="player.events.onPlay" @pause="player.events.onPause"
+            @ended="player.events.onEnded" @error="player.events.onError" @toggle="player.toggle" @focus="setFocus"
+          >
+            <p v-if="player.failed.value" class="unplayable">
+              This browser can't play this file's codec (HEVC often won't play in Chrome — try Safari).
+              Thumbnails and the filmstrip still work.
+            </p>
+          </ReelFrame>
+          <p class="muted small">Drag the window to frame this {{ moment.kind === 'video' ? 'clip; every part of it uses the same framing' : 'photo' }}.</p>
+        </div>
+
+        <div class="edit-col">
+          <h2 class="mtitle">
+            <span v-if="moment.kind === 'video'" class="num" :style="{ background: reelColor(videoNumber(moment)) }">{{ videoNumber(moment) }}</span>
+            {{ moment.media.file }}
+            <span class="muted mono">{{ cur + 1 }} of {{ included.length }}</span>
+          </h2>
+
+          <template v-if="moment.kind === 'video'">
+            <SplitBar
+              :duration="moment.media.duration" :starts="moment.parts.map((p) => p.start)" :length="len"
+              :selected="sel" :playhead="player.playhead.value" :activity="activityOf[moment.mediaId]"
+              :thumb-at="(t) => api.thumb(moment.media.folder, moment.media.file, t, 160)"
+              @update="(s) => setStarts(moment, s, true)" @select="selectWindow" @seek="player.seek"
+            />
+            <div class="controls">
+              <button class="btn" :class="{ active: player.playingPart.value }" @click="player.playPart">▶ Play {{ letter(sel) }} <kbd>Space</kbd></button>
+              <button class="btn" @click="player.toggle">{{ player.playing.value && !player.playingPart.value ? 'Pause' : 'Play clip' }}</button>
+              <span class="muted mono">{{ fmtTime(player.playhead.value) }}</span>
+              <span class="spacer"></span>
+              <span class="muted">{{ moment.parts.length }} part{{ moment.parts.length === 1 ? '' : 's' }}</span>
+              <button class="btn small" @click="removePart(moment)" :disabled="moment.parts.length <= 1" title="One part fewer (−)">−</button>
+              <button class="btn small" @click="addPart(moment)" :disabled="moment.parts.length >= maxParts(moment.media.duration, len)" title="One more part (+)">+</button>
+            </div>
+            <div class="controls">
+              <button class="btn small" @click="suggest(moment)" :disabled="activityOf[moment.mediaId] === null">Suggest busy moments</button>
+              <button class="btn small" @click="spread(moment)">Spread evenly</button>
+              <span class="muted small" v-if="active">{{ letter(sel) }}: {{ fmtTime(active.start) }} → {{ fmtTime(active.start + len) }}</span>
+            </div>
+            <p class="muted small">
+              Drag the windows along the filmstrip to pick each moment; they keep their order, so
+              <b>a</b> always comes before <b>b</b>. The green lane under it shows where things move.
+              Lengths follow the pace ({{ len.toFixed(1) }}s); fine-tune any part later in the reel.
+            </p>
+          </template>
+          <p v-else class="muted">
+            This photo holds for {{ hold.toFixed(1) }}s between rounds. Drag the window on the left to frame it,
+            or go back to <button class="link" @click="go(0)">Order</button> to leave it out.
+          </p>
+
+          <div class="controls">
+            <button class="btn" @click="pick(cur - 1)" :disabled="cur === 0">↑ Previous</button>
+            <button class="btn" @click="pick(cur + 1)" :disabled="cur >= included.length - 1">↓ Next</button>
+            <span class="spacer"></span>
+            <button class="btn primary" v-if="cur >= included.length - 1" @click="go(3)">Stitch them together →</button>
+          </div>
+          <p class="muted keys">
+            <kbd>Space</kbd> play the part · <kbd>1</kbd>–<kbd>6</kbd> pick a part · <kbd>←</kbd>/<kbd>→</kbd> nudge it 0.1s (<kbd>Shift</kbd> 1s) ·
+            <kbd>+</kbd>/<kbd>−</kbd> more or fewer parts · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next clip
+          </p>
+        </div>
+      </section>
+    </template>
+
+    <!-- 4. Stitch: the woven order, to drag around -->
+    <section v-if="step === 3" class="panel">
+      <h3>The weave</h3>
+      <p class="muted lead">
+        Each round shows a moment from every clip, then moves on in time. Drag tiles to change the order;
+        click the marks between them to switch between a cut and {{ softLabel }}.
+        <button v-if="order" class="link" @click="order = null">Back to the woven order</button>
+      </p>
+      <div class="seq">
+        <template v-for="(e, i) in seq" :key="e.key">
+          <div
+            class="stile" :class="{ photo: e.kind === 'photo', over: dragOver === i, newround: startsRound(i) }"
+            draggable="true" @dragstart="dragFrom = i" @dragover.prevent="dragOver = i"
+            @dragleave="dragOver = null" @drop="dropTile(i)" @dragend="dragOver = null"
+            :title="`${e.clip.media.file}${e.part ? ` · ${fmtTime(e.part.start)}` : ''}`"
+          >
+            <img :src="e.kind === 'video' ? api.thumb(e.clip.media.folder, e.clip.media.file, e.part.start + len / 2, 240) : thumbOf(e.clip)" alt="" draggable="false" />
+            <span class="slabel" :style="{ background: e.kind === 'video' ? reelColor(e.number) : null }">{{ e.label }}</span>
+            <span class="slen">{{ synced ? `${e.kind === 'video' ? pace.beatsPerCut : pace.beatsPerCut * 2}♩` : `${lengthOf(e).toFixed(1)}s` }}</span>
+          </div>
+          <button
+            v-if="i < seq.length - 1" class="tmark" :class="{ soft: e.transition }"
+            :title="`Into the next: ${tLabel(e.transition)}. Click to change.`" @click="toggleTransition(e)"
+          >{{ tIcon(e.transition) }}</button>
+        </template>
+      </div>
+      <div class="savebar">
+        <label class="field grow" v-if="!reelId">
+          Reel name
+          <input v-model="newName" @keydown.enter="save" />
+        </label>
+        <span class="muted">≈ {{ fmtTime(total) }} · {{ seq.length }} cuts</span>
+        <span class="spacer"></span>
+        <span v-if="failure" class="warn">{{ failure }}</span>
+        <button class="btn primary" @click="save" :disabled="saving || !seq.length || (!reelId && !newName.trim())">
+          {{ saving ? 'Saving…' : reelId ? 'Save to the reel' : 'Create reel' }}
+        </button>
+      </div>
+      <p class="muted small" v-if="reelId">
+        Saving puts every part back to the pace length; framing, lighten and zoom set on parts in the reel are kept.
+      </p>
+    </section>
+  </main>
+</template>
+
+<script setup>
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { api } from '../api'
+import { usePlayer } from '../player'
+import { clamp, clockTime, fmtTime, folderTitle, reelColor } from '../time'
+import {
+  MAX_PARTS, MIN_PARTS, SECONDS_PER_PART, autoParts, busyStarts, fromReel, inOrder, letter,
+  maxParts, settle, spreadStarts, weave,
+} from '../weave'
+import ReelFrame from '../components/ReelFrame.vue'
+import SplitBar from '../components/SplitBar.vue'
+
+const props = defineProps({ folder: { type: String, required: true } })
+const route = useRoute()
+const router = useRouter()
+const reelId = route.query.reel ? Number(route.query.reel) : null
+const backTo = reelId ? `/reel/${reelId}` : `/shoot/${encodeURIComponent(props.folder)}`
+
+const STEPS = ['Order', 'Pace', 'Moments', 'Stitch']
+const BEAT_CHOICES = [1, 2, 4, 8]
+const TARGETS = [15, 30, 45, 60]
+const SPLIT_CHOICES = [
+  { v: 30, label: '0:30' }, { v: 45, label: '0:45' }, { v: 60, label: '1:00' }, { v: 90, label: '1:30' },
+  { v: 120, label: '2:00' }, { v: 1e9, label: 'Never split' },
+]
+const TRANSITIONS = [
+  { v: 'cut', label: 'Cut', icon: '│', hint: 'Straight cut' },
+  { v: 'flash', label: 'Flash', icon: '⚡', hint: 'Quick white flash' },
+  { v: 'whip', label: 'Whip', icon: '⇆', hint: 'Fast blurred slide' },
+  { v: 'zoom', label: 'Zoom', icon: '⊕', hint: 'Cut, next shot punches in' },
+  { v: 'dissolve', label: 'Dissolve', icon: '◐', hint: 'Soft crossfade' },
+  { v: 'dip', label: 'Dip', icon: '●', hint: 'Through black' },
+]
+const tInfo = (v) => TRANSITIONS.find((t) => t.v === (v || 'cut')) || TRANSITIONS[0]
+const tLabel = (v) => tInfo(v).label
+const tIcon = (v) => tInfo(v).icon
+
+const loading = ref(true)
+const error = ref('')
+const notice = ref('')
+const step = ref(0)
+const clips = ref([])
+const existingName = ref('')
+const newName = ref(`${props.folder} weave`)
+const pace = reactive({ len: 2, splitOver: 60, between: 'dissolve', music: '', musicStart: 0, beatSync: false, beatsPerCut: 4 })
+const order = ref(null)          // the keys in the order dragged in Stitch; null = woven
+const overrides = reactive({})   // key -> transition clicked in Stitch (or the reel's, re-weaving)
+const activityOf = reactive({})  // mediaId -> movement points; null while measuring
+const dragFrom = ref(null)
+const dragOver = ref(null)
+
+// ---------------------------------------------------------------- music & pace
+
+const shelf = ref({ tracks: [], dir: '', beatDetection: false })
+const beatData = ref(null)
+const analyzing = ref(false)
+const musicError = ref('')
+const shelfHas = (name) => shelf.value.tracks.some((t) => t.name === name)
+
+// Seconds per beat, measured the way the reel page does: from the first beat
+// at or after where the song starts.
+const period = computed(() => {
+  const d = beatData.value
+  if (!d?.beats?.length) return 0
+  const b = d.beats.filter((x) => x >= (Number(pace.musicStart) || 0) - 0.02)
+  if (b.length < 4) return 60 / d.bpm
+  const steps = b.slice(1).map((x, i) => x - b[i]).sort((a, c) => a - c)
+  return steps[Math.floor(steps.length / 2)]
+})
+const synced = computed(() => !!(pace.music && pace.beatSync && period.value))
+const len = computed(() => (synced.value ? pace.beatsPerCut * period.value : pace.len))   // every part
+const hold = computed(() => (synced.value ? 2 * pace.beatsPerCut * period.value : Math.round(pace.len * 15) / 10))
+
+async function loadBeats() {
+  beatData.value = null
+  musicError.value = ''
+  if (!pace.music || !pace.beatSync || !shelfHas(pace.music) || !shelf.value.beatDetection) return
+  analyzing.value = true
+  try {
+    beatData.value = await api.musicBeats(pace.music)
+  } catch (e) {
+    musicError.value = e.message
+  } finally {
+    analyzing.value = false
+  }
+}
+watch(() => [pace.music, pace.beatSync], loadBeats)
+// Picking a song turns cutting on the beat on, when the studio can find beats.
+let ready = false
+watch(() => pace.music, (m, was) => { if (ready && m && !was && shelf.value.beatDetection) pace.beatSync = true })
+
+// Set the pace so the reel comes out about this long.
+function aimFor(seconds) {
+  const v = videos.value.length ? partCount.value : 0
+  const p = photos.value.length
+  if (!v && !p) return
+  if (synced.value) {
+    const want = seconds / ((v + 2 * p) * period.value)
+    pace.beatsPerCut = BEAT_CHOICES.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a))
+  } else {
+    pace.len = Math.round(clamp(seconds / (v + 1.5 * p), 1, 4) * 10) / 10
+  }
+}
+
+// ---------------------------------------------------------------- clips & parts
+
+const included = computed(() => clips.value.filter((c) => c.on))
+const videos = computed(() => included.value.filter((c) => c.kind === 'video'))
+const photos = computed(() => included.value.filter((c) => c.kind === 'photo'))
+const partCount = computed(() => videos.value.reduce((a, c) => a + c.parts.length, 0))
+const rounds = computed(() => Math.max(1, ...videos.value.map((c) => c.parts.length)))
+const videoNumber = (c) => videos.value.indexOf(c) + 1
+const thumbOf = (c) => api.thumb(c.media.folder, c.media.file, c.kind === 'video' ? c.media.duration * 0.3 : 0, 320)
+
+function newClip(m, on) {
+  const c = { mediaId: m.id, media: m, kind: m.kind, on, auto: true, placed: false, framed: false,
+              parts: [], focusX: 0.5, focusY: 0.5, zoom: 1 }
+  if (c.kind === 'video') c.parts = spreadStarts(m.duration, autoParts(m.duration, pace.splitOver, len.value), len.value).map((start) => ({ start }))
+  return c
+}
+
+// New starts for a clip's windows; parts keep their ids by position.
+function setStarts(c, starts, placed = c.placed) {
+  c.parts = starts.map((start, j) => ({ ...(c.parts[j] || {}), start }))
+  c.placed = placed
+}
+
+// The pace or the split length changed: recount and respread the clips that
+// are still automatic, keep the ones placed by hand where they are.
+function refit(c) {
+  const d = c.media.duration
+  const n = c.auto ? autoParts(d, pace.splitOver, len.value) : c.parts.length
+  if (!c.placed || n !== c.parts.length) setStarts(c, spreadStarts(d, n, len.value), false)
+  else setStarts(c, settle(c.parts.map((p) => p.start), len.value, d))
+}
+watch([len, () => pace.splitOver], () => {
+  for (const c of clips.value) if (c.kind === 'video') refit(c)
+})
+
+function addPart(c) {
+  const d = c.media.duration
+  if (c.parts.length >= maxParts(d, len.value)) return
+  c.auto = false
+  if (!c.placed) return setStarts(c, spreadStarts(d, c.parts.length + 1, len.value))
+  // Placed by hand: the new part goes in the middle of the biggest gap.
+  const s = c.parts.map((p) => p.start)
+  const edges = [0, ...s.flatMap((t) => [t, t + len.value]), d]
+  let best = 0
+  for (let i = 0; i < edges.length; i += 2) if (edges[i + 1] - edges[i] > edges[best + 1] - edges[best]) best = i
+  const at = (edges[best] + edges[best + 1] - len.value) / 2
+  const k = best / 2
+  c.parts.splice(k, 0, { start: at })
+  setStarts(c, settle(c.parts.map((p) => p.start), len.value, d))
+  sel.value = k
+}
+function removePart(c) {
+  if (c.parts.length <= 1) return
+  c.auto = false
+  if (!c.placed) setStarts(c, spreadStarts(c.media.duration, c.parts.length - 1, len.value))
+  else c.parts.splice(sel.value, 1)
+  sel.value = Math.min(sel.value, c.parts.length - 1)
+}
+function spread(c) {
+  setStarts(c, spreadStarts(c.media.duration, c.parts.length, len.value), false)
+}
+function spreadAll() {
+  for (const c of videos.value) spread(c)
+}
+
+// ---------------------------------------------------------------- movement
+
+async function measure(c) {
+  if (activityOf[c.mediaId] !== undefined) return activityOf[c.mediaId]
+  activityOf[c.mediaId] = null
+  try {
+    activityOf[c.mediaId] = (await api.activity(c.media.folder, c.media.file)).points
+  } catch {
+    activityOf[c.mediaId] = []
+  }
+  return activityOf[c.mediaId]
+}
+async function suggest(c) {
+  const points = await measure(c)
+  const s = c.parts.map((p) => p.start)
+  if (points?.length) setStarts(c, busyStarts(points, c.media.duration, s.length, len.value, s), true)
+}
+const measuring = ref('')
+async function suggestAll() {
+  const list = videos.value
+  for (let i = 0; i < list.length; i++) {
+    measuring.value = `${i + 1} of ${list.length}`
+    await suggest(list[i])
+  }
+  measuring.value = ''
+}
+
+// ---------------------------------------------------------------- order
+
+function dropClip(to) {
+  const from = dragFrom.value
+  dragOver.value = null
+  if (from === null || from === to) return
+  const [moved] = clips.value.splice(from, 1)
+  clips.value.splice(to, 0, moved)
+}
+function sortByTime() {
+  clips.value.sort((a, b) => a.media.capturedAt - b.media.capturedAt)
+}
+function setAll(on) {
+  for (const c of clips.value) c.on = on
+}
+
+// Capture times that bunch up are usually when the files were copied.
+const datesLookOff = computed(() => {
+  const ts = included.value.map((c) => c.media.capturedAt).sort((a, b) => a - b)
+  if (ts.length < 3) return false
+  let run = 1
+  let most = 1
+  for (let i = 1; i < ts.length; i++) {
+    run = ts[i] - ts[i - 1] < 3 ? run + 1 : 1
+    most = Math.max(most, run)
+  }
+  return most >= 3 && most >= ts.length / 2
+})
+
+// ---------------------------------------------------------------- the weave
+
+const woven = computed(() => weave(clips.value, pace.between))
+const seq = computed(() => inOrder(woven.value, order.value)
+  .map((e) => ({ ...e, transition: e.key in overrides ? overrides[e.key] : e.transition })))
+const lengthOf = (e) => (e.kind === 'video' ? len.value : hold.value)
+const total = computed(() => seq.value.reduce((a, e) => a + lengthOf(e), 0))
+const lengthHint = computed(() => {
+  const t = total.value
+  if (!t) return ''
+  if (t < 15) return 'short: fine for a teaser'
+  if (t <= 60) return 'a good length for a reel'
+  if (t <= 90) return 'on the long side for a reel'
+  return 'long for a reel: try splitting only longer clips, or a faster pace'
+})
+const startsRound = (i) => i > 0 && order.value === null && seq.value[i].round !== seq.value[i - 1].round
+
+// Adding or removing parts (or clips) changes what there is to order.
+watch(() => woven.value.map((e) => e.key).sort().join('|'), (keys) => {
+  if (order.value && [...order.value].sort().join('|') !== keys) {
+    order.value = null
+    notice.value = 'The parts changed, so the stitch order is back to the woven one.'
+    setTimeout(() => { notice.value = '' }, 5000)
+  }
+})
+// Back to the woven order means its transitions too (re-weaving, the reel's
+// own were attached to parts in their old places).
+watch(order, (keys) => {
+  if (keys === null) for (const k of Object.keys(overrides)) delete overrides[k]
+})
+// A new between-rounds transition replaces the old one wherever it was used.
+watch(() => pace.between, (now, was) => {
+  for (const k of Object.keys(overrides)) if (overrides[k] === was) overrides[k] = now
+})
+
+const soft = computed(() => (pace.between === 'cut' ? 'dissolve' : pace.between))
+const softLabel = computed(() => tLabel(soft.value).toLowerCase())
+function toggleTransition(e) {
+  overrides[e.key] = e.transition ? '' : soft.value
+}
+function dropTile(to) {
+  const from = dragFrom.value
+  dragOver.value = null
+  if (from === null || from === to) return
+  const keys = seq.value.map((e) => e.key)
+  const [k] = keys.splice(from, 1)
+  keys.splice(to, 0, k)
+  order.value = keys
+}
+
+// ---------------------------------------------------------------- moments
+
+const cur = ref(0)
+const sel = ref(0)
+const moment = computed(() => included.value[Math.min(cur.value, included.value.length - 1)])
+const active = computed(() => (moment.value?.kind === 'video' ? moment.value.parts[sel.value] : null))
+const player = usePlayer(() => active.value && { start: active.value.start, length: len.value })
+
+function pick(i) {
+  if (i < 0 || i >= included.value.length) return
+  cur.value = i
+  sel.value = 0
+  player.reset()
+  if (moment.value.kind === 'video') {
+    player.playhead.value = moment.value.parts[0].start
+    measure(moment.value)
+  }
+}
+// Fewer parts (the pace changed, or one was removed): stay on one that exists.
+watch(() => moment.value?.parts.length, (n) => { if (n && sel.value >= n) sel.value = n - 1 })
+function selectWindow(j) {
+  sel.value = j
+  player.seek(moment.value.parts[j].start)
+}
+function onLoaded() {
+  if (active.value) player.seek(active.value.start)
+}
+function nudge(by) {
+  const c = moment.value
+  const s = c.parts.map((p) => p.start)
+  const j = sel.value
+  const lo = j > 0 ? s[j - 1] + len.value : 0
+  const hi = j < s.length - 1 ? s[j + 1] - len.value : c.media.duration - len.value
+  s[j] = Math.round(clamp(s[j] + by, Math.min(lo, s[j]), Math.max(hi, s[j])) * 100) / 100
+  setStarts(c, s, true)
+  player.seek(s[j])
+}
+function setFocus({ x, y, zoom }) {
+  const c = moment.value
+  c.focusX = x
+  c.focusY = y
+  if (zoom !== undefined) c.zoom = zoom
+  c.framed = true
+}
+
+function go(i) {
+  if (i < 0 || i > 3 || (i > 0 && !videos.value.length)) return
+  player.video.value?.pause()
+  step.value = i
+  if (i === 2) pick(Math.min(cur.value, included.value.length - 1))
+}
+
+function onKey(e) {
+  if (step.value !== 2 || !moment.value) return
+  if (e.target.closest('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey) return
+  const k = e.key
+  const video = moment.value.kind === 'video'
+  if (k === ' ' && video) player.playPart()
+  else if (k === 'ArrowDown') pick(cur.value + 1)
+  else if (k === 'ArrowUp') pick(cur.value - 1)
+  else if (k === 'ArrowLeft' && video) nudge(e.shiftKey ? -1 : -0.1)
+  else if (k === 'ArrowRight' && video) nudge(e.shiftKey ? 1 : 0.1)
+  else if ((k === '+' || k === '=') && video) addPart(moment.value)
+  else if ((k === '-' || k === '_') && video) removePart(moment.value)
+  else if (/^[1-9]$/.test(k) && video && Number(k) <= moment.value.parts.length) selectWindow(Number(k) - 1)
+  else return
+  e.preventDefault()
+}
+onMounted(() => window.addEventListener('keydown', onKey))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+
+// ---------------------------------------------------------------- load & save
+
+onMounted(async () => {
+  try {
+    const [data, music] = await Promise.all([api.folder(props.folder), api.music().catch(() => null)])
+    if (music) shelf.value = music
+    const media = data.media.filter((m) => !m.missing)
+    if (reelId) {
+      const r = await api.reel(reelId)
+      const s = r.settings
+      const w = s.weave || {}
+      existingName.value = r.name
+      Object.assign(pace, {
+        len: Number(w.pace || s.defaultLength) || 2, splitOver: w.splitOver ?? 60, between: w.between || 'dissolve',
+        music: s.music || '', musicStart: Number(s.musicStart) || 0, beatSync: !!s.beatSync,
+        beatsPerCut: Number(s.beatsPerCut) || 4,
+      })
+      // A Stack reel's top clip, and parts whose file is missing for now, aren't
+      // the wizard's to change: they're saved back as they are.
+      const mine = (it) => !it.media.missing && !(s.format === 'stack' && it.id === s.topItemId)
+      untouched = r.items.filter((it) => !mine(it))
+      const back = fromReel(r.items.filter(mine), w)
+      const inReel = new Set(back.clips.map((c) => c.mediaId))
+      clips.value = [...back.clips, ...media.filter((m) => !inReel.has(m.id)).map((m) => newClip(m, false))]
+      order.value = back.keys
+      Object.assign(overrides, back.transitions)
+      step.value = 1
+    } else {
+      // Fresh from an import: just what came in; otherwise the whole shoot.
+      const imported = window.history.state?.imported
+      clips.value = media.map((m) => newClip(m, imported?.length ? imported.includes(m.file) : true))
+    }
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    loading.value = false
+    setTimeout(() => { ready = true })
+  }
+})
+
+const saving = ref(false)
+const failure = ref('')
+let untouched = []
+
+async function save() {
+  if (saving.value || !seq.value.length) return
+  saving.value = true
+  failure.value = ''
+  const settings = {
+    music: pace.music, musicStart: pace.musicStart, beatSync: !!(pace.music && pace.beatSync),
+    beatsPerCut: pace.beatsPerCut, defaultLength: pace.len, defaultHold: Math.round(pace.len * 15) / 10,
+    weave: { folder: props.folder, clips: included.value.map((c) => c.mediaId), splitOver: pace.splitOver,
+             between: pace.between, pace: pace.len },
+  }
+  const items = seq.value.map((e) => {
+    const c = e.clip
+    const id = e.kind === 'video' ? e.part.id : c.id
+    const item = { mediaId: c.mediaId, transition: e.transition, length: Math.round(lengthOf(e) * 100) / 100 }
+    if (id) item.id = id
+    if (e.kind === 'video') {
+      item.start = e.part.start
+      item.beats = 0                     // the reel's beats per part
+    } else {
+      item.beats = synced.value ? pace.beatsPerCut * 2 : 0
+    }
+    // Framing set here goes on every part; parts framed in the reel keep theirs.
+    if (!id || c.framed) Object.assign(item, { focusX: c.focusX, focusY: c.focusY, zoom: c.zoom || 1 })
+    return item
+  })
+  for (const it of untouched) {
+    items.push({ id: it.id, mediaId: it.mediaId, start: it.start, length: it.length,
+                 beats: it.beats, transition: it.transition })
+  }
+  try {
+    let target = reelId
+    if (!target) target = (await api.createReel(newName.value.trim())).id
+    await api.updateReel(target, { settings })
+    await api.saveItems(target, items)
+    router.push(`/reel/${target}`)
+  } catch (e) {
+    failure.value = e.message
+  } finally {
+    saving.value = false
+  }
+}
+</script>
+
+<style scoped>
+.total { color: var(--forest); }
+.steps { display: flex; gap: 4px; padding: 3px; border-radius: 999px; background: rgb(128 128 128 / 14%); }
+.stepchip {
+  display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; cursor: pointer;
+  padding: 4px 12px 4px 4px; border-radius: 999px; font-size: 14px; color: var(--muted);
+}
+.stepchip .n {
+  display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--paper); font-size: 12px; font-weight: 700;
+}
+.stepchip.done { color: var(--ink); }
+.stepchip.done .n { background: var(--sage); color: var(--on-sage); }
+.stepchip.on { background: var(--forest); color: var(--cream); font-weight: 600; }
+.stepchip.on .n { background: var(--cream); color: var(--forest); }
+.stepchip:disabled { cursor: default; opacity: 0.5; }
+.notice { margin: 12px 0 0; padding: 8px 12px; border-radius: 8px; background: var(--sage-soft); font-size: 14px; }
+.lead { margin: -4px 0 12px; font-size: 14px; }
+.warnnote { margin: 0 0 12px; padding: 8px 12px; border-radius: 8px; border-left: 4px solid var(--warn); background: var(--cream); font-size: 13px; }
+.selbar { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 10px; }
+.small { font-size: 12px; }
+.warn { color: var(--danger); }
+.link {
+  border: 0; background: none; padding: 0; color: var(--forest); font-weight: 600; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px; font-size: inherit;
+}
+
+/* 1. order */
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 10px; }
+.tile {
+  position: relative; aspect-ratio: 3 / 4; border: 0; padding: 0; border-radius: 10px; overflow: hidden;
+  background: var(--stage); cursor: grab; outline: 3px solid transparent; outline-offset: -3px;
+  border-left: 3px solid transparent;
+}
+.tile img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0.4; pointer-events: none; }
+.tile.on { outline-color: var(--sage); }
+.tile.on img { opacity: 1; }
+.tile.over { border-left-color: var(--forest); box-shadow: -4px 0 0 var(--forest); }
+.check {
+  position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 13px; font-weight: 700;
+  border: 2px solid var(--on-media); background: rgb(0 0 0 / 25%); color: var(--on-sage);
+}
+.tile.on .check { background: var(--sage); border-color: var(--sage); }
+.tag, .time, .badge {
+  position: absolute; font-size: 11px; font-weight: 600; color: var(--on-media);
+  background: rgb(20 28 20 / 70%); padding: 1px 6px; border-radius: 999px;
+}
+.tag { top: 6px; left: 6px; }
+.time { bottom: 6px; right: 6px; }
+.badge { bottom: 6px; left: 6px; background: var(--sage); color: var(--on-sage); }
+
+/* 2. pace */
+.pace { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+.pace .col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.pace h3 { margin: 0; }
+.pace h3.gap { margin-top: 10px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.field b { color: var(--ink); }
+.field small { font-size: 12px; }
+.field.check span { display: flex; gap: 6px; align-items: center; color: var(--ink); font-size: 14px; }
+.field input[type='range'] { padding: 0; accent-color: var(--forest); }
+.estimate {
+  display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 10px;
+  background: var(--sage-soft); font-size: 14px;
+}
+.mini { display: flex; gap: 2px; height: 22px; margin-top: 4px; }
+.mseg {
+  flex-basis: 0; min-width: 8px; border-radius: 3px; font-size: 10px; font-weight: 700; color: #fff;
+  display: grid; place-items: center; overflow: hidden; white-space: nowrap;
+}
+.mseg.photo { background: var(--paper); color: var(--muted); }
+
+/* 3. moments */
+.dots { display: flex; gap: 6px; overflow-x: auto; margin-top: 14px; padding: 2px; }
+.dot {
+  position: relative; flex: none; width: 48px; height: 64px; padding: 0; border: 0; border-radius: 8px;
+  overflow: hidden; cursor: pointer; background: var(--stage); outline: 2px solid transparent; outline-offset: -2px;
+}
+.dot img { width: 100%; height: 100%; object-fit: cover; opacity: 0.6; }
+.dot span {
+  position: absolute; left: 4px; bottom: 4px; font-size: 11px; font-weight: 700; color: var(--on-media);
+  background: rgb(20 28 20 / 70%); padding: 0 5px; border-radius: 999px;
+}
+.dot.on { outline-color: var(--forest); }
+.dot.on img { opacity: 1; }
+.moments { margin-top: 14px; }
+.mtitle { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 17px; word-break: break-all; }
+.mtitle .num {
+  display: grid; place-items: center; min-width: 26px; height: 26px; border-radius: 50%;
+  color: #fff; font-size: 13px; flex: none;
+}
+.mtitle .mono { margin-left: auto; white-space: nowrap; }
+
+/* 4. stitch */
+.seq { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 2px; }
+.stile {
+  position: relative; width: 72px; height: 96px; border-radius: 8px; overflow: hidden; cursor: grab;
+  background: var(--stage); flex: none; border-left: 3px solid transparent;
+}
+.stile.newround { margin-left: 14px; }
+.stile.over { box-shadow: -5px 0 0 var(--forest); }
+.stile img { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.stile.photo { outline: 2px dashed var(--sage); outline-offset: -2px; }
+.slabel {
+  position: absolute; top: 4px; left: 4px; padding: 0 6px; border-radius: 999px; font-size: 12px;
+  font-weight: 700; color: #fff; background: rgb(20 28 20 / 70%);
+}
+.slen {
+  position: absolute; bottom: 4px; right: 4px; font-size: 10px; font-weight: 600; color: var(--on-media);
+  background: rgb(20 28 20 / 70%); padding: 0 5px; border-radius: 999px;
+}
+.tmark {
+  width: 20px; height: 20px; padding: 0; border: 1px dashed var(--line); border-radius: 50%;
+  background: transparent; color: var(--muted); font-size: 12px; line-height: 1; cursor: pointer; flex: none;
+}
+.tmark:hover { border-color: var(--forest); color: var(--forest); }
+.tmark.soft { border-style: solid; border-color: var(--sage); background: var(--sage-soft); color: var(--forest); }
+.savebar { display: flex; align-items: flex-end; gap: 14px; margin-top: 18px; flex-wrap: wrap; }
+.savebar .grow { flex: 0 1 360px; }
+
+@media (max-width: 860px) {
+  .pace { grid-template-columns: 1fr; }
+}
+</style>

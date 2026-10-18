@@ -22,6 +22,7 @@
         </p>
       </div>
       <button class="btn" @click="sortByShotTime" :disabled="items.length < 2">Sort by shot time</button>
+      <button class="btn" v-if="settings.weave?.folder" @click="reweave" title="Reopen the Weave wizard for this reel">⧉ Re-weave</button>
       <button class="btn" @click="duplicateReel" title="Make a copy of this reel to experiment on">Duplicate</button>
       <button class="btn" :class="{ active: showSettings }" @click="showSettings = !showSettings">Settings</button>
       <button class="btn" @click="doExport" :disabled="exporting || !kept.length">
@@ -682,6 +683,13 @@ async function duplicateReel() {
   } catch (e) {
     window.alert(e.message)
   }
+}
+
+// A reel made with Weave: back into the wizard, which saves into this reel.
+async function reweave() {
+  stopReel()
+  await saver.flushAll()
+  router.push({ path: `/weave/${encodeURIComponent(settings.weave.folder)}`, query: { reel: id } })
 }
 
 async function removeReel() {

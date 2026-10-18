@@ -348,38 +348,84 @@ def reorder(reel_id: int, body: dict = Body(...)):
 
 # ---------------------------------------------------------------- items
 
+def item_values(m, body, s):
+    """A part's columns from a request body, kept in range (m: its media row)."""
+    if m["kind"] == "video":
+        length = float(body.get("length") or min(s["defaultLength"], m["duration"]))
+        start = body.get("start")
+        start = float(start) if start is not None else default_start(m["duration"], length)
+        start, length = fit(start, length, m["duration"])
+    else:
+        length, start = float(body.get("length") or s["defaultHold"]), 0.0
+    layout = body.get("layout") or ""
+    if layout not in LAYOUTS:
+        raise HTTPException(400, f"Unknown layout: {layout}")
+    transition = body.get("transition") or ""
+    if transition not in TRANSITIONS:
+        raise HTTPException(400, f"Unknown transition: {transition}")
+    return {"media_id": m["id"], "start": start, "length": length,
+            "focus_x": unit(body.get("focusX", 0.5)), "focus_y": unit(body.get("focusY", 0.5)),
+            "lighten": unit(body.get("lighten", 0)),
+            "beats": max(0, min(int(body.get("beats") or 0), 64)),
+            "zoom": zoom_of(body.get("zoom", 1)), "layout": layout, "transition": transition,
+            "keep": int(bool(body.get("keep", True)))}
+
+
 @app.post("/api/reels/{reel_id}/items")
 def add_item(reel_id: int, body: dict = Body(...)):
     with lib.connect() as db:
         r = reel_row(db, reel_id)
-        s = settings_of(r)
         m = db.execute("SELECT * FROM media WHERE id = ?", (body.get("mediaId"),)).fetchone()
         if not m:
             raise HTTPException(404, "No such clip")
-        if m["kind"] == "video":
-            length = float(body.get("length") or min(s["defaultLength"], m["duration"]))
-            start = body.get("start")
-            start = float(start) if start is not None else default_start(m["duration"], length)
-            start, length = fit(start, length, m["duration"])
-        else:
-            length, start = float(body.get("length") or s["defaultHold"]), 0.0
-        fx, fy = unit(body.get("focusX", 0.5)), unit(body.get("focusY", 0.5))
-        lighten = unit(body.get("lighten", 0))
-        beats = max(0, min(int(body.get("beats") or 0), 64))
-        zoom = zoom_of(body.get("zoom", 1))
-        layout = body.get("layout") or ""
-        if layout not in LAYOUTS:
-            raise HTTPException(400, f"Unknown layout: {layout}")
-        pos = db.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM reel_items "
-                         "WHERE reel_id = ?", (reel_id,)).fetchone()[0]
-        cur = db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length, "
-                         "focus_x, focus_y, lighten, beats, zoom, layout) "
-                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                         (reel_id, m["id"], pos, start, length, fx, fy, lighten, beats, zoom, layout))
+        values = item_values(m, body, settings_of(r))
+        values["position"] = db.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM reel_items "
+                                        "WHERE reel_id = ?", (reel_id,)).fetchone()[0]
+        cols = ", ".join(values)
+        cur = db.execute(f"INSERT INTO reel_items (reel_id, {cols}) VALUES (:reel_id, "
+                         f"{', '.join(':' + k for k in values)})", {**values, "reel_id": reel_id})
         touch(db, reel_id)
         row = db.execute("SELECT id AS item_id, * FROM reel_items WHERE id = ?",
                          (cur.lastrowid,)).fetchone()
         return item_dict(row)
+
+
+@app.put("/api/reels/{reel_id}/items")
+def set_items(reel_id: int, body: dict = Body(...)):
+    """Replace a reel's parts with this list, in this order (what Weave saves).
+
+    {items: [{id?, mediaId, start, length, ...}]}: a part with the id of one of
+    this reel's parts updates it, so what was set on it elsewhere (lighten,
+    zoom) stays; one without is added; the reel's other parts are removed.
+    """
+    with lib.connect() as db:
+        r = reel_row(db, reel_id)
+        s = settings_of(r)
+        mine = {row["id"] for row in db.execute("SELECT id FROM reel_items WHERE reel_id = ?", (reel_id,))}
+        keep = set()
+        for pos, body_item in enumerate(body.get("items") or []):
+            m = db.execute("SELECT * FROM media WHERE id = ?", (body_item.get("mediaId"),)).fetchone()
+            if not m:
+                raise HTTPException(404, f"No such clip: {body_item.get('mediaId')}")
+            item_id = body_item.get("id")
+            if item_id in mine:
+                old = db.execute("SELECT * FROM reel_items WHERE id = ?", (item_id,)).fetchone()
+                # Unsent fields keep what the part already had.
+                base = {"focusX": old["focus_x"], "focusY": old["focus_y"], "lighten": old["lighten"],
+                        "zoom": old["zoom"], "layout": old["layout"], "keep": bool(old["keep"])}
+                values = {**item_values(m, {**base, **body_item}, s), "position": pos}
+                sets = ", ".join(f"{k} = :{k}" for k in values)
+                db.execute(f"UPDATE reel_items SET {sets} WHERE id = :id", {**values, "id": item_id})
+                keep.add(item_id)
+            else:
+                values = {**item_values(m, body_item, s), "position": pos}
+                cur = db.execute(f"INSERT INTO reel_items (reel_id, {', '.join(values)}) VALUES (:reel_id, "
+                                 f"{', '.join(':' + k for k in values)})", {**values, "reel_id": reel_id})
+                keep.add(cur.lastrowid)
+        for gone in mine - keep:
+            db.execute("DELETE FROM reel_items WHERE id = ?", (gone,))
+        touch(db, reel_id)
+    return get_reel(reel_id)
 
 
 @app.patch("/api/items/{item_id}")
@@ -812,6 +858,58 @@ def media(name: str, file: str):
 @app.get("/api/thumb/{name}/{file}")
 def thumb(name: str, file: str, t: float = 0.0, w: int = 480):
     return make_thumb(resolve(name, file), t, w)
+
+
+@app.get("/api/activity/{name}/{file}")
+def activity(name: str, file: str):
+    """How much happens along a clip: [[seconds, 0..1], ...], for Weave's
+    movement lane and 'Suggest busy moments'. Cached per file."""
+    path = resolve(name, file)
+    if Library.kind_of(path) != "video":
+        raise HTTPException(400, "Not a video")
+    key = hashlib.sha1(f"activity|{path}|{path.stat().st_mtime}".encode()).hexdigest()
+    out = CACHE / f"{key}.json"
+    if not out.exists():
+        CACHE.mkdir(parents=True, exist_ok=True)
+        tmp = out.with_name(f"{key}.{uuid.uuid4().hex}.tmp")   # never read half-written
+        tmp.write_text(json.dumps({"points": movement(path)}))
+        tmp.replace(out)
+    return json.loads(out.read_text())
+
+
+def movement(path):
+    """The mean difference between successive keyframes (scdet's mafd), which
+    is cheap: only keyframes are decoded. Clips with too few keyframes are
+    sampled once a second instead. Smoothed and scaled to 0..1 against the
+    95th percentile, so one big jump doesn't flatten the rest."""
+    def measure(decode, vf):
+        try:
+            text = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", *decode, "-i", str(path),
+                                   "-vf", f"{vf}scale=160:-2,scdet=threshold=100,metadata=print:file=-",
+                                   "-an", "-f", "null", "-"],
+                                  capture_output=True, text=True, timeout=300).stdout
+        except subprocess.TimeoutExpired:
+            return []
+        points, t = [], None
+        for line in text.splitlines():
+            if m := re.search(r"pts_time:([\d.]+)", line):
+                t = float(m[1])
+            elif (m := re.match(r"lavfi\.scd\.mafd=([\d.]+)", line)) and t is not None:
+                points.append([t, float(m[1])])
+        return points[1:]   # the first frame has nothing to compare with
+
+    points = measure(["-skip_frame", "nokey"], "")
+    if len(points) < 4:
+        points = measure([], "fps=1,")
+    if not points:
+        return []
+    raw = [v for _, v in points]
+    smooth = []
+    for i in range(len(raw)):
+        near = raw[max(0, i - 1):i + 2]
+        smooth.append(sum(near) / len(near))
+    top = sorted(smooth)[int(0.95 * (len(smooth) - 1))] or max(smooth) or 1
+    return [[round(t, 2), round(min(v / top, 1.0), 3)] for (t, _), v in zip(points, smooth)]
 
 
 def make_thumb(path, t=0.0, w=480):

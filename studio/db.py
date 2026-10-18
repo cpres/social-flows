@@ -89,6 +89,9 @@ DEFAULT_SETTINGS = {
     "dividerPx": 4,         # the line between the panes (0 = none)
     "dividerColor": "#f7f1e3",
     "fitTop": True,         # speed the top clip to end with the parts underneath
+    # A reel made with Weave: the shoot it came from, its clips in order and the
+    # pace, so the wizard can reopen it ({folder, clips, splitOver, between, ...}).
+    "weave": None,
 }
 
 

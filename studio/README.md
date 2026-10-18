@@ -49,7 +49,9 @@ python3 studio/server.py --open
   A file that's already in a shoot folder (matched on content, so AirDrop's
   renamed copies like `IMG_1234 2.MOV` count), or that's a repeat of another
   file in Downloads, isn't copied again: importing just deletes it from
-  Downloads. `DOWNLOADS_DIR` points it somewhere else.
+  Downloads. `DOWNLOADS_DIR` points it somewhere else. If what came in is two
+  or more videos (or one over a minute), the shoot page offers to **weave** them
+  (below).
 - **Open a shoot** to go through its clips in the order they were shot. Under the
   video, a filmstrip shows what happens where; drag the handles to pick a part,
   or type exact start and length. Then click a reel (or press `1`–`9`) to add
@@ -125,6 +127,37 @@ the parts. Turned off, the reel runs as long as the top clip at normal speed;
 the parts are cut where it ends, or the last one holds. The line under the
 timeline shows the lengths and the speed. The top clip is silent; the parts
 keep their sound.
+
+**Weave.** Long clips are dull watched end to end. *Weave a reel* (on a shoot's
+page, or offered right after an import) cuts each clip into a few parts and
+interleaves them: a bit of clip 1, an early bit of clip 2, of clip 3, then back
+for later bits (`1a 2a 3a ▣ 1b 2b ▣ 1c 2c ▣`), so several things seem to happen
+at once. It's a four-step wizard that makes a normal reel:
+
+1. **Order**: the shoot's clips and photos in the order they were shot (what you
+   just imported is picked). Drag to reorder, click to leave one out. Each round
+   goes through the clips in this order.
+2. **Pace**: the length of every part (1–4s, or *Aim for* 15/30/45/60s), and a
+   song. With a song and beat detection, every part is a whole number of beats
+   (1, 2, 4 or 8) and photos hold twice as many. Clips longer than *Split clips
+   longer than* (1:00) get about one part per 30s of footage (2–6); shorter ones
+   get one. *Between rounds* picks the transition that marks time moving on.
+3. **Moments**: one clip at a time. Its parts are windows on the filmstrip
+   (a, b, c…) that slide but never cross, so a always comes before b; `+`/`−`
+   changes how many. The lane under the filmstrip shows how much is moving where
+   (measured once from the keyframes, cached), and *Suggest busy moments* starts
+   each part on the liveliest stretch of its share of the clip. Framing set here
+   applies to every part of the clip.
+4. **Stitch**: the woven order as tiles. Every clip shows up in the first round
+   and ends in the last; a clip with more parts than the others is spread across
+   the rounds, and photos go between rounds, the last one closing the reel. Drag
+   tiles to change it, and click the marks between them to switch a cut to the
+   between-rounds transition. *Create reel* opens it as a normal reel to play,
+   fine-tune and render.
+
+A reel made this way has **Re-weave** in its header, which reopens the wizard and
+saves back into the same reel. That puts every part back to the pace length;
+framing, lighten and zoom set on parts in the reel are kept.
 
 Everything is stored in one SQLite file, `~/Footage/.studio/studio.db`
 (no database server to run). Files are never copied or moved. If you rename a

@@ -47,6 +47,10 @@ export const api = {
   addItem: (reelId, item) => send('POST', `/api/reels/${reelId}/items`, item),
   updateItem: (id, patch) => send('PATCH', `/api/items/${id}`, patch),
   deleteItem: (id) => send('DELETE', `/api/items/${id}`),
+  // Replace a reel's parts with this list, in order (Weave).
+  saveItems: (reelId, items) => send('PUT', `/api/reels/${reelId}/items`, { items }),
+  // How much happens along a clip: { points: [[seconds, 0..1], ...] }.
+  activity: (folder, file) => fetch(`/api/activity/${enc(folder)}/${enc(file)}`).then(json),
 
   // AirDropped files waiting in ~/Downloads, and moving them into a shoot.
   importList: () => fetch('/api/import').then(json),

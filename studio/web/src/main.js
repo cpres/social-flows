@@ -5,6 +5,7 @@ import Home from './views/Home.vue'
 import ReelView from './views/ReelView.vue'
 import RendersView from './views/RendersView.vue'
 import ShootView from './views/ShootView.vue'
+import WeaveView from './views/WeaveView.vue'
 import './style.css'
 
 const router = createRouter({
@@ -14,6 +15,7 @@ const router = createRouter({
     { path: '/shoot/:name', component: ShootView, props: true },
     { path: '/reel/:id', component: ReelView, props: true },
     { path: '/renders', component: RendersView },
+    { path: '/weave/:folder', component: WeaveView, props: true },
   ],
 })
 

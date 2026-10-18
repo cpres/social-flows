@@ -10,10 +10,17 @@
           {{ media.length }} files · {{ items.length }} part{{ items.length === 1 ? '' : 's' }} tagged into reels
         </p>
       </div>
+      <button class="btn" @click="weave" title="Cut the clips into parts and interleave them into a reel" :disabled="!media.some((m) => m.kind === 'video')">
+        ⧉ Weave a reel
+      </button>
       <button class="btn" @click="folderToReel" title="Make a reel from everything in this folder">
         {{ hasSidecar ? 'Turn earlier trims into a reel' : 'Make a reel from this folder' }}
       </button>
     </section>
+    <WeavePrompt
+      v-if="offer" :videos="offer.videos" :long="offer.long" :photos="offer.photos"
+      @weave="weave" @dismiss="dismissOffer"
+    />
 
     <div class="workspace" v-if="media.length">
       <aside class="cliplist" ref="listEl">
@@ -148,6 +155,7 @@ import ClipCard from '../components/ClipCard.vue'
 import ReelFrame from '../components/ReelFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
 import TrimBar from '../components/TrimBar.vue'
+import WeavePrompt from '../components/WeavePrompt.vue'
 
 const props = defineProps({ name: { type: String, required: true } })
 const emit = defineEmits(['root'])
@@ -355,6 +363,29 @@ async function newReelAndTag() {
   } catch (e) {
     showFlash(e.message)
   }
+}
+
+// ---------------------------------------------------------------- weave
+
+// Files that just came in from Downloads (Home passes them along), and the
+// offer to weave them: worth it for two or more videos, or one long one.
+const imported = ref(window.history.state?.imported || null)
+const offer = computed(() => {
+  if (!imported.value?.length) return null
+  const mine = media.value.filter((m) => imported.value.includes(m.file))
+  const vids = mine.filter((m) => m.kind === 'video')
+  const long = vids.filter((m) => m.duration > 60).length
+  if (vids.length < 2 && !long) return null
+  return { videos: vids.length, long, photos: mine.length - vids.length }
+})
+function dismissOffer() {
+  imported.value = null
+  window.history.replaceState({ ...window.history.state, imported: null }, '')
+}
+function weave() {
+  // history state has to be plain data, not Vue's reactive copy
+  router.push({ path: `/weave/${encodeURIComponent(props.name)}`,
+                state: { imported: imported.value ? [...imported.value] : null } })
 }
 
 async function folderToReel() {

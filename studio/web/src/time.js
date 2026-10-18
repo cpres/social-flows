@@ -44,6 +44,13 @@ export function clockTime(epochSeconds) {
 
 export const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
+// Filmstrip frames: a thumbnail every ~20s of footage, between 6 and 14.
+export function stripTimes(duration) {
+  if (!duration) return []
+  const n = clamp(Math.round(duration / 20), 6, 14)
+  return Array.from({ length: n }, (_, i) => Math.round(((i + 0.5) * duration) / n))
+}
+
 // Keep a part inside its clip: at least 0.2s, never past the end.
 export function fitRange(start, length, duration) {
   if (!(duration > 0)) return { start: Math.max(0, start), length: Math.max(0.2, length) }

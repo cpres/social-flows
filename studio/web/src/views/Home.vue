@@ -129,9 +129,10 @@ async function checkDownloads() {
   }
 }
 
+// The shoot page offers to weave what just came in.
 function imported(r) {
   importing.value = false
-  router.push(`/shoot/${encodeURIComponent(r.folder)}`)
+  router.push({ path: `/shoot/${encodeURIComponent(r.folder)}`, state: { imported: r.imported } })
 }
 
 async function newReel() {

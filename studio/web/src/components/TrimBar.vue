@@ -38,7 +38,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { clamp, fmtTime } from '../time'
+import { clamp, fmtTime, stripTimes as filmstrip } from '../time'
 
 const MIN_LEN = 0.2
 
@@ -57,13 +57,7 @@ const bar = ref(null)
 let mode = null
 let grabOffset = 0
 
-// A thumbnail every ~20s of footage, between 6 and 14 frames.
-const stripTimes = computed(() => {
-  const d = props.duration
-  if (!d) return []
-  const n = clamp(Math.round(d / 20), 6, 14)
-  return Array.from({ length: n }, (_, i) => Math.round(((i + 0.5) * d) / n))
-})
+const stripTimes = computed(() => filmstrip(props.duration))
 
 const pct = (t) => `${(clamp(t, 0, props.duration) / (props.duration || 1)) * 100}%`
 
