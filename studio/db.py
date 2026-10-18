@@ -5,6 +5,8 @@ The studio's library: one SQLite file at ~/Footage/.studio/studio.db.
     reels       a reel concept and its render settings
     reel_items  a part of a media file used in a reel (start + length).
                 One file can appear in many reels, or several times in one.
+    weave_drafts  the Weave wizard's progress, one per shoot (or per reel
+                being re-woven), until it's made into a reel
 
 Files are never moved or copied. Each media row remembers size and capture
 time, so a file that is renamed or moved to another shoot folder is relinked
@@ -66,6 +68,14 @@ CREATE TABLE IF NOT EXISTS reel_items (
 );
 CREATE INDEX IF NOT EXISTS items_reel ON reel_items(reel_id, position);
 CREATE INDEX IF NOT EXISTS items_media ON reel_items(media_id);
+
+CREATE TABLE IF NOT EXISTS weave_drafts (
+    key        TEXT PRIMARY KEY,   -- 'shoot:<folder>' (new weave) or 'reel:<id>' (re-weave)
+    folder     TEXT NOT NULL,
+    reel_id    INTEGER REFERENCES reels(id) ON DELETE CASCADE,
+    state      TEXT NOT NULL,      -- the Weave wizard's choices, as JSON
+    updated_at REAL NOT NULL
+);
 """
 
 DEFAULT_SETTINGS = {

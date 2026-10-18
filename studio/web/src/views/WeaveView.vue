@@ -3,13 +3,15 @@
   <main v-else-if="loading" class="screen-msg muted">Loading clips…</main>
   <main v-else class="screen">
     <section class="headbar">
-      <RouterLink :to="backTo" class="back" title="Back">←</RouterLink>
+      <RouterLink :to="backTo" class="back" :title="reelId ? 'Back to the reel (your draft is kept)' : 'Back to Reels & shoots (your draft is kept)'">←</RouterLink>
       <div class="title">
         <h1>{{ reelId ? `Re-weave ${existingName}` : 'Weave a reel' }}</h1>
         <p class="muted">
           {{ folderTitle(folder) }} · {{ videos.length }} clip{{ videos.length === 1 ? '' : 's' }} →
           {{ partCount }} part{{ partCount === 1 ? '' : 's' }}<template v-if="photos.length"> + {{ photos.length }} photo{{ photos.length === 1 ? '' : 's' }}</template>
           · ≈ <b class="mono total">{{ fmtTime(total) }}</b>
+          <span class="draftstate">{{ draftState }}</span>
+          <template v-if="draftAt"> · <button class="link" @click="startOver">Start over</button></template>
         </p>
       </div>
       <nav class="steps" aria-label="Steps">
@@ -21,6 +23,11 @@
       <button class="btn" @click="go(step - 1)" :disabled="step === 0">Back</button>
       <button class="btn primary" v-if="step < 3" @click="go(step + 1)" :disabled="!videos.length">Next</button>
     </section>
+    <p v-if="resumedAt" class="notice">
+      Picked up your draft from {{ savedAt(resumedAt) }}<template v-if="addedOnResume">, with the
+        {{ addedOnResume }} file{{ addedOnResume === 1 ? '' : 's' }} you just imported added</template>.
+      <button class="link" @click="startOver">Start over</button>
+    </p>
     <p v-if="notice" class="notice">{{ notice }}</p>
 
     <!-- 1. Order: what goes in, and in what order -->
@@ -282,9 +289,9 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api } from '../api'
+import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
-import { clamp, clockTime, fmtTime, folderTitle, reelColor } from '../time'
+import { clamp, clockTime, fmtTime, folderTitle, reelColor, savedAt } from '../time'
 import {
   MAX_PARTS, MIN_PARTS, SECONDS_PER_PART, autoParts, busyStarts, fromReel, inOrder, letter,
   maxParts, settle, spreadStarts, weave,
@@ -296,7 +303,8 @@ const props = defineProps({ folder: { type: String, required: true } })
 const route = useRoute()
 const router = useRouter()
 const reelId = route.query.reel ? Number(route.query.reel) : null
-const backTo = reelId ? `/reel/${reelId}` : `/shoot/${encodeURIComponent(props.folder)}`
+// A new weave's draft shows on Home; a re-weave goes back to its reel.
+const backTo = reelId ? `/reel/${reelId}` : '/'
 
 const STEPS = ['Order', 'Pace', 'Moments', 'Stitch']
 const BEAT_CHOICES = [1, 2, 4, 8]
@@ -324,7 +332,8 @@ const step = ref(0)
 const clips = ref([])
 const existingName = ref('')
 const newName = ref(`${props.folder} weave`)
-const pace = reactive({ len: 2, splitOver: 60, between: 'dissolve', music: '', musicStart: 0, beatSync: false, beatsPerCut: 4 })
+const PACE = { len: 2, splitOver: 60, between: 'dissolve', music: '', musicStart: 0, beatSync: false, beatsPerCut: 4 }
+const pace = reactive({ ...PACE })
 const order = ref(null)          // the keys in the order dragged in Stitch; null = woven
 const overrides = reactive({})   // key -> transition clicked in Stitch (or the reel's, re-weaving)
 const activityOf = reactive({})  // mediaId -> movement points; null while measuring
@@ -537,6 +546,7 @@ watch(order, (keys) => {
 })
 // A new between-rounds transition replaces the old one wherever it was used.
 watch(() => pace.between, (now, was) => {
+  if (!ready) return   // loading a draft or a reel: its transitions are already right
   for (const k of Object.keys(overrides)) if (overrides[k] === was) overrides[k] = now
 })
 
@@ -628,47 +638,190 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 // ---------------------------------------------------------------- load & save
 
+const draftQuery = reelId ? { reel: reelId } : { folder: props.folder }
+let folderMedia = []   // the shoot's files
+let reelData = null    // re-weaving: the reel as it was loaded
+let untouched = []     // re-weaving: parts the wizard leaves as they are
+
+// A Stack reel's top clip, and parts whose file is missing for now, aren't the
+// wizard's to change: they're saved back as they are.
+const managed = (it) => !it.media.missing
+  && !(reelData.settings.format === 'stack' && it.id === reelData.settings.topItemId)
+
+// Every file the wizard can use: the shoot's, plus (re-weaving) the reel's.
+function mediaById() {
+  const out = new Map(folderMedia.map((m) => [m.id, m]))
+  for (const it of reelData?.items || []) if (managed(it) && !out.has(it.mediaId)) out.set(it.mediaId, it.media)
+  return out
+}
+
+// From scratch: what was just imported (else the whole shoot), or the reel as it is.
+function startFresh(imported) {
+  Object.assign(pace, PACE)
+  for (const k of Object.keys(overrides)) delete overrides[k]
+  order.value = null
+  step.value = 0
+  cur.value = 0
+  newName.value = `${props.folder} weave`
+  if (!reelData) {
+    clips.value = folderMedia.map((m) => newClip(m, imported.length ? imported.includes(m.file) : true))
+    return
+  }
+  const s = reelData.settings
+  const w = s.weave || {}
+  Object.assign(pace, {
+    len: Number(w.pace || s.defaultLength) || 2, splitOver: w.splitOver ?? 60, between: w.between || 'dissolve',
+    music: s.music || '', musicStart: Number(s.musicStart) || 0, beatSync: !!s.beatSync,
+    beatsPerCut: Number(s.beatsPerCut) || 4,
+  })
+  const back = fromReel(reelData.items.filter(managed), w)
+  const inReel = new Set(back.clips.map((c) => c.mediaId))
+  clips.value = [...back.clips, ...folderMedia.filter((m) => !inReel.has(m.id)).map((m) => newClip(m, false))]
+  order.value = back.keys
+  Object.assign(overrides, back.transitions)
+  step.value = 1
+}
+
+// ---------------------------------------------------------------- drafts
+// Everything chosen so far is saved as a draft as you go, so leaving the
+// wizard (or closing the page) loses nothing; it picks up where you were.
+
+const draftAt = ref(null)        // when the draft was last saved
+const resumedAt = ref(null)      // this visit picked up a draft saved then
+const addedOnResume = ref(0)     // files imported since the draft, added to it
+const draftSaving = ref(false)
+const draftError = ref('')
+let stopDraft = false            // finishing or starting over: save nothing more
+let lastSaved = ''
+let inflight = Promise.resolve()
+
+const draftState = computed(() => {
+  if (draftError.value) return ` · draft not saved: ${draftError.value}`
+  if (draftSaving.value) return ' · saving draft…'
+  return draftAt.value ? ` · draft saved ${savedAt(draftAt.value)}` : ''
+})
+
+function snapshot() {
+  return {
+    v: 1, step: step.value, cur: cur.value, newName: newName.value,
+    pace: { ...pace }, order: order.value, overrides: { ...overrides },
+    clips: clips.value.map((c) => ({
+      mediaId: c.mediaId, kind: c.kind, on: c.on, auto: c.auto, placed: c.placed, framed: c.framed,
+      focusX: c.focusX, focusY: c.focusY, zoom: c.zoom, id: c.id,
+      parts: c.parts.map((p) => ({ id: p.id, start: p.start })),
+    })),
+  }
+}
+
+// Back to a saved draft. Files gone since are dropped; files added since go
+// at the end, switched on if they were just imported.
+function restore(state, media, imported) {
+  Object.assign(pace, PACE, state.pace || {})
+  const seen = new Set()
+  const out = []
+  for (const c of state.clips || []) {
+    const m = media.get(c.mediaId)
+    if (!m) continue
+    seen.add(m.id)
+    const clip = newClip(m, !!c.on)
+    Object.assign(clip, { auto: !!c.auto, placed: !!c.placed, framed: !!c.framed, focusX: c.focusX ?? 0.5,
+                          focusY: c.focusY ?? 0.5, zoom: c.zoom || 1, id: c.id })
+    if (m.kind === 'video' && c.parts?.length) clip.parts = c.parts.map((p) => ({ ...p }))
+    out.push(clip)
+  }
+  const added = [...media.values()].filter((m) => !seen.has(m.id))
+  addedOnResume.value = added.filter((m) => imported.includes(m.file)).length
+  clips.value = [...out, ...added.map((m) => newClip(m, imported.includes(m.file)))]
+  order.value = state.order || null
+  for (const k of Object.keys(overrides)) delete overrides[k]
+  Object.assign(overrides, state.overrides || {})
+  newName.value = state.newName || newName.value
+  step.value = state.step || 0
+  cur.value = state.cur || 0
+}
+
+const draftSaver = debouncedSaver(async (_, state) => {
+  if (stopDraft) return
+  draftSaving.value = true
+  inflight = api.saveWeaveDraft({ folder: props.folder, reelId, state })
+  try {
+    draftAt.value = (await inflight).updatedAt
+    draftError.value = ''
+  } catch (e) {
+    draftError.value = e.message
+  } finally {
+    draftSaving.value = false
+  }
+}, 500)
+watch(() => JSON.stringify(snapshot()), (text) => {
+  if (!ready || stopDraft || text === lastSaved) return
+  lastSaved = text
+  draftSaver.queue('draft', JSON.parse(text))
+})
+const flushDraft = () => draftSaver.flushAll()
+onMounted(() => window.addEventListener('pagehide', flushDraft))
+onBeforeUnmount(() => {
+  window.removeEventListener('pagehide', flushDraft)
+  flushDraft()
+})
+
+// Stop saving, and make sure nothing still on its way brings the draft back.
+async function dropDraft() {
+  stopDraft = true
+  await draftSaver.flushAll()
+  await inflight.catch(() => {})
+  await api.deleteWeaveDraft(draftQuery).catch(() => {})
+  draftAt.value = null
+}
+
+async function startOver() {
+  const ask = reelId ? 'Throw away this draft and start again from the reel as it is?'
+    : 'Throw away this draft and start over?'
+  if (!window.confirm(ask)) return
+  await dropDraft()
+  ready = false
+  resumedAt.value = null
+  notice.value = ''
+  startFresh(window.history.state?.imported || [])
+  setTimeout(() => {
+    lastSaved = JSON.stringify(snapshot())
+    ready = true
+    stopDraft = false
+  })
+}
+
 onMounted(async () => {
   try {
-    const [data, music] = await Promise.all([api.folder(props.folder), api.music().catch(() => null)])
+    const [data, music, draft] = await Promise.all([
+      api.folder(props.folder), api.music().catch(() => null), api.weaveDraft(draftQuery).catch(() => null),
+    ])
     if (music) shelf.value = music
-    const media = data.media.filter((m) => !m.missing)
+    folderMedia = data.media.filter((m) => !m.missing)
     if (reelId) {
-      const r = await api.reel(reelId)
-      const s = r.settings
-      const w = s.weave || {}
-      existingName.value = r.name
-      Object.assign(pace, {
-        len: Number(w.pace || s.defaultLength) || 2, splitOver: w.splitOver ?? 60, between: w.between || 'dissolve',
-        music: s.music || '', musicStart: Number(s.musicStart) || 0, beatSync: !!s.beatSync,
-        beatsPerCut: Number(s.beatsPerCut) || 4,
-      })
-      // A Stack reel's top clip, and parts whose file is missing for now, aren't
-      // the wizard's to change: they're saved back as they are.
-      const mine = (it) => !it.media.missing && !(s.format === 'stack' && it.id === s.topItemId)
-      untouched = r.items.filter((it) => !mine(it))
-      const back = fromReel(r.items.filter(mine), w)
-      const inReel = new Set(back.clips.map((c) => c.mediaId))
-      clips.value = [...back.clips, ...media.filter((m) => !inReel.has(m.id)).map((m) => newClip(m, false))]
-      order.value = back.keys
-      Object.assign(overrides, back.transitions)
-      step.value = 1
+      reelData = await api.reel(reelId)
+      existingName.value = reelData.name
+      untouched = reelData.items.filter((it) => !managed(it))
+    }
+    const imported = window.history.state?.imported || []
+    if (draft?.state?.clips) {
+      restore(draft.state, mediaById(), imported)
+      draftAt.value = resumedAt.value = draft.updatedAt
     } else {
-      // Fresh from an import: just what came in; otherwise the whole shoot.
-      const imported = window.history.state?.imported
-      clips.value = media.map((m) => newClip(m, imported?.length ? imported.includes(m.file) : true))
+      startFresh(imported)
     }
   } catch (e) {
     error.value = e.message
   } finally {
     loading.value = false
-    setTimeout(() => { ready = true })
+    setTimeout(() => {
+      lastSaved = JSON.stringify(snapshot())
+      ready = true
+    })
   }
 })
 
 const saving = ref(false)
 const failure = ref('')
-let untouched = []
 
 async function save() {
   if (saving.value || !seq.value.length) return
@@ -704,6 +857,7 @@ async function save() {
     if (!target) target = (await api.createReel(newName.value.trim())).id
     await api.updateReel(target, { settings })
     await api.saveItems(target, items)
+    await dropDraft()                    // it's a reel now
     router.push(`/reel/${target}`)
   } catch (e) {
     failure.value = e.message
@@ -729,6 +883,7 @@ async function save() {
 .stepchip.on { background: var(--forest); color: var(--cream); font-weight: 600; }
 .stepchip.on .n { background: var(--cream); color: var(--forest); }
 .stepchip:disabled { cursor: default; opacity: 0.5; }
+.draftstate { font-size: 13px; }
 .notice { margin: 12px 0 0; padding: 8px 12px; border-radius: 8px; background: var(--sage-soft); font-size: 14px; }
 .lead { margin: -4px 0 12px; font-size: 14px; }
 .warnnote { margin: 0 0 12px; padding: 8px 12px; border-radius: 8px; border-left: 4px solid var(--warn); background: var(--cream); font-size: 13px; }

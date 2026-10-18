@@ -10,15 +10,18 @@
           {{ media.length }} files · {{ items.length }} part{{ items.length === 1 ? '' : 's' }} tagged into reels
         </p>
       </div>
-      <button class="btn" @click="weave" title="Cut the clips into parts and interleave them into a reel" :disabled="!media.some((m) => m.kind === 'video')">
-        ⧉ Weave a reel
+      <button
+        class="btn" @click="weave" :disabled="!media.some((m) => m.kind === 'video')"
+        :title="draftAt ? `Pick up the weave you started (saved ${savedAt(draftAt)})` : 'Cut the clips into parts and interleave them into a reel'"
+      >
+        {{ draftAt ? '⧉ Continue weave draft' : '⧉ Weave a reel' }}
       </button>
       <button class="btn" @click="folderToReel" title="Make a reel from everything in this folder">
         {{ hasSidecar ? 'Turn earlier trims into a reel' : 'Make a reel from this folder' }}
       </button>
     </section>
     <WeavePrompt
-      v-if="offer" :videos="offer.videos" :long="offer.long" :photos="offer.photos"
+      v-if="offer" :videos="offer.videos" :long="offer.long" :photos="offer.photos" :draft="!!draftAt"
       @weave="weave" @dismiss="dismissOffer"
     />
 
@@ -150,7 +153,7 @@ import { useRouter } from 'vue-router'
 import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
 import { useRefreshOnFocus } from '../refresh'
-import { clockTime, defaultStart, fitRange, fmtTime, folderTitle, reelColor } from '../time'
+import { clockTime, defaultStart, fitRange, fmtTime, folderTitle, reelColor, savedAt } from '../time'
 import ClipCard from '../components/ClipCard.vue'
 import ReelFrame from '../components/ReelFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
@@ -165,6 +168,7 @@ const media = ref([])
 const items = ref([])
 const reels = ref([])
 const hasSidecar = ref(false)
+const draftAt = ref(null)      // a Weave draft for this shoot, saved then
 const selected = ref(0)
 const activeId = ref(null)     // a saved part being edited, or null for a new selection
 const drafts = reactive({})    // mediaId -> { start, length } not yet in any reel
@@ -208,6 +212,7 @@ function apply(data) {
   items.value = data.items
   reels.value = [...data.reels].sort((a, b) => a.id - b.id)   // stable, so 1–9 keys don't move
   hasSidecar.value = data.hasSidecar
+  draftAt.value = data.draftAt || null
 }
 
 onMounted(async () => {

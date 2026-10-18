@@ -36,6 +36,13 @@ export function folderTitle(name) {
   return rest ? `${date} · ${rest}` : date
 }
 
+// When something was saved: the time today, else the day and time.
+export function savedAt(epochSeconds) {
+  const d = new Date(epochSeconds * 1000)
+  if (d.toDateString() === new Date().toDateString()) return clockTime(epochSeconds)
+  return d.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })
+}
+
 export function clockTime(epochSeconds) {
   return new Date(epochSeconds * 1000).toLocaleTimeString(undefined, {
     hour: 'numeric', minute: '2-digit',

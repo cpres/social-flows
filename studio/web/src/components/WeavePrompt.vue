@@ -4,10 +4,13 @@
     <div class="text">
       <b>You brought in {{ videos }} video{{ videos === 1 ? '' : 's' }}<template v-if="long"> ({{ long }} over a minute)</template><template
         v-if="photos"> and {{ photos }} photo{{ photos === 1 ? '' : 's' }}</template>.</b>
-      Want help cutting them into parts and weaving them into a reel? A bit of each clip, then the next,
-      then back for a later bit, on the beat if there's a song.
+      <template v-if="draft">You have a weave draft for this shoot; they'll be added to it.</template>
+      <template v-else>
+        Want help cutting them into parts and weaving them into a reel? A bit of each clip, then the next,
+        then back for a later bit, on the beat if there's a song.
+      </template>
     </div>
-    <button class="btn primary" @click="$emit('weave')">Weave a reel</button>
+    <button class="btn primary" @click="$emit('weave')">{{ draft ? 'Continue weave' : 'Weave a reel' }}</button>
     <button class="btn" @click="$emit('dismiss')">Not now</button>
   </section>
 </template>
@@ -18,6 +21,7 @@ defineProps({
   videos: { type: Number, required: true },
   long: { type: Number, default: 0 },     // how many run over the split length
   photos: { type: Number, default: 0 },
+  draft: Boolean,                         // this shoot has a Weave draft already
 })
 defineEmits(['weave', 'dismiss'])
 </script>

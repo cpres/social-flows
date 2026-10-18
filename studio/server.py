@@ -178,7 +178,7 @@ def reel_summaries(db):
 @app.get("/api/folders")
 def list_folders():
     if not ROOT.is_dir():
-        return {"root": str(ROOT), "folders": [], "reels": [],
+        return {"root": str(ROOT), "folders": [], "reels": [], "drafts": [],
                 "error": f"{ROOT} does not exist"}
     lib.scan()
     folders = []
@@ -202,10 +202,11 @@ def list_folders():
                 "usedCount": used,
             })
         reels = reel_summaries(db)
+        drafts = draft_summaries(db)
     # Newest shoot first: date-named folders by name, the rest by last change.
     folders.sort(key=lambda f: (f["name"][:10] if f["name"][:4].isdigit() else "",
                                 f["lastModified"]), reverse=True)
-    return {"root": str(ROOT), "folders": folders, "reels": reels}
+    return {"root": str(ROOT), "folders": folders, "reels": reels, "drafts": drafts}
 
 
 @app.get("/api/folders/{name}")
@@ -219,8 +220,9 @@ def get_folder(name: str):
             SELECT i.id AS item_id, i.* FROM reel_items i JOIN media m ON m.id = i.media_id
             WHERE m.folder = ? ORDER BY i.start""", (name,))]
         reels = reel_summaries(db)
+        draft_at = draft_time(db, draft_key(folder=name))
     return {"name": name, "path": str(folder), "media": media, "items": items, "reels": reels,
-            "hasSidecar": (folder / SIDECAR).exists()}
+            "hasSidecar": (folder / SIDECAR).exists(), "draftAt": draft_at}
 
 
 @app.post("/api/folders/{name}/to-reel")
@@ -303,8 +305,9 @@ def get_reel(reel_id: int):
         settings = settings_of(r)
         if settings["format"] == "stack" and not top_item(db, reel_id, settings):
             settings["topItemId"] = None   # its clip was removed: pick another
+        draft_at = draft_time(db, draft_key(reel=reel_id))
     return {"id": r["id"], "name": r["name"], "settings": settings, "items": items,
-            "otherItems": others, "reels": reels}
+            "otherItems": others, "reels": reels, "draftAt": draft_at}
 
 
 @app.patch("/api/reels/{reel_id}")
@@ -510,6 +513,81 @@ def duplicate_reel(reel_id: int, body: dict = Body(default={})):
             s["topItemId"] = new[old.index(s["topItemId"])]
             db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), new_id))
     return {"id": new_id, "name": name}
+
+
+# ---------------------------------------------------------------- weave drafts
+# The Weave wizard saves its progress as you go: one draft per shoot for a new
+# weave, one per reel being re-woven, until it's made into (or saved to) a reel.
+
+def draft_key(folder="", reel=0):
+    if reel:
+        return f"reel:{int(reel)}"
+    if folder:
+        return f"shoot:{folder}"
+    raise HTTPException(400, "Say which shoot (folder) or reel the draft is for")
+
+
+def draft_time(db, key):
+    row = db.execute("SELECT updated_at FROM weave_drafts WHERE key = ?", (key,)).fetchone()
+    return row["updated_at"] if row else None
+
+
+def draft_summaries(db):
+    """Drafts in progress, newest first, for Home's cards."""
+    out = []
+    for d in db.execute("""SELECT w.*, r.name AS reel_name FROM weave_drafts w
+                           LEFT JOIN reels r ON r.id = w.reel_id ORDER BY w.updated_at DESC"""):
+        if not d["reel_id"] and not (ROOT / d["folder"]).is_dir():
+            continue   # its shoot folder is gone
+        state = json.loads(d["state"] or "{}")
+        chosen = [c for c in state.get("clips", []) if c.get("on")]
+        videos = [c for c in chosen if c.get("kind") == "video"]
+        cover = None
+        for c in chosen:
+            m = db.execute("SELECT folder, name, kind FROM media WHERE id = ? AND missing = 0",
+                           (c.get("mediaId"),)).fetchone()
+            if m:
+                parts = c.get("parts") or [{}]
+                cover = {**dict(m), "start": parts[0].get("start", 0)}
+                break
+        out.append({"folder": d["folder"], "reelId": d["reel_id"], "reelName": d["reel_name"],
+                    "step": int(state.get("step") or 0) + 1, "clips": len(videos),
+                    "photos": len(chosen) - len(videos),
+                    "parts": sum(len(c.get("parts") or []) for c in videos),
+                    "updatedAt": d["updated_at"], "cover": cover})
+    return out
+
+
+@app.get("/api/weave/draft")
+def get_draft(folder: str = "", reel: int = 0):
+    with lib.connect() as db:
+        row = db.execute("SELECT state, updated_at FROM weave_drafts WHERE key = ?",
+                         (draft_key(folder, reel),)).fetchone()
+    return {"state": json.loads(row["state"]), "updatedAt": row["updated_at"]} if row else None
+
+
+@app.put("/api/weave/draft")
+def save_draft(body: dict = Body(...)):
+    """{folder, reelId?, state}: the wizard's choices so far."""
+    folder = (body.get("folder") or "").strip()
+    reel = int(body.get("reelId") or 0)
+    if not folder:
+        raise HTTPException(400, "A draft needs its shoot folder")
+    at = now()
+    with lib.connect() as db:
+        if reel:
+            reel_row(db, reel)
+        db.execute("INSERT OR REPLACE INTO weave_drafts (key, folder, reel_id, state, updated_at) "
+                   "VALUES (?, ?, ?, ?, ?)",
+                   (draft_key(folder, reel), folder, reel or None, json.dumps(body.get("state") or {}), at))
+    return {"updatedAt": at}
+
+
+@app.delete("/api/weave/draft")
+def delete_draft(folder: str = "", reel: int = 0):
+    with lib.connect() as db:
+        db.execute("DELETE FROM weave_drafts WHERE key = ?", (draft_key(folder, reel),))
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- music

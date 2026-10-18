@@ -51,6 +51,13 @@ export const api = {
   saveItems: (reelId, items) => send('PUT', `/api/reels/${reelId}/items`, { items }),
   // How much happens along a clip: { points: [[seconds, 0..1], ...] }.
   activity: (folder, file) => fetch(`/api/activity/${enc(folder)}/${enc(file)}`).then(json),
+  // Weave's draft for a shoot ({ folder }) or a reel being re-woven ({ reel }).
+  weaveDraft: (q) => fetch(`/api/weave/draft?${new URLSearchParams(q)}`).then(json),
+  // keepalive: a save sent as the page closes still arrives.
+  saveWeaveDraft: (body) => fetch('/api/weave/draft', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive: true,
+  }).then(json),
+  deleteWeaveDraft: (q) => send('DELETE', `/api/weave/draft?${new URLSearchParams(q)}`),
 
   // AirDropped files waiting in ~/Downloads, and moving them into a shoot.
   importList: () => fetch('/api/import').then(json),

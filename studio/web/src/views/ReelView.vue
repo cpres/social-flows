@@ -22,7 +22,10 @@
         </p>
       </div>
       <button class="btn" @click="sortByShotTime" :disabled="items.length < 2">Sort by shot time</button>
-      <button class="btn" v-if="settings.weave?.folder" @click="reweave" title="Reopen the Weave wizard for this reel">⧉ Re-weave</button>
+      <button
+        class="btn" v-if="settings.weave?.folder" @click="reweave"
+        :title="draftAt ? 'Pick up the re-weave you started' : 'Reopen the Weave wizard for this reel'"
+      >⧉ Re-weave{{ draftAt ? ' (draft)' : '' }}</button>
       <button class="btn" @click="duplicateReel" title="Make a copy of this reel to experiment on">Duplicate</button>
       <button class="btn" :class="{ active: showSettings }" @click="showSettings = !showSettings">Settings</button>
       <button class="btn" @click="doExport" :disabled="exporting || !kept.length">
@@ -470,6 +473,7 @@ const dragOver = ref(null)
 const guides = ref(false)
 const job = ref(null)
 const sending = ref(null)   // render file name being sent to the phone
+const draftAt = ref(null)   // an unsaved Re-weave of this reel, saved then
 const clock = ref(Date.now() / 1000)
 
 const current = computed(() => items.value[selected.value])
@@ -516,6 +520,7 @@ onMounted(async () => {
     reel.value = { name: data.name }
     items.value = data.items
     otherItems.value = data.otherItems
+    draftAt.value = data.draftAt || null
     reels.value = data.reels
     Object.assign(settings, data.settings)
     loadShelf().then(loadBeats)

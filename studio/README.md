@@ -159,6 +159,13 @@ A reel made this way has **Re-weave** in its header, which reopens the wizard an
 saves back into the same reel. That puts every part back to the pace length;
 framing, lighten and zoom set on parts in the reel are kept.
 
+**Drafts.** The wizard saves what you've chosen as you go (the header says
+"draft saved 10:42"), so leaving it loses nothing. ← takes you Home, where the
+draft waits at the front of *Reels*; click it, or *Continue weave draft* on the
+shoot's page, to pick up on the step and clip you left. There's one draft per
+shoot (and one per reel being re-woven). Files imported since are added to it.
+*Start over* throws a draft away; making the reel (or saving it) clears it.
+
 Everything is stored in one SQLite file, `~/Footage/.studio/studio.db`
 (no database server to run). Files are never copied or moved. If you rename a
 file or move it to another shoot folder, it relinks automatically (matched on
