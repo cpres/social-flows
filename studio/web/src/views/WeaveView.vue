@@ -5,7 +5,7 @@
     <section class="headbar">
       <RouterLink :to="backTo" class="back" :title="reelId ? 'Back to the reel (your draft is kept)' : 'Back to Reels & shoots (your draft is kept)'">←</RouterLink>
       <div class="title">
-        <h1>{{ reelId ? `Re-weave ${existingName}` : 'Weave a reel' }}</h1>
+        <h1>{{ reelId ? `Edit weave · ${existingName}` : 'Weave a reel' }}</h1>
         <p class="muted">
           {{ folderTitle(folder) }} · {{ videos.length }} clip{{ videos.length === 1 ? '' : 's' }} →
           {{ partCount }} part{{ partCount === 1 ? '' : 's' }}<template v-if="photos.length"> + {{ photos.length }} photo{{ photos.length === 1 ? '' : 's' }}</template>
@@ -386,7 +386,7 @@ const props = defineProps({ folder: { type: String, required: true } })
 const route = useRoute()
 const router = useRouter()
 const reelId = route.query.reel ? Number(route.query.reel) : null
-// A new weave's draft shows on Home; a re-weave goes back to its reel.
+// A new weave's draft shows on Home; editing a reel's weave goes back to the reel.
 const backTo = reelId ? `/reel/${reelId}` : '/'
 
 const STEPS = ['Order', 'Pace', 'Moments', 'Stitch']

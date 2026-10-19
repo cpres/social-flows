@@ -167,15 +167,18 @@ at once. It's a four-step wizard that makes a normal reel:
    between-rounds transition. *Create reel* opens it as a normal reel to play,
    fine-tune and render.
 
-A reel made this way has **Re-weave** in its header, which reopens the wizard and
-saves back into the same reel. Parts keep the framing, lighten and zoom set on
+A reel made this way has **Edit weave** in its header, which reopens the wizard
+on that reel, with its settings, parts and order, and saves back into the same
+reel (it never makes a new one; *Duplicate* is for that). Parts keep the framing, lighten and zoom set on
 them in the reel, and any length that isn't the pace; the rest follow the pace.
 
 **Drafts.** The wizard saves what you've chosen as you go (the header says
 "draft saved 10:42"), so leaving it loses nothing. ← takes you Home, where the
 draft waits at the front of *Reels*; click it, or *Continue weave draft* on the
 shoot's page, to pick up on the step and clip you left. There's one draft per
-shoot (and one per reel being re-woven). Files imported since are added to it.
+shoot. An unsaved weave edit isn't a card of its own: the reel's card says
+*Editing weave*, and its *Edit weave (unsaved)* button picks it up. Files
+imported since are added to a draft.
 *Start over* throws a draft away; making the reel (or saving it) clears it.
 
 **Smart hold.** Clips hold longest; a photo holds for as long as what's in it

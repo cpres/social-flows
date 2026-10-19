@@ -9,9 +9,10 @@
         <p class="muted">Concepts you're building. Tag parts of any clip or photo into them.</p>
       </div>
       <div class="grid">
-        <!-- Weave wizards left part way: pick up where you were -->
+        <!-- Weave wizards left part way: pick up where you were. Editing a
+             reel's weave isn't a reel of its own: it shows on that reel. -->
         <RouterLink
-          v-for="d in drafts" :key="`${d.folder}|${d.reelId}`" class="card draft"
+          v-for="d in newDrafts" :key="`${d.folder}|${d.reelId}`" class="card draft"
           :to="{ path: `/weave/${encodeURIComponent(d.folder)}`, query: d.reelId ? { reel: d.reelId } : {} }"
         >
           <div class="cover">
@@ -20,7 +21,7 @@
             <span class="badge draftbadge">Draft</span>
           </div>
           <div class="meta">
-            <h2>{{ d.reelId ? `Re-weave · ${d.reelName}` : `Weave · ${folderTitle(d.folder)}` }}</h2>
+            <h2>Weave · {{ folderTitle(d.folder) }}</h2>
             <p class="muted">
               Step {{ d.step }} of 4 · {{ d.clips }} clip{{ d.clips === 1 ? '' : 's' }} · saved {{ savedAt(d.updatedAt) }}
             </p>
@@ -32,10 +33,14 @@
             <div v-else class="empty">empty</div>
             <span class="badge">{{ fmtTime(r.totalLength) }}</span>
             <span class="swatch" :style="{ background: reelColor(r.id) }"></span>
+            <span v-if="editing(r)" class="badge draftbadge" title="You started editing this reel's weave and haven't saved it yet">Editing weave</span>
           </div>
           <div class="meta">
             <h2>{{ r.name }}</h2>
-            <p class="muted">{{ r.itemCount }} part{{ r.itemCount === 1 ? '' : 's' }}</p>
+            <p class="muted">
+              {{ r.itemCount }} part{{ r.itemCount === 1 ? '' : 's' }}<template v-if="editing(r)">
+                · weave edit not saved yet ({{ savedAt(editing(r).updatedAt) }})</template>
+            </p>
           </div>
         </RouterLink>
         <button class="card new" @click="newReel">
@@ -107,6 +112,8 @@ const router = useRouter()
 const folders = ref([])
 const reels = ref([])
 const drafts = ref([])   // Weave wizards left part way
+const newDrafts = computed(() => drafts.value.filter((d) => !d.reelId))
+const editing = (r) => drafts.value.find((d) => d.reelId === r.id)
 const root = ref('')
 const error = ref('')
 const loading = ref(true)

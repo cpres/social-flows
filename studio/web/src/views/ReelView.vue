@@ -24,8 +24,8 @@
       <button class="btn" @click="sortByShotTime" :disabled="items.length < 2">Sort by shot time</button>
       <button
         class="btn" v-if="settings.weave?.folder" @click="reweave"
-        :title="draftAt ? 'Pick up the re-weave you started' : 'Reopen the Weave wizard for this reel'"
-      >⧉ Re-weave{{ draftAt ? ' (draft)' : '' }}</button>
+        :title="draftAt ? 'Pick up the weave edit you started (not saved yet)' : 'Edit this reel in the Weave wizard; saving updates this reel'"
+      >⧉ Edit weave{{ draftAt ? ' (unsaved)' : '' }}</button>
       <button class="btn" @click="duplicateReel" title="Make a copy of this reel to experiment on">Duplicate</button>
       <button class="btn" :class="{ active: showSettings }" @click="showSettings = !showSettings">Settings</button>
       <button class="btn" @click="doExport" :disabled="exporting || !kept.length">
@@ -482,7 +482,7 @@ const dragOver = ref(null)
 const guides = ref(false)
 const job = ref(null)
 const sending = ref(null)   // render file name being sent to the phone
-const draftAt = ref(null)   // an unsaved Re-weave of this reel, saved then
+const draftAt = ref(null)   // an unsaved weave edit of this reel, saved then
 const clock = ref(Date.now() / 1000)
 
 const current = computed(() => items.value[selected.value])
