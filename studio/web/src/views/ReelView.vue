@@ -26,7 +26,6 @@
         class="btn" v-if="settings.weave?.folder" @click="reweave"
         :title="draftAt ? 'Pick up the weave edit you started (not saved yet)' : 'Edit this reel in the Weave wizard; saving updates this reel'"
       >⧉ Edit weave{{ draftAt ? ' (unsaved)' : '' }}</button>
-      <button class="btn" @click="duplicateReel" title="Make a copy of this reel to experiment on">Duplicate</button>
       <button class="btn" :class="{ active: showSettings }" @click="showSettings = !showSettings">Settings</button>
       <button class="btn" @click="doExport" :disabled="exporting || !kept.length">
         {{ exporting ? 'Checking…' : 'Preview cut list' }}
@@ -212,6 +211,10 @@
           title="Photos with people or animals hold Medium, the rest Small, and look-alike shots taken together flick by as a Burst. Clips keep their lengths."
         >{{ timingPhotos ? 'Looking at the photos…' : '✦ Smart photo holds' }}</button>
         <small v-if="smartNote">{{ smartNote }}</small>
+      </div>
+      <div class="field">
+        &nbsp;
+        <button class="btn small" @click="duplicateReel" title="Make a copy of this reel to experiment on">Duplicate this reel</button>
       </div>
       <div class="field">
         &nbsp;
