@@ -189,9 +189,16 @@ A reel made this way has **Edit weave** in its header, which reopens the wizard
 on that reel, with its settings, parts and order, and saves back into the same
 reel (it never makes a new one; *Duplicate* is for that). Parts keep the framing, lighten and zoom set on
 them in the reel, and any length that isn't the pace; the rest follow the pace.
+A photo whose hold you changed in the reel comes back held for exactly that
+long; a style picked by hand stays picked. In Moments a photo can also hold
+for *Exactly* ¼–4 beats (or a length off the beat); *Back to automatic* undoes
+either.
 
-**Drafts.** The wizard saves what you've chosen as you go (the header says
-"draft saved 10:42"), so leaving it loses nothing. ← takes you Home, where the
+**Drafts.** The wizard saves what you've chosen as you go: on every click, on
+Next and Back, moving between moments, and a moment after a drag or key (the
+header says "draft saved 10:42"), so leaving it loses nothing. If you change
+the reel after leaving a weave edit, *Edit weave* starts from the reel as it is
+now and offers the older draft instead. ← takes you Home, where the
 draft waits at the front of *Reels*; click it, or *Continue weave draft* on the
 shoot's page, to pick up on the step and clip you left. There's one draft per
 shoot. An unsaved weave edit isn't a card of its own: the reel's card says
@@ -207,14 +214,15 @@ needs:
 | ▶ Clip | a part of a clip | the pace: 2s | 4 beats |
 | ◉ Medium | a photo with people or animals in it | ≈ 0.7 × (1.4s) | 2 beats |
 | ○ Small | a photo with neither | ≈ 0.45 × (0.9s) | 1 beat |
-| ⁂ Burst | look-alike photos shot together | 0.2–0.5s each | ½ beat each |
+| ⁂ Burst | near-repeats shot within 2 minutes | 0.4–0.7s each | ½ beat each, at least 0.4s (usually 1) |
 
 On the beat, each is half the one above it, but never too quick to see (it
 goes up to the next division, so at 160 bpm a burst is one beat), and a run of
 photos that would end between beats holds its last one to the next beat, so the
 clips after it still cut on the beat. Photos next to each other that look
-alike (the same light, dark and colours, allowing a small reframe) and were
-taken within 15 minutes are a burst; in Weave a burst stays together in one gap
+almost exactly alike (the same light, dark and colours, allowing a small
+reframe) and were taken within 2 minutes are a burst, so most photos hold
+Medium or Small; in Weave a burst stays together in one gap
 between rounds. People and animals are found by macOS's own Vision framework
 (faces, people, cats and dogs, and scene labels like *bird* or *insect*), which
 `run.sh` installs on a Mac (PyObjC, small); without it, photos hold Medium

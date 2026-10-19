@@ -19,11 +19,11 @@ export const STYLES = {
 }
 export const PHOTO_STYLES = ['medium', 'small', 'burst']
 
-const SHARE = { clip: 1, medium: 0.7, small: 0.45, burst: 0.2 }   // of a clip's length
+const SHARE = { clip: 1, medium: 0.7, small: 0.45, burst: 0.3 }   // of a clip's length
 const HALVINGS = { clip: 0, medium: 1, small: 2, burst: 3 }        // of a clip's beats
-const SHORTEST = { clip: 0.2, medium: 0.6, small: 0.35, burst: 0.2 } // seconds, to be seen at all
-const LONGEST_BURST = 0.5                                          // seconds
-const BURST_GAP = 15 * 60   // photos taken further apart than this aren't one burst
+const SHORTEST = { clip: 0.2, medium: 0.6, small: 0.35, burst: 0.4 } // seconds, to be seen at all
+const LONGEST_BURST = 0.7                                          // seconds
+const BURST_GAP = 2 * 60    // photos taken further apart than this aren't one burst
 
 const round1 = (t) => Math.round(t * 10) / 10
 
@@ -106,14 +106,15 @@ function colourGap(a, b) {
   return gap / 16
 }
 
-// Two shots of the same thing: the same light and dark (allowing a small
-// reframe) in much the same colours, or almost exactly the same picture.
+// Two shots of the same thing: almost exactly the same picture, or the same
+// light and dark (allowing a small reframe) in nearly the same colours. Kept
+// strict, so most photos hold Medium or Small and only real repeats burst.
 export function alike(lookA, lookB) {
   if (!lookA || !lookB) return false
   const a = pixels(lookA)
   const b = pixels(lookB)
   const s = structure(a, b)
-  return s >= 0.85 || (s >= 0.6 && colourGap(a, b) <= 0.06)
+  return s >= 0.92 || (s >= 0.75 && colourGap(a, b) <= 0.04)
 }
 
 // ---------------------------------------------------------------- styles
@@ -158,24 +159,28 @@ export function photoStyles(entries, looks, chosen = {}) {
 }
 
 // How long each entry plays, in order: [{ seconds, beats }]. styles are the
-// entries' styles in the order they play; sizes come from holdLengths. On
-// the beat, the last photo of a run that would end between beats holds to
-// the next whole beat.
+// entries' styles in the order they play; sizes come from holdLengths. An
+// entry can instead be a hold set by hand ({ seconds, beats }), which plays
+// as it is. On the beat, a run of photos that would end between beats holds
+// its last photo not set by hand to the next whole beat.
 export function timeline(styles, sizes) {
-  const out = styles.map((s) => ({ ...sizes[s] }))
+  const out = styles.map((s) => (typeof s === 'string' ? { ...sizes[s] } : { ...s }))
   const period = sizes.clip.beats ? sizes.clip.seconds / sizes.clip.beats : 0
   if (!period) return out
   let run = 0
+  let last = -1
   styles.forEach((s, i) => {
     if (s === 'clip') return
     run += out[i].beats
+    if (typeof s === 'string') last = i
     if (i < styles.length - 1 && styles[i + 1] !== 'clip') return
     const pad = Math.ceil(run - 1e-6) - run
-    if (pad > 1e-6) {
-      out[i].beats += pad
-      out[i].seconds = out[i].beats * period
+    if (pad > 1e-6 && last >= 0) {
+      out[last].beats += pad
+      out[last].seconds = out[last].beats * period
     }
     run = 0
+    last = -1
   })
   return out
 }

@@ -318,7 +318,7 @@ def get_reel(reel_id: int):
             settings["topItemId"] = None   # its clip was removed: pick another
         draft_at = draft_time(db, draft_key(reel=reel_id))
     return {"id": r["id"], "name": r["name"], "settings": settings, "items": items,
-            "otherItems": others, "reels": reels, "draftAt": draft_at}
+            "otherItems": others, "reels": reels, "draftAt": draft_at, "updatedAt": r["updated_at"]}
 
 
 @app.patch("/api/reels/{reel_id}")

@@ -147,12 +147,22 @@ export function inOrder(seq, keys) {
 // Rebuild the wizard's clips from a reel made with Weave, so it can be
 // reopened: parts grouped by clip in start order, keeping their ids, and the
 // lengths of any that aren't the reel's pace (pace: { beatSync, beatsPerCut,
-// len }), so they stay that long.
+// len }), so they stay that long. A photo keeps its hold as a hold set by
+// hand when it isn't what Weave last saved for it (weave.holds; a reel saved
+// before Weave kept those keeps every photo's hold), so changes made in the
+// reel come back.
 // Returns { clips (in the saved order), keys (the reel's order), transitions }.
 export function fromReel(items, weaveSettings, pace) {
   const own = (it) => {
     if (pace.beatSync) return it.beats && it.beats !== pace.beatsPerCut ? { beats: it.beats, length: it.length } : {}
     return Math.abs(it.length - pace.len) > 0.05 ? { length: it.length } : {}
+  }
+  const holds = weaveSettings?.holds
+  const holdOf = (it) => {
+    const beats = it.beats || pace.beatsPerCut
+    const was = holds?.[it.mediaId]
+    if (holds && was !== undefined && Math.abs((pace.beatSync ? beats : it.length) - was) < 0.01) return undefined
+    return pace.beatSync ? { beats, length: it.length } : { length: it.length }
   }
   const byMedia = new Map()
   for (const it of items) {
@@ -168,6 +178,7 @@ export function fromReel(items, weaveSettings, pace) {
       mediaId, media: first.media, kind: first.media.kind, on: true, auto: false, placed: true, framed: false,
       parts: first.media.kind === 'video' ? its.map((it) => ({ id: it.id, start: it.start, ...own(it) })) : [],
       id: first.media.kind === 'photo' ? first.id : undefined,
+      hold: first.media.kind === 'photo' ? holdOf(first) : undefined,
       focusX: first.focusX, focusY: first.focusY, zoom: first.zoom || 1,
     }
   })

@@ -29,6 +29,10 @@
       <button class="link" @click="startOver">Start over</button>
     </p>
     <p v-if="notice" class="notice">{{ notice }}</p>
+    <p v-if="staleDraft" class="notice">
+      You changed the reel after the weave edit you left at {{ savedAt(staleDraft.updatedAt) }}, so this starts
+      from the reel as it is now. <button class="link" @click="useStaleDraft">Use that draft instead</button>
+    </p>
     <p v-if="step === 2 && leftOut" class="notice">
       Left out {{ leftOut.clip.media.file }}.
       <button class="link" @click="putBack">Put it back</button>
@@ -135,6 +139,10 @@
               <td class="muted">{{ r.count }}</td>
             </tr>
           </table>
+          <small v-if="handHeld">
+            {{ handHeld }} photo{{ handHeld === 1 ? ' holds' : 's hold' }} for a length set by hand.
+            <button class="link" @click="allAutomatic">Hold {{ handHeld === 1 ? 'it' : 'them' }} by style instead</button>
+          </small>
           <small v-if="smart && looking">Looking for people and animals… {{ photos.length - looking }} of {{ photos.length }}</small>
           <small v-else-if="smart && detects === false">
             This computer can't look for people and animals (it needs macOS's Vision framework, which
@@ -296,15 +304,32 @@
             </p>
           </template>
           <template v-else>
-            <div class="field" v-if="smart">
+            <div class="field">
               Hold
-              <div class="chips">
+              <div class="chips" v-if="smart">
                 <button
-                  v-for="s in PHOTO_STYLES" :key="s" class="btn small" :class="{ active: styleOf(moment) === s }"
+                  v-for="s in PHOTO_STYLES" :key="s" class="btn small" :class="{ active: !photoOwn(moment) && styleOf(moment) === s }"
                   :title="STYLES[s].hint" @click="choose(moment, s)"
                 >{{ STYLES[s].icon }} {{ STYLES[s].label }} · {{ sizeLabel(s) }}</button>
               </div>
-              <small>{{ whyText(moment) }}</small>
+              <div class="chips" v-if="synced">
+                <span class="muted exact">Exactly</span>
+                <button
+                  v-for="b in PHOTO_BEATS" :key="b" class="btn small" :class="{ active: photoOwn(moment) && moment.hold.beats === b }"
+                  @click="holdFor(moment, b)"
+                >{{ fmtBeats(b) }}♩</button>
+              </div>
+              <div class="lenrow" v-else>
+                <span class="muted exact">Exactly</span>
+                <input
+                  type="range" min="0.2" max="4" step="0.1" :value="lengthOf({ key: String(moment.mediaId) })"
+                  aria-label="How long this photo holds" @input="holdFor(moment, Number($event.target.value))"
+                />
+              </div>
+              <small>
+                {{ photoOwn(moment) ? 'Held for exactly this long, set by hand (here or in the reel).' : smart ? whyText(moment) : 'Every photo holds Medium.' }}
+                <button v-if="photoOwn(moment) || chosen[moment.mediaId]" class="link" @click="automatic(moment)">Back to automatic</button>
+              </small>
             </div>
             <div class="controls" v-if="songUrl && withMusic">
               <button class="btn" :class="{ active: photoPlaying }" @click="playPhoto">▶ Play it with the music <kbd>Space</kbd></button>
@@ -708,9 +733,28 @@ watch(() => [smart.value, photos.value.map((c) => c.mediaId).join()], () => { if
 
 const photoInfo = computed(() => photoStyles(photos.value, looks, smart.value ? chosen : {}))
 const styleOf = (c) => (smart.value && photoInfo.value.get(c.mediaId)?.style) || 'medium'
+// A style picked by hand stays picked, even if what's around the photo
+// changes (or what's in it is still being looked at); Back to automatic
+// lets it follow the rest again.
 function choose(c, style) {
-  if (style === photoInfo.value.get(c.mediaId)?.auto) delete chosen[c.mediaId]
-  else chosen[c.mediaId] = style
+  chosen[c.mediaId] = style
+  delete c.hold
+}
+// A photo can also hold for exactly some beats (or seconds off the beat),
+// like a hold set in the reel.
+const PHOTO_BEATS = [0.25, 0.5, 1, 2, 4]
+const photoOwn = (c) => !!(c.hold && (synced.value ? c.hold.beats : c.hold.length))
+const photoSize = (c) => (synced.value ? { beats: c.hold.beats, seconds: c.hold.beats * period.value }
+  : { beats: 0, seconds: c.hold.length })
+function holdFor(c, v) {
+  c.hold = synced.value ? { beats: v, length: Math.round(v * period.value * 100) / 100 } : { length: v }
+}
+function automatic(c) {
+  delete chosen[c.mediaId]
+  delete c.hold
+}
+function allAutomatic() {
+  for (const c of photos.value) delete c.hold
 }
 
 function sizeLabel(style) {
@@ -733,6 +777,7 @@ const holdRows = computed(() => {
   }
   return rows
 })
+const handHeld = computed(() => photos.value.filter(photoOwn).length)
 
 const WHY = {
   alike: 'It looks like the photo next to it, so they flick by together as a burst.',
@@ -794,7 +839,7 @@ const seq = computed(() => inOrder(woven.value, order.value)
 // A part of a clip plays its own length (whole beats, so photos still land
 // back on the beat).
 const timing = computed(() => {
-  const t = timeline(seq.value.map((e) => (e.kind === 'video' ? 'clip' : styleOf(e.clip))), sizes.value)
+  const t = timeline(seq.value.map((e) => (e.kind === 'video' ? 'clip' : photoOwn(e.clip) ? photoSize(e.clip) : styleOf(e.clip))), sizes.value)
   return new Map(seq.value.map((e, i) => [e.key, e.kind === 'video'
     ? { seconds: partLen(e.part), beats: synced.value ? beatsOf(e.part) : 0 } : t[i]]))
 })
@@ -906,6 +951,7 @@ onBeforeUnmount(stopPhoto)
 
 function pick(i) {
   if (i < 0 || i >= included.value.length) return
+  saveDraftNow()
   cur.value = i
   sel.value = 0
   player.reset()
@@ -967,6 +1013,7 @@ function go(i) {
   player.video.value?.pause()
   stopListening()
   leftOut.value = null
+  saveDraftNow()
   step.value = i
   if (i === 2) {
     musicOpen.value = !pace.music
@@ -1071,7 +1118,7 @@ function snapshot() {
     pace: { ...pace }, order: order.value, overrides: { ...overrides }, chosen: { ...chosen },
     clips: clips.value.map((c) => ({
       mediaId: c.mediaId, kind: c.kind, on: c.on, auto: c.auto, placed: c.placed, framed: c.framed,
-      focusX: c.focusX, focusY: c.focusY, zoom: c.zoom, id: c.id,
+      focusX: c.focusX, focusY: c.focusY, zoom: c.zoom, id: c.id, hold: c.hold,
       parts: c.parts.map((p) => ({ id: p.id, start: p.start, beats: p.beats, length: p.length })),
     })),
   }
@@ -1090,6 +1137,7 @@ function restore(state, media, imported) {
     const clip = newClip(m, !!c.on)
     Object.assign(clip, { auto: !!c.auto, placed: !!c.placed, framed: !!c.framed, focusX: c.focusX ?? 0.5,
                           focusY: c.focusY ?? 0.5, zoom: c.zoom || 1, id: c.id })
+    if (c.hold) clip.hold = { ...c.hold }
     if (m.kind === 'video' && c.parts?.length) clip.parts = c.parts.map((p) => ({ ...p }))
     out.push(clip)
   }
@@ -1106,24 +1154,38 @@ function restore(state, media, imported) {
   cur.value = state.cur || 0
 }
 
+// Saves go one after another, so an older one can never land last.
 const draftSaver = debouncedSaver(async (_, state) => {
   if (stopDraft) return
   draftSaving.value = true
-  inflight = api.saveWeaveDraft({ folder: props.folder, reelId, state })
+  const send = inflight.catch(() => {}).then(() => (stopDraft ? null : api.saveWeaveDraft({ folder: props.folder, reelId, state })))
+  inflight = send
   try {
-    draftAt.value = (await inflight).updatedAt
+    const r = await send
+    if (r) draftAt.value = r.updatedAt
     draftError.value = ''
   } catch (e) {
     draftError.value = e.message
   } finally {
     draftSaving.value = false
   }
-}, 500)
-watch(() => JSON.stringify(snapshot()), (text) => {
-  if (!ready || stopDraft || text === lastSaved) return
+}, 250)
+function queueDraft() {
+  const text = JSON.stringify(snapshot())
+  if (!ready || stopDraft || text === lastSaved) return false
   lastSaved = text
   draftSaver.queue('draft', JSON.parse(text))
-})
+  return true
+}
+watch(() => JSON.stringify(snapshot()), queueDraft)
+// Every click saves straight away; so do Next, Back and moving between moments.
+function saveDraftNow() {
+  queueDraft()
+  draftSaver.flushAll()
+}
+const onClick = () => setTimeout(saveDraftNow)   // after the click has changed things
+onMounted(() => window.addEventListener('click', onClick, true))
+onBeforeUnmount(() => window.removeEventListener('click', onClick, true))
 const flushDraft = () => draftSaver.flushAll()
 onMounted(() => window.addEventListener('pagehide', flushDraft))
 onBeforeUnmount(() => {
@@ -1169,7 +1231,12 @@ onMounted(async () => {
       untouched = reelData.items.filter((it) => !managed(it))
     }
     const imported = window.history.state?.imported || []
-    if (draft?.state?.clips) {
+    // A draft older than the reel's last change would undo what was changed
+    // in the reel since: start from the reel, and offer the draft instead.
+    if (draft?.state?.clips && reelData && reelData.updatedAt > draft.updatedAt + 1) {
+      staleDraft.value = draft
+      startFresh(imported)
+    } else if (draft?.state?.clips) {
       restore(draft.state, mediaById(), imported)
       draftAt.value = resumedAt.value = draft.updatedAt
     } else {
@@ -1186,6 +1253,14 @@ onMounted(async () => {
   }
 })
 
+const staleDraft = ref(null)   // editing a weave: a draft from before the reel last changed
+function useStaleDraft() {
+  const d = staleDraft.value
+  staleDraft.value = null
+  restore(d.state, mediaById(), [])
+  draftAt.value = resumedAt.value = d.updatedAt
+}
+
 const saving = ref(false)
 const failure = ref('')
 
@@ -1198,7 +1273,13 @@ async function save() {
     beatsPerCut: pace.beatsPerCut, defaultLength: pace.len, defaultHold: holdLengths(pace.len).medium.seconds,
     weave: { folder: props.folder, clips: included.value.map((c) => c.mediaId), splitOver: pace.splitOver,
              between: pace.between, pace: pace.len, hold: pace.hold,
-             styles: Object.fromEntries(photos.value.filter((c) => chosen[c.mediaId]).map((c) => [c.mediaId, chosen[c.mediaId]])) },
+             styles: Object.fromEntries(photos.value.filter((c) => chosen[c.mediaId]).map((c) => [c.mediaId, chosen[c.mediaId]])),
+             // what each photo holding by style was saved at, to tell holds changed in
+             // the reel later; one held exactly isn't listed, so it stays exact
+             holds: Object.fromEntries(photos.value.filter((c) => !photoOwn(c)).map((c) => {
+               const t = timing.value.get(String(c.mediaId))
+               return [c.mediaId, synced.value ? t.beats : Math.round(t.seconds * 100) / 100]
+             })) },
   }
   const items = seq.value.map((e) => {
     const c = e.clip
@@ -1313,6 +1394,7 @@ async function save() {
 .mseg.photo { background: var(--paper); color: var(--muted); }
 .holds { border-collapse: collapse; font-size: 13px; margin-top: 4px; }
 .lenrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.exact { font-size: 12px; align-self: center; margin-right: 2px; }
 .lenrow input[type='range'] { flex: 1; min-width: 160px; padding: 0; accent-color: var(--forest); }
 .holds td { padding: 2px 10px 2px 0; white-space: nowrap; }
 .holds td:nth-child(2) { white-space: normal; }
