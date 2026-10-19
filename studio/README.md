@@ -75,11 +75,15 @@ python3 studio/server.py --open
   rather than flat brightness, so shade opens up without blowing out the sky.
   The preview shows it live; parts with it on get a ☀ in the list.
 - **Title & end card** (*Settings*): a title (with an optional line under it,
-  like "October Edition") over the opening shots, and an end card with logos
-  and a few lines over the last ones. Both are a dark, see-through layer over
-  the footage with cream text, fading in. Put `oufp.png` and
-  `garden-steward.png` (transparent PNGs) in `brand/` at the top of the repo;
-  `oufp.png` and `garden-steward.png` there are cream, for the dark layer. The render shows them; Play reel doesn't.
+  like "October Edition") over the opening shots, and an end card over the
+  last part, which holds 2, 4 or 8 beats longer for it, so the reel runs that
+  much longer. The end card has a logo, a few lines (the first one big) and a
+  small "presented by" logo underneath. Both are a dark, see-through layer
+  over the footage with cream text, fading in. Grey text in the boxes is a
+  suggestion: `Tab` takes it. *Preview title* / *Preview end card* draw the
+  card over a frame of the first or last part, as the render will. Logos
+  come from `brand/` (`oufp.png`, `garden-steward.png`, both cream). Play
+  reel doesn't show the cards or the longer last part; the render does.
 - **Duplicate this reel** (under *Settings*) makes a full copy of a reel (parts, trims,
   framing, transitions, music) so you can try a different cut without losing
   the one you have.

@@ -118,7 +118,9 @@ DEFAULT_SETTINGS = {
     "titleLogo": "",        # '' | oufp | garden-steward | both
     "endCard": False,
     "endLines": "",         # one line each; the first is the big one
-    "endLogo": "both",
+    "endLogo": "oufp",
+    "endPresentedBy": "garden-steward",   # "presented by" + this logo, small, underneath
+    "endBeats": 4,          # how much longer the last part holds for the card
 }
 
 

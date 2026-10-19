@@ -43,13 +43,14 @@ title:
   dim: 0.45                   # how dark the layer is, 0-1
 
 end_card:
-  logos: [../brand/oufp.png, ../brand/garden-steward.png]
+  logos: [../brand/oufp.png]
   lines: ["Oakland Urban Farming Project", "3rd Sundays · Next: Sun Nov 16"]
-  hold: 3.5                   # roughly how long it's on; it starts on the nearest cut
+  presented_by: ../brand/garden-steward.png   # small, under "presented by"
+  beats: 4                    # the last part holds this much longer (hold: 2 without beat sync)
   dim: 0.62
 ```
 
-The title fades in just after the start. The end card starts on the cut nearest `hold` seconds from the end, so it lands with a new shot (and with the beat when cuts are on the beat), and stays to the end. The end card's first line is set large; the others are smaller. Text stays inside the area Reels and TikTok don't cover. The cards use Playfair Display and Roboto when they're installed or in `brand/` (`fonts: {display: ..., body: ...}` picks other files), otherwise Georgia and Helvetica. They need Pillow (`pip install pillow`).
+The title fades in just after the start. The end card comes in with the last part, which holds `beats` (or `hold` seconds) longer for it, so the piece runs that much longer; a clip too short for that holds its last frame. The end card's first line is set large; the others are smaller. Text stays inside the area Reels and TikTok don't cover. The cards use Playfair Display and Roboto when they're installed or in `brand/` (`fonts: {display: ..., body: ...}` picks other files), otherwise Georgia and Helvetica. They need Pillow (`pip install pillow`).
 
 If a cut would run past the end of a clip, the script slides it earlier so it stays on the beat. The dry run tells you when that happens.
 

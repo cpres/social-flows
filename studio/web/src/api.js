@@ -27,6 +27,11 @@ export const api = {
   deleteReel: (id) => send('DELETE', `/api/reels/${id}`),
   reorder: (id, itemIds) => send('PUT', `/api/reels/${id}/order`, { itemIds }),
   exportReel: (id) => send('POST', `/api/reels/${id}/export`),
+  // The title or end card drawn over a frame of the reel: a blob URL to show.
+  cardPreview: (id, kind) => fetch(`/api/reels/${id}/card/${kind}`).then(async (res) => {
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText)
+    return URL.createObjectURL(await res.blob())
+  }),
   render: (id) => send('POST', `/api/reels/${id}/render`),
   lastRender: (id) => fetch(`/api/reels/${id}/render`).then(json),
   renderStatus: (jobId) => fetch(`/api/renders/${jobId}`).then(json),

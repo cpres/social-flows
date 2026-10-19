@@ -749,6 +749,13 @@ def build_config(reel, rows):
         cfg["end_card"] = {"lines": lines}
         if logos := logo_files(s.get("endLogo")):
             cfg["end_card"]["logos"] = logos
+        if s.get("endPresentedBy") in ("oufp", "garden-steward"):
+            cfg["end_card"]["presented_by"] = {"text": "presented by",
+                                               "logo": logo_files(s["endPresentedBy"])[0]}
+        # The last part holds this much longer, with the card over it: beats
+        # when cutting on the beat, else about the same at 120 bpm.
+        extra = beats_of(s.get("endBeats")) or 4
+        cfg["end_card"]["beats" if synced else "hold"] = extra if synced else round(extra * 0.5, 2)
     cfg.update({
         "clip_length": s["defaultLength"],
         "transitions": {"within_round": "cut", "between_rounds": "dissolve",
@@ -774,14 +781,19 @@ def logo_files(choice):
     return [str(p) for p in paths]
 
 
-def write_config(reel_id):
-    """Write the reel's YAML for the engine; returns (path, config)."""
+def reel_and_rows(reel_id):
     with lib.connect() as db:
         reel = reel_row(db, reel_id)
         rows = db.execute("""SELECT i.*, m.path, m.name, m.kind, m.missing FROM reel_items i
                              JOIN media m ON m.id = i.media_id
                              WHERE i.reel_id = ? ORDER BY i.position, i.id""",
                           (reel_id,)).fetchall()
+    return reel, rows
+
+
+def write_config(reel_id):
+    """Write the reel's YAML for the engine; returns (path, config)."""
+    reel, rows = reel_and_rows(reel_id)
     cfg = build_config(reel, rows)
     if not cfg["sources"]:
         raise HTTPException(400, "Nothing is kept in this reel yet.")
@@ -793,6 +805,35 @@ def write_config(reel_id):
               f"# Edit the reel in the studio; hand edits here are overwritten on export.\n\n")
     out.write_text(header + yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
     return out, cfg
+
+
+@app.get("/api/reels/{reel_id}/card/{kind}")
+def card_preview(reel_id: int, kind: str):
+    """The title (over the first part) or end card (over the last), as the
+    render will draw it, at half size."""
+    from PIL import Image, ImageOps
+    import montage
+    if kind not in ("title", "end_card"):
+        raise HTTPException(404, "No such card")
+    reel, rows = reel_and_rows(reel_id)
+    cfg = build_config(reel, rows)
+    if kind not in cfg:
+        raise HTTPException(400, "Type a title first." if kind == "title" else "Turn on the end card first.")
+    kept = [r for r in rows if r["keep"] and not r["missing"]]
+    if not kept:
+        raise HTTPException(400, "Nothing is kept in this reel yet.")
+    row = kept[0] if kind == "title" else kept[-1]
+    cfg.update(width=1080, height=1920)
+    card = next(c for c in montage.load_cards(cfg, ENGINE.parent) if c["kind"] == kind)
+    CACHE.mkdir(parents=True, exist_ok=True)
+    png = montage.render_card(card, cfg, ENGINE.parent, CACHE / f"card-{reel_id}-{kind}.png")
+    t = row["start"] + (0 if kind == "title" else row["length"] / 2)
+    frame = Image.open(thumb_file(ROOT / row["path"], t, 1280)).convert("RGBA")
+    frame = ImageOps.fit(frame, (1080, 1920), centering=(row["focus_x"], row["focus_y"]))
+    frame.alpha_composite(Image.open(png))
+    out = CACHE / f"card-{reel_id}-{kind}.jpg"
+    frame.convert("RGB").resize((540, 960), Image.LANCZOS).save(out, quality=88)
+    return FileResponse(out, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/reels/{reel_id}/export")

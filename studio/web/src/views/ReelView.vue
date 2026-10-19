@@ -112,15 +112,15 @@
       </div>
       <div class="music cards">
         <h3>Title &amp; end card</h3>
-        <p class="muted small">Shown over your footage, dimmed, with cream text. Logos come from <code>brand/</code> in the repo (<code>oufp.png</code>, <code>garden-steward.png</code>).</p>
+        <p class="muted small">Shown over your footage, dimmed, with cream text. Grey text is a suggestion: press <kbd>Tab</kbd> to use it. Logos come from <code>brand/</code> in the repo.</p>
         <div class="musicrow">
           <label class="field">
             Title
-            <input v-model="settings.titleText" placeholder="3rd Sundays" />
+            <input v-model="settings.titleText" placeholder="3rd Sundays" @keydown.tab="takeHint($event, 'titleText')" />
           </label>
           <label class="field">
             Under the title
-            <input v-model="settings.titleSub" :placeholder="`${MONTH} Edition`" />
+            <input v-model="settings.titleSub" :placeholder="`${MONTH} Edition`" @keydown.tab="takeHint($event, 'titleSub')" />
           </label>
           <label class="field">
             Title logo
@@ -128,22 +128,57 @@
               <option v-for="l in LOGO_CHOICES" :key="l.v" :value="l.v">{{ l.label }}</option>
             </select>
           </label>
+          <div class="field">
+            &nbsp;
+            <button class="btn small" @click="previewCard('title')">Preview title</button>
+          </div>
         </div>
         <div class="musicrow">
           <label class="field check">
             <span><input type="checkbox" v-model="settings.endCard" /> End card</span>
-            <small>Fades in over the last few seconds, starting on a cut.</small>
+            <small>Comes in with the last part, which holds {{ settings.endBeats || 4 }} beats longer for it.</small>
           </label>
-          <label class="field" v-if="settings.endCard">
-            End card logos
-            <select v-model="settings.endLogo">
-              <option v-for="l in LOGO_CHOICES" :key="l.v" :value="l.v">{{ l.label }}</option>
-            </select>
-          </label>
-          <label class="field endlines" v-if="settings.endCard">
+          <template v-if="settings.endCard">
+            <label class="field">
+              End card logo
+              <select v-model="settings.endLogo">
+                <option v-for="l in LOGO_CHOICES" :key="l.v" :value="l.v">{{ l.label }}</option>
+              </select>
+            </label>
+            <label class="field">
+              Presented by
+              <select v-model="settings.endPresentedBy">
+                <option v-for="l in LOGO_CHOICES.filter((c) => c.v !== 'both')" :key="l.v" :value="l.v">{{ l.label }}</option>
+              </select>
+            </label>
+            <label class="field">
+              Adds
+              <select v-model.number="settings.endBeats">
+                <option v-for="b in [2, 4, 8]" :key="b" :value="b">{{ b }} beats{{ synced ? ` ≈ ${(b * period).toFixed(1)}s` : ` ≈ ${b / 2}s` }}</option>
+              </select>
+            </label>
+          </template>
+        </div>
+        <div class="musicrow" v-if="settings.endCard">
+          <label class="field endlines">
             Lines (the first is big)
-            <textarea rows="3" v-model="settings.endLines" placeholder="Oakland Urban Farming Project&#10;3rd Sundays · Next: Sun Nov 16"></textarea>
+            <textarea rows="3" v-model="settings.endLines" :placeholder="endHint" @keydown.tab="takeHint($event, 'endLines', endHint)"></textarea>
           </label>
+          <div class="field">
+            &nbsp;
+            <button class="btn small" @click="previewCard('end_card')">Preview end card</button>
+          </div>
+        </div>
+        <div class="cardpreview" v-if="cardShot.url || cardShot.error">
+          <p v-if="cardShot.error" class="warn">{{ cardShot.error }}</p>
+          <figure v-else>
+            <img :src="cardShot.url" :alt="cardShot.kind === 'title' ? 'Title preview' : 'End card preview'" />
+            <figcaption class="muted small">
+              {{ cardShot.kind === 'title' ? 'Over the first part.' : 'Over the last part.' }}
+              <button class="btn small" @click="previewCard(cardShot.kind)">Refresh</button>
+              <button class="btn small" @click="closeCard">Close</button>
+            </figcaption>
+          </figure>
         </div>
       </div>
       <template v-if="isStack">
@@ -512,6 +547,36 @@ const showSettings = ref(false)
 const LOGO_CHOICES = [{ v: '', label: 'None' }, { v: 'oufp', label: 'OUFP' },
   { v: 'garden-steward', label: 'Garden Steward' }, { v: 'both', label: 'Both' }]
 const MONTH = new Date().toLocaleString('en-US', { month: 'long' })
+// The next third Sunday after today, for the end card's suggested line.
+function nextThirdSunday(from = new Date()) {
+  for (let m = 0; m < 3; m++) {
+    const first = new Date(from.getFullYear(), from.getMonth() + m, 1)
+    const day = new Date(first.getFullYear(), first.getMonth(), 1 + ((7 - first.getDay()) % 7) + 14)
+    if (day > from) return day.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+  }
+}
+const endHint = `Oakland Urban Farming Project\n3rd Sundays · Next: ${nextThirdSunday()}`
+// Tab in an empty box takes its grey suggestion.
+function takeHint(e, key, hint = e.target.placeholder) {
+  if (!settings[key] && hint) settings[key] = hint
+}
+const cardShot = reactive({ kind: '', url: '', error: '' })
+async function previewCard(kind) {
+  await saver.flushAll()
+  try {
+    const url = await api.cardPreview(id, kind)
+    if (cardShot.url) URL.revokeObjectURL(cardShot.url)
+    Object.assign(cardShot, { kind, url, error: '' })
+  } catch (err) {
+    Object.assign(cardShot, { kind, url: '', error: err.message })
+  }
+}
+// Turning the end card on starts it with the suggested lines, to edit.
+watch(() => settings.endCard, (on) => { if (on && ready && !settings.endLines) settings.endLines = endHint })
+function closeCard() {
+  if (cardShot.url) URL.revokeObjectURL(cardShot.url)
+  Object.assign(cardShot, { kind: '', url: '', error: '' })
+}
 const exporting = ref(false)
 const exportResult = ref(null)
 const listEl = ref(null)
@@ -1342,6 +1407,10 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .music h3 { margin: 0 0 8px; }
 .cards p { margin: 0 0 8px; }
 .endlines { flex: 1; min-width: 300px; }
+.cards input::placeholder, .cards textarea::placeholder { color: var(--muted); opacity: 0.55; font-style: italic; }
+.cardpreview figure { margin: 10px 0 0; display: flex; gap: 12px; align-items: flex-end; }
+.cardpreview img { width: 270px; height: 480px; border-radius: 8px; border: 1px solid var(--line); }
+.cardpreview figcaption { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .endlines textarea {
   border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; resize: vertical;
   background: var(--paper); font: inherit; font-size: 15px; color: var(--ink);

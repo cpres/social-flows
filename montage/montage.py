@@ -362,6 +362,14 @@ def build_plan(cfg, base_dir, beats):
                          "seconds": float(src.get("length", default_len)),
                          "beats": beat_count(src.get("beats"), beats_per_cut)})
 
+    # The end card plays over the last part, which holds that much longer.
+    end = cfg.get("end_card")
+    if end and plan:
+        end = end if isinstance(end, dict) else {}
+        plan[-1]["beats"] += beat_count(end.get("beats"), 4)
+        plan[-1]["seconds"] += float(end.get("hold", 2.0))
+        plan[-1]["end_card"] = True
+
     # 2. Where each cut lands on the timeline, snapped to whole frames
     #    (and to beats when beat sync is on) so nothing drifts.
     cut_points, cursor_beat, t = [0.0], 0, 0.0
@@ -511,6 +519,8 @@ def render_segment(seg, idx, cfg, workdir, keep_audio):
                   f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}:fps={fps},")
     else:
         graph += f"[fit]fps={fps},"
+    if seg["kind"] == "video":   # a clip that ends early holds its last frame
+        graph += f"tpad=stop_mode=clone:stop_duration={length:.3f},"
     graph += f"setsar=1,format=yuv420p,trim=end_frame={n_frames},setpts=PTS-STARTPTS"
     # Whip: horizontal motion blur on both sides of the slide.
     if seg.get("whip_out"):
@@ -755,6 +765,15 @@ def load_cards(cfg, base_dir):
             if not path.exists():
                 sys.exit(f"Logo not found: {path}")
             paths.append(path)
+        by = spec.get("presented_by")
+        if by:
+            by = {"logo": by} if isinstance(by, str) else dict(by)
+            by.setdefault("text", "presented by")
+            if by.get("logo"):
+                by["logo"] = (base_dir / by["logo"]).expanduser()
+                if not by["logo"].exists():
+                    sys.exit(f"Logo not found: {by['logo']}")
+            spec = {**spec, "presented_by": by}
         cards.append({"kind": kind, "spec": spec, "logos": paths})
     if cards:
         try:
@@ -766,21 +785,12 @@ def load_cards(cfg, base_dir):
 
 def card_times(cards, plan, total):
     """When each card is on screen: (start, end) in output seconds. The end card
-    starts on the cut nearest `hold` seconds from the end, so it lands with a
-    new shot (on the beat, when cuts are), and stays to the end."""
-    cuts, t = [], 0.0
-    for seg in plan:
-        cuts.append(t)
-        t += seg["length"]
+    comes in with the last part (which build_plan held longer for it) and stays
+    to the end."""
     times = {}
-    for card in cards:
-        spec = card["spec"]
-        if card["kind"] == "end_card":
-            hold = min(float(spec.get("hold", 3.5)), total * 0.6)
-            want = total - hold
-            near = [c for c in cuts if abs(c - want) <= hold * 0.4 and total - c >= 1.5]
-            start = min(near, key=lambda c: abs(c - want)) if near else want
-            times["end_card"] = (max(start, 0.0), total)
+    if any(card["kind"] == "end_card" for card in cards):
+        start = min(sum(seg["length"] for seg in plan[:-1]), total)
+        times["end_card"] = (start, total)
     for card in cards:
         spec = card["spec"]
         if card["kind"] == "title":
@@ -814,6 +824,7 @@ def render_card(card, cfg, base_dir, out):
         rows = [(line, load_font(display if i == 0 else body, round((82 if i == 0 else 50) * k), i == 0),
                  255 if i == 0 else 225) for i, line in enumerate(lines)]
         logo_h = round(300 * k)
+    by = spec.get("presented_by") if kind == "end_card" else None
 
     scratch = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     max_w = w - 2 * round(SAFE_SIDE * k)
@@ -844,6 +855,21 @@ def render_card(card, cfg, base_dir, out):
             d.text(((max_w - lw) / 2, n * lead), line, font=font, fill=(*CARD_INK, alpha))
         gap = round((44 if blocks and i == 0 else 18) * k)
         blocks.append((im, gap if blocks else 0))
+
+    if by:   # "presented by" and a smaller logo, under the rest
+        if by.get("text"):
+            font = load_font(body, round(36 * k), False)
+            ascent, descent = font.getmetrics()
+            im = Image.new("RGBA", (max_w, ascent + descent), (0, 0, 0, 0))
+            d = ImageDraw.Draw(im)
+            d.text(((max_w - scratch.textlength(by["text"], font=font)) / 2, 0), by["text"],
+                   font=font, fill=(*CARD_INK, 200))
+            blocks.append((im, round(80 * k) if blocks else 0))
+        if by.get("logo"):
+            logo = Image.open(by["logo"]).convert("RGBA")
+            lh = round(170 * k)
+            logo = logo.resize((max(1, round(logo.width * lh / logo.height)), lh), Image.LANCZOS)
+            blocks.append((logo, round(16 * k) if by.get("text") else round(70 * k)))
 
     frame = Image.new("RGBA", (w, h), (*CARD_SCRIM, round(dim * 255)))
     content = sum(im.height + gap for im, gap in blocks)
