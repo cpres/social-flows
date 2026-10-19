@@ -163,7 +163,10 @@ at once. It's a four-step wizard that makes a normal reel:
    marked), else a length in seconds; `[`/`]` makes it shorter or longer. For a
    photo, pick its hold (Medium, Small or Burst); it says why it got the one it
    has. **Leave it out** (`X`) takes the clip or photo out of the reel right
-   there, and *Put it back* undoes it.
+   there, and *Put it back* undoes it. The song is here too (♪, *Change* to
+   pick another or cut on the beat), and playing a part (`Space`) plays the song
+   under it from where that part lands in the reel; a photo plays the song for
+   as long as it holds. *Play with the music* off plays them silent.
 4. **Stitch**: the woven order as tiles. Every clip shows up in the first round
    and ends in the last; a clip with more parts than the others is spread across
    the rounds, and photos go between rounds, the last one closing the reel (a
