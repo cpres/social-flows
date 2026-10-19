@@ -43,6 +43,8 @@ export const api = {
   music: () => fetch('/api/music').then(json),
   musicBeats: (name) => fetch(`/api/music/${enc(name)}/beats`).then(json),
   musicFile: (name) => `/api/music/${enc(name)}/file`,
+  // Name a song and put it in categories: { title, artist, categories }; returns the shelf.
+  saveSong: (name, info) => send('PUT', `/api/music/${enc(name)}/info`, info),
 
   addItem: (reelId, item) => send('POST', `/api/reels/${reelId}/items`, item),
   updateItem: (id, patch) => send('PATCH', `/api/items/${id}`, patch),

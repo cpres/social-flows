@@ -68,16 +68,10 @@
       <div class="music wide2">
         <h3>Music</h3>
         <div class="musicrow">
-          <label class="field">
-            Song
-            <select v-model="settings.music">
-              <option value="">No music</option>
-              <option v-if="settings.music && !shelfHas(settings.music)" :value="settings.music">{{ settings.music }}</option>
-              <option v-for="t in shelf.tracks" :key="t.name" :value="t.name">
-                {{ t.name.replace(/\.[^.]+$/, '') }}{{ t.bpm ? ` · ${Math.round(t.bpm)} bpm` : '' }}
-              </option>
-            </select>
-          </label>
+          <div class="field song">
+            <label for="reel-song">Song</label>
+            <SongPicker id="reel-song" v-model="settings.music" v-model:shelf="shelf" />
+          </div>
           <label class="field" v-if="settings.music">
             Song starts at
             <input :value="fmtTime(settings.musicStart || 0)" @change="setMusicStart($event)" />
@@ -196,7 +190,7 @@
       </button>
       <span class="mono clock">{{ fmtTime(reelTime ?? 0) }} / {{ fmtTime(reelLength) }}</span>
       <span v-if="settings.music" class="songtag" :title="settings.music">
-        ♪ {{ settings.music.replace(/\.[^.]+$/, '').replace(/^.*\//, '') }}{{ beatData ? ` · ${Math.round(beatData.bpm)} bpm` : '' }}
+        ♪ {{ songTitle(shelf, settings.music) }}{{ beatData ? ` · ${Math.round(beatData.bpm)} bpm` : '' }}
       </span>
       <div class="tracks">
       <div v-if="isStack" class="strip toptrack">
@@ -452,8 +446,10 @@ import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
 import { fitRange, fmtBeats, fmtTime, folderTitle, parseTime, reelColor, snapBeats } from '../time'
 import { holdLengths, photoStyles, timeline } from '../hold'
+import { songTitle } from '../songs'
 import ClipCard from '../components/ClipCard.vue'
 import SendToPhone from '../components/SendToPhone.vue'
+import SongPicker from '../components/SongPicker.vue'
 import ReelFrame from '../components/ReelFrame.vue'
 import StackFrame from '../components/StackFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
@@ -1305,6 +1301,7 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .musicrow { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; }
 .musicrow .field { min-width: 160px; }
 .musicrow .field select { min-width: 260px; }
+.musicrow .field.song { flex: 1 1 480px; align-self: flex-start; }
 .small { font-size: 12px; margin: 8px 0; }
 .warn { color: var(--danger); }
 .note { background: var(--sage-soft); padding: 6px 10px; border-radius: 6px; font-size: 13px; }

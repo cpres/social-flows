@@ -79,18 +79,11 @@
         <h3>Music</h3>
         <div class="field">
           <label for="weave-song">Song</label>
-          <div class="songrow">
-            <select id="weave-song" v-model="pace.music">
-              <option value="">No music</option>
-              <option v-if="pace.music && !shelfHas(pace.music)" :value="pace.music">{{ pace.music }}</option>
-              <option v-for="t in shelf.tracks" :key="t.name" :value="t.name">
-                {{ t.name.replace(/\.[^.]+$/, '') }}{{ t.bpm ? ` · ${Math.round(t.bpm)} bpm` : '' }}
-              </option>
-            </select>
+          <SongPicker id="weave-song" v-model="pace.music" v-model:shelf="shelf">
             <button class="btn" :class="{ active: listening }" :disabled="!songUrl" title="Hear the song before you pick it" @click="listen">
               {{ listening ? '■ Stop' : '▶ Listen' }}
             </button>
-          </div>
+          </SongPicker>
           <div class="songbar" v-if="listening">
             <input type="range" min="0" :max="songLength" step="0.1" :value="songAt" aria-label="Where in the song" @input="seekSong" />
             <span class="mono">{{ fmtTime(songAt) }} / {{ fmtTime(songLength) }}</span>
@@ -380,6 +373,7 @@ import {
   partKey, settle, spreadStarts, weave,
 } from '../weave'
 import ReelFrame from '../components/ReelFrame.vue'
+import SongPicker from '../components/SongPicker.vue'
 import SplitBar from '../components/SplitBar.vue'
 
 const props = defineProps({ folder: { type: String, required: true } })
@@ -1223,9 +1217,6 @@ async function save() {
 .field small { font-size: 12px; }
 .field.check span { display: flex; gap: 6px; align-items: center; color: var(--ink); font-size: 14px; }
 .field input[type='range'] { padding: 0; accent-color: var(--forest); }
-.songrow { display: flex; gap: 8px; align-items: center; }
-.songrow select { flex: 1; min-width: 0; }
-.songrow .btn { align-self: stretch; font-size: 14px; }
 .songbar { display: flex; gap: 10px; align-items: center; }
 .songbar input { flex: 1; }
 .songbar .mono { color: var(--ink); white-space: nowrap; }

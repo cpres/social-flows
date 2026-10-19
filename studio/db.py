@@ -7,6 +7,8 @@ The studio's library: one SQLite file at ~/Footage/.studio/studio.db.
                 One file can appear in many reels, or several times in one.
     weave_drafts  the Weave wizard's progress, one per shoot (or per reel
                 being re-woven), until it's made into a reel
+    songs       a name, artist and categories given to a song in the music
+                folder (by file name), over what the file itself says
 
 Files are never moved or copied. Each media row remembers size and capture
 time, so a file that is renamed or moved to another shoot folder is relinked
@@ -75,6 +77,13 @@ CREATE TABLE IF NOT EXISTS weave_drafts (
     reel_id    INTEGER REFERENCES reels(id) ON DELETE CASCADE,
     state      TEXT NOT NULL,      -- the Weave wizard's choices, as JSON
     updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS songs (
+    name       TEXT PRIMARY KEY,   -- the file's name in the music folder
+    title      TEXT,               -- NULL: what the file says
+    artist     TEXT,
+    categories TEXT                -- a JSON list; NULL: the file's genre
 );
 """
 

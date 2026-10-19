@@ -81,6 +81,11 @@ python3 studio/server.py --open
   `MUSIC_DIR`), then pick one under the reel's *Settings → Music*. Set where the
   song starts, and *Listen* to check it. Play reel plays the song and moves
   through the parts in time with it.
+- **Song names and categories:** songs show by name and artist, read from the
+  file's tags or, for Pixabay downloads (`artist-title-words-123456.mp3`), from
+  the file name. ✎ next to the song gives it your own name and categories (a
+  genre tag starts it off); the category chips above the list narrow it down.
+  These live in the library, so the files themselves are never changed.
 - **Cut on the beat:** the studio finds the song's beats once (cached), then each
   part lasts a whole number of beats: 1, 2, 4 or 8 (default 4, set per reel).
   A photo can also be ½ or ¼ of a beat, for quick ones. Change a part's beats in

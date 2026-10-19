@@ -600,10 +600,46 @@ def delete_draft(folder: str = "", reel: int = 0):
 
 # ---------------------------------------------------------------- music
 
+def genres(text):
+    """A genre tag as categories: "Beats; Lo-fi" -> ["Beats", "Lo-fi"]"""
+    return [g.strip() for g in re.split(r"[;,/]", text or "") if g.strip()]
+
+
 @app.get("/api/music")
 def music_shelf():
+    """The music folder's songs, each with its name, artist and categories: as
+    given here, else as the file says."""
+    with lib.connect() as db:
+        given = {r["name"]: r for r in db.execute("SELECT * FROM songs")}
+    tracks = shelf.tracks()
+    for t in tracks:
+        g = given.get(t["name"])
+        t["title"] = (g and g["title"]) or t["fileTitle"]
+        t["artist"] = (g and g["artist"]) or t["fileArtist"]
+        t["categories"] = json.loads(g["categories"]) if g and g["categories"] is not None else genres(t["genre"])
     return {"dir": str(shelf.folder), "exists": shelf.folder.is_dir(),
-            "tracks": shelf.tracks(), "beatDetection": beat_detection_available()}
+            "tracks": tracks, "beatDetection": beat_detection_available()}
+
+
+@app.put("/api/music/{name}/info")
+def music_info(name: str, body: dict = Body(...)):
+    """Name a song and put it in categories: {title, artist, categories}. An
+    empty title or artist goes back to what the file says."""
+    path = shelf.path_of(name)
+    if not path or not path.exists() or path.parent != shelf.folder:
+        raise HTTPException(404, "No such track")
+    seen = set()
+    cats = []
+    for c in body.get("categories") or []:
+        c = " ".join(str(c).split())
+        if c and c.lower() not in seen:
+            seen.add(c.lower())
+            cats.append(c)
+    with lib.connect() as db:
+        db.execute("INSERT OR REPLACE INTO songs (name, title, artist, categories) VALUES (?, ?, ?, ?)",
+                   (name, (body.get("title") or "").strip() or None,
+                    (body.get("artist") or "").strip() or None, json.dumps(cats)))
+    return music_shelf()
 
 
 @app.get("/api/music/{name}/file")

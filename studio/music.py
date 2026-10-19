@@ -8,6 +8,7 @@ the studio's preview and the render cut on exactly the same beats.
 
 import hashlib
 import json
+import re
 import subprocess
 import threading
 from pathlib import Path
@@ -21,6 +22,7 @@ class Shelf:
         self.cache_dir = Path(cache_dir)
         self._locks = {}
         self._guard = threading.Lock()
+        self._probed = {}   # (path, size, mtime) -> what ffprobe found in the file
 
     def tracks(self):
         if not self.folder.is_dir():
@@ -29,9 +31,17 @@ class Shelf:
         for p in sorted(self.folder.iterdir(), key=lambda q: q.name.lower()):
             if p.is_file() and p.suffix.lower() in AUDIO_EXTS and not p.name.startswith("."):
                 cached = self.cached(p)
-                out.append({"name": p.name, "duration": duration(p),
-                            "bpm": cached["bpm"] if cached else None})
+                info = self.probed(p)
+                out.append({"name": p.name, "duration": info["duration"],
+                            "bpm": cached["bpm"] if cached else None, **describe(p.stem, info["tags"])})
         return out
+
+    def probed(self, path):
+        st = path.stat()
+        key = (str(path), st.st_size, st.st_mtime)
+        if key not in self._probed:
+            self._probed[key] = probe(path)
+        return self._probed[key]
 
     def path_of(self, value):
         """A reel's music setting: a shelf track name, or a path."""
@@ -79,11 +89,52 @@ def beat_detection_available():
         return False
 
 
-def duration(path):
+def probe(path):
+    """{duration, tags}: the song's length and its tags (title, artist, genre, ...),
+    with the tag names lower-cased."""
     try:
-        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                              "-of", "csv=p=0", str(path)],
+        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration:format_tags",
+                              "-of", "json", str(path)],
                              capture_output=True, text=True, timeout=20).stdout
-        return round(float(out.strip() or 0), 2)
+        fmt = json.loads(out or "{}").get("format", {})
+        tags = {k.lower(): str(v).strip() for k, v in (fmt.get("tags") or {}).items() if str(v).strip()}
+        return {"duration": round(float(fmt.get("duration") or 0), 2), "tags": tags}
     except Exception:
-        return 0.0
+        return {"duration": 0.0, "tags": {}}
+
+
+# Pixabay names its downloads <artist>-<title words>-<id>.mp3, e.g.
+# pietix-bass-instrumental-soft-510326.mp3 (some older ones leave the artist out).
+PIXABAY = re.compile(r"^(?P<slug>.+)-(?P<id>\d{5,})$")
+
+
+def words(slug):
+    """bass-instrumental_soft -> Bass Instrumental Soft"""
+    return " ".join(w[:1].upper() + w[1:] for w in re.split(r"[-_\s]+", slug) if w)
+
+
+def slugged(text):
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def describe(stem, tags):
+    """A song's name and artist as its file gives them: the tags when they say
+    something the file name doesn't, else read from a Pixabay file name, else
+    the file name itself. Plus the tags worth showing, and its Pixabay id."""
+    m = PIXABAY.match(stem)
+    slug = m["slug"] if m else stem
+    title, artist = words(slug), ""
+    first, _, rest = slug.partition("-")
+    tagged_artist = tags.get("artist") or tags.get("album_artist") or ""
+    # The first word is the artist when the tags say so, or (no tags) when it
+    # leaves a title of two words or more: good-night is a title, not "Night" by Good.
+    if m and rest and (slugged(first) == slugged(tagged_artist) if tagged_artist else "-" in rest):
+        title, artist = words(rest), words(first)
+    tagged = tags.get("title", "")
+    # A title tag that's just the file name again says nothing new.
+    if tagged and slugged(tagged) != slugged(stem):
+        title = tagged
+    artist = tagged_artist or artist
+    shown = {k: tags[k] for k in ("title", "artist", "album", "genre", "comment", "date") if k in tags}
+    return {"fileTitle": title, "fileArtist": artist, "genre": tags.get("genre", ""),
+            "fileTags": shown, "pixabayId": m["id"] if m else None}
