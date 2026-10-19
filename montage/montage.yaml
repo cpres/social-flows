@@ -33,6 +33,13 @@ transitions:
 photo_motion: push        # slow push-in on photos (or: none)
 photo_zoom: 0.06          # how far it pushes; 0.04–0.08 stays subtle
 
+# ---- Title and end card (optional) --------------------------------------
+# Dark see-through overlays with cream text, over the footage.
+# title: {text: "3rd Sundays", sub: "October Edition", logo: ../brand/oufp.png}
+# end_card:
+#   logos: [../brand/oufp.png, ../brand/garden-steward.png]
+#   lines: ["Oakland Urban Farming Project", "3rd Sundays · Next: Sun Nov 16"]
+
 # ---- Framing -----------------------------------------------------------
 fit: fill                 # fill = crop to 9:16 | blur | pad (brand color)
 

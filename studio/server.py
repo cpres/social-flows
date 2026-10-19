@@ -47,6 +47,7 @@ except ImportError as missing:
 
 HERE = Path(__file__).resolve().parent
 ENGINE = HERE.parent / "montage" / "montage.py"
+BRAND = HERE.parent / "brand"   # the logo PNGs, kept out of git
 sys.path.insert(0, str(ENGINE.parent))
 sys.path.insert(0, str(HERE))
 import looks  # noqa: E402
@@ -70,6 +71,8 @@ ITEM_COLUMNS = ("media_id", "position", "start", "length", "keep", "focus_x", "f
                 "transition", "lighten", "beats", "zoom", "layout")
 LAYOUTS = ("", "fill", "blur")   # per part; '' = the reel's framing
 FORMATS = ("standard", "stack")
+LOGOS = {"oufp": ["oufp.png"], "garden-steward": ["garden-steward.png"],
+         "both": ["oufp.png", "garden-steward.png"]}
 app = FastAPI(title="Footage Studio")
 
 
@@ -735,6 +738,17 @@ def build_config(reel, rows):
             except ImportError:
                 raise HTTPException(400, "Cutting on the beat needs beat detection: "
                                          "start the studio with ./studio/run.sh --beat")
+    if (s.get("titleText") or "").strip():
+        cfg["title"] = {"text": s["titleText"].strip()}
+        if (s.get("titleSub") or "").strip():
+            cfg["title"]["sub"] = s["titleSub"].strip()
+        if logos := logo_files(s.get("titleLogo")):
+            cfg["title"]["logos"] = logos
+    lines = [l.strip() for l in (s.get("endLines") or "").splitlines() if l.strip()]
+    if s.get("endCard") and (lines or s.get("endLogo")):
+        cfg["end_card"] = {"lines": lines}
+        if logos := logo_files(s.get("endLogo")):
+            cfg["end_card"]["logos"] = logos
     cfg.update({
         "clip_length": s["defaultLength"],
         "transitions": {"within_round": "cut", "between_rounds": "dissolve",
@@ -749,6 +763,15 @@ def build_config(reel, rows):
         "preset": "veryfast",
     })
     return cfg
+
+
+def logo_files(choice):
+    """The logo PNGs for a title or end card choice, which must be in brand/."""
+    paths = [BRAND / name for name in LOGOS.get(choice or "", [])]
+    missing = [p.name for p in paths if not p.exists()]
+    if missing:
+        raise HTTPException(400, f"Put {' and '.join(missing)} (transparent PNG) in {BRAND}")
+    return [str(p) for p in paths]
 
 
 def write_config(reel_id):

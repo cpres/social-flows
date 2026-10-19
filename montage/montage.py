@@ -671,6 +671,222 @@ def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output)
          "-filter_complex", graph, "-map", "0:v", "-map", "[a]", *common])
 
 
+# ---------------------------------------------------------------- title and end card
+
+# Both are overlays on the footage that's already there: a translucent forest
+# scrim with cream text (and logos), fading in and out. Never a black card.
+CARD_SCRIM = (0x2d, 0x3e, 0x26)   # forest-panel
+CARD_INK = (0xf7, 0xf1, 0xe3)     # cream
+CARD_FADE = 0.6
+# Keep text out of what Reels/TikTok cover at 1080x1920: top bar, caption, buttons.
+SAFE_TOP, SAFE_BOTTOM, SAFE_SIDE = 250, 420, 120
+
+FONT_DIRS = ["~/Library/Fonts", "/Library/Fonts", "/System/Library/Fonts",
+             "/System/Library/Fonts/Supplemental", "/usr/share/fonts", "/usr/local/share/fonts"]
+DISPLAY_FONTS = ["PlayfairDisplay-ExtraBold.*", "PlayfairDisplay-Bold.*", "PlayfairDisplay*.ttf",
+                 "Georgia Bold.ttf", "DejaVuSerif-Bold.ttf"]
+BODY_FONTS = ["Roboto-Regular.*", "Roboto*.ttf", "Avenir Next.ttc", "Helvetica.ttc", "DejaVuSans.ttf"]
+
+
+def find_font(override, patterns, base_dir):
+    """A font file: the config's, else the brand fonts (in brand/ or installed),
+    else a system serif/sans. None = Pillow's built-in font."""
+    if override:
+        path = (base_dir / override).expanduser()
+        if not path.exists():
+            sys.exit(f"Font not found: {path}")
+        return path
+    dirs = [base_dir / "brand", Path(__file__).resolve().parent.parent / "brand", *FONT_DIRS]
+    for pattern in patterns:
+        for d in dirs:
+            d = Path(d).expanduser()
+            if d.is_dir():
+                hit = next(iter(sorted(d.rglob(pattern))), None)
+                if hit:
+                    return hit
+    return None
+
+
+def load_font(path, size, bold):
+    from PIL import ImageFont
+    if path is None:
+        return ImageFont.load_default(size)
+    font = ImageFont.truetype(str(path), size)
+    try:   # a variable font (PlayfairDisplay[wght].ttf): pick its heaviest named weight
+        names = [n.decode() if isinstance(n, bytes) else n for n in font.get_variation_names()]
+        want = [n for n in ("ExtraBold", "Bold") if n in names] if bold else ["Regular"]
+        if want:
+            font.set_variation_by_name(want[0])
+    except (OSError, AttributeError):
+        pass
+    return font
+
+
+def wrap(draw, text, font, width):
+    """Break text into lines no wider than width."""
+    lines = []
+    for para in str(text).split("\n"):
+        words, line = para.split(), ""
+        for word in words:
+            trial = f"{line} {word}".strip()
+            if line and draw.textlength(trial, font=font) > width:
+                lines.append(line)
+                line = word
+            else:
+                line = trial
+        lines.append(line)
+    return lines
+
+
+def load_cards(cfg, base_dir):
+    """`title:` and `end_card:` from the config, checked. Returns a list of
+    {kind, spec, logos} (empty when there are none)."""
+    cards = []
+    for kind in ("title", "end_card"):
+        spec = cfg.get(kind)
+        if not spec:
+            continue
+        if isinstance(spec, str):
+            spec = {"text": spec} if kind == "title" else {"lines": [spec]}
+        logos = spec.get("logos") or ([spec["logo"]] if spec.get("logo") else [])
+        paths = []
+        for logo in logos:
+            path = (base_dir / logo).expanduser()
+            if not path.exists():
+                sys.exit(f"Logo not found: {path}")
+            paths.append(path)
+        cards.append({"kind": kind, "spec": spec, "logos": paths})
+    if cards:
+        try:
+            import PIL  # noqa: F401
+        except ImportError:
+            sys.exit("The title and end card need Pillow: pip install pillow")
+    return cards
+
+
+def card_times(cards, plan, total):
+    """When each card is on screen: (start, end) in output seconds. The end card
+    starts on the cut nearest `hold` seconds from the end, so it lands with a
+    new shot (on the beat, when cuts are), and stays to the end."""
+    cuts, t = [], 0.0
+    for seg in plan:
+        cuts.append(t)
+        t += seg["length"]
+    times = {}
+    for card in cards:
+        spec = card["spec"]
+        if card["kind"] == "end_card":
+            hold = min(float(spec.get("hold", 3.5)), total * 0.6)
+            want = total - hold
+            near = [c for c in cuts if abs(c - want) <= hold * 0.4 and total - c >= 1.5]
+            start = min(near, key=lambda c: abs(c - want)) if near else want
+            times["end_card"] = (max(start, 0.0), total)
+    for card in cards:
+        spec = card["spec"]
+        if card["kind"] == "title":
+            start = float(spec.get("at", 0.2))
+            end = start + CARD_FADE + float(spec.get("hold", 2.5)) + CARD_FADE
+            limit = times.get("end_card", (total, total))[0] - 0.2
+            times["title"] = (start, max(min(end, limit), start + 2 * CARD_FADE))
+    return times
+
+
+def render_card(card, cfg, base_dir, out):
+    """Draw one card as a full-frame transparent PNG: the scrim, the logos and
+    the text, centred in the safe area."""
+    from PIL import Image, ImageDraw, ImageFilter
+    w, h = cfg["width"], cfg["height"]
+    k = w / 1080
+    spec, kind = card["spec"], card["kind"]
+    fonts = cfg.get("fonts") or {}
+    display = find_font(fonts.get("display"), DISPLAY_FONTS, base_dir)
+    body = find_font(fonts.get("body"), BODY_FONTS, base_dir)
+    dim = min(max(float(spec.get("dim", 0.45 if kind == "title" else 0.62)), 0.0), 0.95)
+
+    # What to stack, top to bottom: ("logos", height) or (text, font, color, gap above).
+    if kind == "title":
+        rows = [(spec.get("text", ""), load_font(display, round(124 * k), True), 255)]
+        if spec.get("sub"):
+            rows.append((spec["sub"], load_font(body, round(54 * k), False), 225))
+        logo_h = round(200 * k)
+    else:
+        lines = spec.get("lines") or []
+        rows = [(line, load_font(display if i == 0 else body, round((82 if i == 0 else 50) * k), i == 0),
+                 255 if i == 0 else 225) for i, line in enumerate(lines)]
+        logo_h = round(300 * k)
+
+    scratch = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    max_w = w - 2 * round(SAFE_SIDE * k)
+    blocks = []   # (image, gap above)
+    logos = [Image.open(p).convert("RGBA") for p in card["logos"]]
+    if logos:
+        gap = round(70 * k)
+        # All the same height, and smaller together if the row would be too wide.
+        widths = [im.width * logo_h / im.height for im in logos]
+        lh = logo_h * min(1.0, (max_w - gap * (len(logos) - 1)) / sum(widths))
+        sized = [im.resize((max(1, round(im.width * lh / im.height)), max(1, round(lh))), Image.LANCZOS)
+                 for im in logos]
+        row = Image.new("RGBA", (sum(im.width for im in sized) + gap * (len(sized) - 1),
+                                 max(im.height for im in sized)), (0, 0, 0, 0))
+        x = 0
+        for im in sized:
+            row.alpha_composite(im, (x, (row.height - im.height) // 2))
+            x += im.width + gap
+        blocks.append((row, 0))
+    for i, (text, font, alpha) in enumerate(rows):
+        lines = [l for l in wrap(scratch, text, font, max_w) if l] or [""]
+        ascent, descent = font.getmetrics()
+        lead = round((ascent + descent) * 1.12)
+        widths = [scratch.textlength(l, font=font) for l in lines]
+        im = Image.new("RGBA", (max_w, lead * len(lines)), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        for n, (line, lw) in enumerate(zip(lines, widths)):
+            d.text(((max_w - lw) / 2, n * lead), line, font=font, fill=(*CARD_INK, alpha))
+        gap = round((44 if blocks and i == 0 else 18) * k)
+        blocks.append((im, gap if blocks else 0))
+
+    frame = Image.new("RGBA", (w, h), (*CARD_SCRIM, round(dim * 255)))
+    content = sum(im.height + gap for im, gap in blocks)
+    top_px, bottom_px = round(SAFE_TOP * h / 1920), round(SAFE_BOTTOM * h / 1920)
+    y = top_px + max((h - top_px - bottom_px - content) // 2, 0)
+    layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    for im, gap in blocks:
+        y += gap
+        layer.alpha_composite(im, ((w - im.width) // 2, y))
+        y += im.height
+    # A soft shadow under everything keeps the text clear over bright footage.
+    shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    shadow.putalpha(layer.getchannel("A").point(lambda a: a * 0.55))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(round(10 * k)))
+    frame.alpha_composite(shadow, (0, round(3 * k)))
+    frame.alpha_composite(layer)
+    frame.save(out)
+    return out
+
+
+def add_cards(assembled, cards, times, cfg, base_dir, total, workdir):
+    """Lay the cards over the finished picture, fading in and out."""
+    fps = cfg["fps"]
+    out = workdir / "carded.mkv"
+    cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(assembled)]
+    graph, cur = [], "[0:v]"
+    for i, card in enumerate(cards, start=1):
+        png = render_card(card, cfg, base_dir, workdir / f"{card['kind']}.png")
+        start, end = times[card["kind"]]
+        cmd += ["-loop", "1", "-framerate", str(fps), "-t", f"{total:.3f}", "-i", str(png)]
+        fades = f"fade=t=in:st={start:.3f}:d={CARD_FADE}:alpha=1"
+        if end < total - 0.01:
+            fades += f",fade=t=out:st={end - CARD_FADE:.3f}:d={CARD_FADE}:alpha=1"
+        graph.append(f"[{i}:v]format=rgba,{fades}[c{i}]")
+        graph.append(f"{cur}[c{i}]overlay=0:0:eof_action=pass:"
+                     f"enable='between(t,{start:.3f},{end:.3f})'[o{i}]")
+        cur = f"[o{i}]"
+    graph.append(f"{cur}format=yuv420p[v]")
+    run(cmd + ["-filter_complex", ";".join(graph), "-map", "[v]", "-map", "0:a",
+               *video_codec(cfg), "-r", str(fps), "-c:a", "copy", str(out)])
+    return out
+
+
 # ---------------------------------------------------------------- main
 
 def main():
@@ -695,6 +911,7 @@ def main():
         print(f"  {note}")
     beats, music_start = load_beats(cfg, base_dir)
     top = load_top(cfg, base_dir)
+    cards = load_cards(cfg, base_dir)
     plan, warnings = build_plan(cfg, base_dir, beats)
     if not plan:
         sys.exit("Nothing to cut. Check your start/step/times against clip lengths.")
@@ -723,6 +940,14 @@ def main():
         elif total < top["length"]:
             line += f" · last part holds {top['length'] - total:.1f}s"
         print(line)
+    length = top_length(top, total) if top else total
+    times = card_times(cards, plan, length)
+    for card in cards:
+        start, end = times[card["kind"]]
+        what = card["spec"].get("text") if card["kind"] == "title" else " · ".join(card["spec"].get("lines") or [])
+        name = "title" if card["kind"] == "title" else "end card"
+        print(f"\n  {name}: {fmt(start)} -> {fmt(end)}  {what or ''}".rstrip()
+              + (f"  [{', '.join(p.name for p in card['logos'])}]" if card["logos"] else ""))
     for w in warnings:
         print(f"  ! {w}")
     print()
@@ -746,6 +971,9 @@ def main():
             print("  stacking under the top clip...          ", end="\r")
             assembled = compose_top(top, assembled, cfg, total, workdir)
             total = top_length(top, total)
+        if cards:
+            print("  laying the title and end card over...    ", end="\r")
+            assembled = add_cards(assembled, cards, times, cfg, base_dir, total, workdir)
         print("  mixing sound...                         ", end="\r")
         finish(assembled, cfg, base_dir, music_start, total, keep_audio, output)
 

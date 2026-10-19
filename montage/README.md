@@ -6,7 +6,7 @@ Cuts several long clips together in interleaved rounds, so viewers watch a few a
 
 ```
 brew install ffmpeg
-pip install pyyaml librosa
+pip install pyyaml librosa pillow
 ```
 
 librosa detects the beat automatically. If you skip it, set `bpm:` in the config.
@@ -29,6 +29,27 @@ librosa detects the beat automatically. If you skip it, set `bpm:` in the config
 - **Softness:** set `within_round: dissolve` for a dreamier piece, or `between_rounds: dip` for a breath through black.
 - **Ambience:** with `original_audio: true`, `original_volume` controls how much bird, water, and tool sound comes through. Set it to 0.5 or higher for a raw feel.
 - **No music:** remove the `music:` line. Timing then uses `clip_length` / `length` / `hold` in seconds, and the piece is silent unless you set `original_audio: true` to let the glasses audio carry it.
+
+## Title and end card
+
+Both are overlays on your footage: a dark, see-through forest layer with cream text, fading in and out. Neither is a solid black or white card.
+
+```yaml
+title:
+  text: "3rd Sundays"
+  sub: "October Edition"
+  logo: ../brand/oufp.png     # optional; or logos: [a.png, b.png]
+  hold: 2.5                   # seconds fully shown (default 2.5)
+  dim: 0.45                   # how dark the layer is, 0-1
+
+end_card:
+  logos: [../brand/oufp.png, ../brand/garden-steward.png]
+  lines: ["Oakland Urban Farming Project", "3rd Sundays · Next: Sun Nov 16"]
+  hold: 3.5                   # roughly how long it's on; it starts on the nearest cut
+  dim: 0.62
+```
+
+The title fades in just after the start. The end card starts on the cut nearest `hold` seconds from the end, so it lands with a new shot (and with the beat when cuts are on the beat), and stays to the end. The end card's first line is set large; the others are smaller. Text stays inside the area Reels and TikTok don't cover. The cards use Playfair Display and Roboto when they're installed or in `brand/` (`fonts: {display: ..., body: ...}` picks other files), otherwise Georgia and Helvetica. They need Pillow (`pip install pillow`).
 
 If a cut would run past the end of a clip, the script slides it earlier so it stays on the beat. The dry run tells you when that happens.
 

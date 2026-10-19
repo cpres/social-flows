@@ -74,6 +74,12 @@ python3 studio/server.py --open
   with *Use on every part* to match the rest. It lifts shadows and midtones
   rather than flat brightness, so shade opens up without blowing out the sky.
   The preview shows it live; parts with it on get a ☀ in the list.
+- **Title & end card** (*Settings*): a title (with an optional line under it,
+  like "October Edition") over the opening shots, and an end card with logos
+  and a few lines over the last ones. Both are a dark, see-through layer over
+  the footage with cream text, fading in. Put `oufp.png` and
+  `garden-steward.png` (transparent PNGs) in `brand/` at the top of the repo;
+  that folder isn't committed. The render shows them; Play reel doesn't.
 - **Duplicate** (reel header) makes a full copy of a reel (parts, trims,
   framing, transitions, music) so you can try a different cut without losing
   the one you have.

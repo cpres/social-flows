@@ -111,6 +111,14 @@ DEFAULT_SETTINGS = {
     # A reel made with Weave: the shoot it came from, its clips in order and the
     # pace, so the wizard can reopen it ({folder, clips, splitOver, between, ...}).
     "weave": None,
+    # Text over the opening shots and a card over the last ones: a dark,
+    # see-through layer with cream text. Logos come from brand/ in the repo.
+    "titleText": "",        # e.g. "3rd Sundays" ('' = no title)
+    "titleSub": "",         # e.g. "October Edition"
+    "titleLogo": "",        # '' | oufp | garden-steward | both
+    "endCard": False,
+    "endLines": "",         # one line each; the first is the big one
+    "endLogo": "both",
 }
 
 
