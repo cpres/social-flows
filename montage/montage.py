@@ -801,6 +801,12 @@ def card_times(cards, plan, total):
     return times
 
 
+def logo_size(im, side):
+    """Width and height giving the logo the area of a side x side square."""
+    aspect = im.width / im.height
+    return side * aspect ** 0.5, side / aspect ** 0.5
+
+
 def render_card(card, cfg, base_dir, out):
     """Draw one card as a full-frame transparent PNG: the scrim, the logos and
     the text, centred in the safe area."""
@@ -818,12 +824,12 @@ def render_card(card, cfg, base_dir, out):
         rows = [(spec.get("text", ""), load_font(display, round(124 * k), True), 255)]
         if spec.get("sub"):
             rows.append((spec["sub"], load_font(body, round(54 * k), False), 225))
-        logo_h = round(200 * k)
+        logo_side = 280 * k
     else:
         lines = spec.get("lines") or []
         rows = [(line, load_font(display if i == 0 else body, round((82 if i == 0 else 50) * k), i == 0),
                  255 if i == 0 else 225) for i, line in enumerate(lines)]
-        logo_h = round(300 * k)
+        logo_side = 340 * k
     by = spec.get("presented_by") if kind == "end_card" else None
 
     scratch = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
@@ -832,11 +838,12 @@ def render_card(card, cfg, base_dir, out):
     logos = [Image.open(p).convert("RGBA") for p in card["logos"]]
     if logos:
         gap = round(70 * k)
-        # All the same height, and smaller together if the row would be too wide.
-        widths = [im.width * logo_h / im.height for im in logos]
-        lh = logo_h * min(1.0, (max_w - gap * (len(logos) - 1)) / sum(widths))
-        sized = [im.resize((max(1, round(im.width * lh / im.height)), max(1, round(lh))), Image.LANCZOS)
-                 for im in logos]
+        # Each the same area as a logo_side square, so a wide wordmark and a
+        # round mark look alike in weight; smaller together if too wide.
+        sizes = [logo_size(im, logo_side) for im in logos]
+        fit = min(1.0, (max_w - gap * (len(logos) - 1)) / sum(w_ for w_, _ in sizes))
+        sized = [im.resize((max(1, round(w_ * fit)), max(1, round(h_ * fit))), Image.LANCZOS)
+                 for im, (w_, h_) in zip(logos, sizes)]
         row = Image.new("RGBA", (sum(im.width for im in sized) + gap * (len(sized) - 1),
                                  max(im.height for im in sized)), (0, 0, 0, 0))
         x = 0
@@ -867,8 +874,8 @@ def render_card(card, cfg, base_dir, out):
             blocks.append((im, round(80 * k) if blocks else 0))
         if by.get("logo"):
             logo = Image.open(by["logo"]).convert("RGBA")
-            lh = round(170 * k)
-            logo = logo.resize((max(1, round(logo.width * lh / logo.height)), lh), Image.LANCZOS)
+            w_, h_ = logo_size(logo, 260 * k)
+            logo = logo.resize((min(round(w_), max_w), round(h_ * min(1.0, max_w / w_))), Image.LANCZOS)
             blocks.append((logo, round(16 * k) if by.get("text") else round(70 * k)))
 
     frame = Image.new("RGBA", (w, h), (*CARD_SCRIM, round(dim * 255)))
