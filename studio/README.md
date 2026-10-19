@@ -79,7 +79,7 @@ python3 studio/server.py --open
   and a few lines over the last ones. Both are a dark, see-through layer over
   the footage with cream text, fading in. Put `oufp.png` and
   `garden-steward.png` (transparent PNGs) in `brand/` at the top of the repo;
-  that folder isn't committed. The render shows them; Play reel doesn't.
+  `oufp.png` and `garden-steward.png` there are cream, for the dark layer. The render shows them; Play reel doesn't.
 - **Duplicate** (reel header) makes a full copy of a reel (parts, trims,
   framing, transitions, music) so you can try a different cut without losing
   the one you have.
