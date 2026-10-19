@@ -1092,7 +1092,7 @@ async function save() {
 .tile.on { outline-color: var(--sage); }
 .tile.on img { opacity: 1; }
 .tile.over { border-left-color: var(--forest); box-shadow: -4px 0 0 var(--forest); }
-.check {
+.tile .check {
   position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 50%;
   display: grid; place-items: center; font-size: 13px; font-weight: 700;
   border: 2px solid var(--on-media); background: rgb(0 0 0 / 25%); color: var(--on-sage);
