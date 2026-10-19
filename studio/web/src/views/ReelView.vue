@@ -64,7 +64,7 @@
     </section>
 
     <section v-if="showSettings" class="panel settings">
-      <div class="music wide2">
+      <div class="sgroup music">
         <h3>Music</h3>
         <div class="musicrow">
           <div class="field song">
@@ -110,149 +110,135 @@
           </label>
         </div>
       </div>
-      <div class="music cards">
+      <div class="sgroup cards">
         <h3>Title &amp; end card</h3>
-        <p class="muted small">Shown over your footage, dimmed, with cream text. Grey text is a suggestion: press <kbd>Tab</kbd> to use it. Logos come from <code>brand/</code> in the repo.</p>
-        <div class="musicrow">
+        <p class="muted small">Laid over your footage on a dim, see-through layer with cream text. Grey text is a suggestion: <kbd>Tab</kbd> takes it.</p>
+        <div class="cardgrid">
+          <div class="cardbox">
+            <header>
+              <strong>Title</strong>
+              <small class="muted">over the opening shots</small>
+              <button class="btn small" @click="previewCard('title')" :disabled="!settings.titleText">Preview</button>
+            </header>
+            <div class="cardfields">
+              <label class="field span2">
+                Title
+                <input v-model="settings.titleText" placeholder="3rd Sundays" @keydown.tab="takeHint($event, 'titleText')" />
+              </label>
+              <label class="field">
+                Under the title
+                <input v-model="settings.titleSub" :placeholder="`${MONTH} Edition`" @keydown.tab="takeHint($event, 'titleSub')" />
+              </label>
+              <label class="field">
+                Logo
+                <select v-model="settings.titleLogo">
+                  <option v-for="l in LOGO_CHOICES" :key="l.v" :value="l.v">{{ l.label }}</option>
+                </select>
+              </label>
+            </div>
+            <CardShot v-if="cardShot.kind === 'title'" />
+          </div>
+          <div class="cardbox" :class="{ off: !settings.endCard }">
+            <header>
+              <label class="check"><input type="checkbox" v-model="settings.endCard" /> <strong>End card</strong></label>
+              <small class="muted">over the last part</small>
+              <button class="btn small" @click="previewCard('end_card')" :disabled="!settings.endCard">Preview</button>
+            </header>
+            <div class="cardfields" v-if="settings.endCard">
+              <label class="field span2">
+                <span>Lines <small>(the first is big)</small></span>
+                <textarea rows="2" v-model="settings.endLines" :placeholder="endHint" @keydown.tab="takeHint($event, 'endLines', endHint)"></textarea>
+              </label>
+              <label class="field">
+                Logo
+                <select v-model="settings.endLogo">
+                  <option v-for="l in LOGO_CHOICES" :key="l.v" :value="l.v">{{ l.label }}</option>
+                </select>
+              </label>
+              <label class="field">
+                Presented by
+                <select v-model="settings.endPresentedBy">
+                  <option v-for="l in LOGO_CHOICES.filter((c) => c.v !== 'both')" :key="l.v" :value="l.v">{{ l.label }}</option>
+                </select>
+              </label>
+              <label class="field span2">
+                Holds the last part longer by
+                <select v-model.number="settings.endBeats">
+                  <option v-for="b in [2, 4, 8]" :key="b" :value="b">{{ b }} beats{{ synced ? ` ≈ ${(b * period).toFixed(1)}s` : ` ≈ ${b / 2}s` }}</option>
+                </select>
+              </label>
+            </div>
+            <p v-else class="muted small">Off. Tick it to add a card with your logo, a few lines and “presented by”.</p>
+            <CardShot v-if="cardShot.kind === 'end_card'" />
+          </div>
+        </div>
+      </div>
+
+      <div class="sgroup">
+        <h3>Look &amp; timing</h3>
+        <div class="sgrid">
+          <template v-if="isStack">
+            <label class="field">
+              Split, top / underneath
+              <input type="range" min="0.3" max="0.7" step="0.05" v-model.number="settings.stackSplit" />
+              <small class="mono">{{ Math.round(settings.stackSplit * 100) }} / {{ 100 - Math.round(settings.stackSplit * 100) }}</small>
+            </label>
+            <label class="field">
+              Divider (px at 1080 wide)
+              <input type="number" min="0" max="20" step="2" v-model.number="settings.dividerPx" />
+            </label>
+            <label class="field">
+              Divider colour
+              <input type="color" v-model="settings.dividerColor" />
+            </label>
+            <label class="field check">
+              <span><input type="checkbox" v-model="settings.fitTop" /> Fit timelapse to underneath</span>
+              <small>{{ settings.fitTop ? 'The top clip speeds up or slows down to end with the parts underneath.'
+                : 'The reel runs as long as the top clip at normal speed.' }}</small>
+            </label>
+          </template>
           <label class="field">
-            Title
-            <input v-model="settings.titleText" placeholder="3rd Sundays" @keydown.tab="takeHint($event, 'titleText')" />
-          </label>
-          <label class="field">
-            Under the title
-            <input v-model="settings.titleSub" :placeholder="`${MONTH} Edition`" @keydown.tab="takeHint($event, 'titleSub')" />
-          </label>
-          <label class="field">
-            Title logo
-            <select v-model="settings.titleLogo">
-              <option v-for="l in LOGO_CHOICES" :key="l.v" :value="l.v">{{ l.label }}</option>
+            {{ isStack ? 'Underneath framing' : 'Framing' }}
+            <select v-model="settings.fit">
+              <option value="fill">Fill (crop to 9:16)</option>
+              <option value="blur">Blurred background</option>
+              <option value="pad">Brand colour bars</option>
             </select>
           </label>
           <div class="field">
-            &nbsp;
-            <button class="btn small" @click="previewCard('title')">Preview title</button>
+            <label for="reel-transition">Default transition</label>
+            <select id="reel-transition" v-model="settings.transition">
+              <option v-for="t in TRANSITIONS" :key="t.v" :value="t.v">{{ t.label }}</option>
+            </select>
+            <button class="link" @click="useDefaultEverywhere">Use between every part</button>
           </div>
-        </div>
-        <div class="musicrow">
-          <label class="field check">
-            <span><input type="checkbox" v-model="settings.endCard" /> End card</span>
-            <small>Comes in with the last part, which holds {{ settings.endBeats || 4 }} beats longer for it.</small>
-          </label>
-          <template v-if="settings.endCard">
-            <label class="field">
-              End card logo
-              <select v-model="settings.endLogo">
-                <option v-for="l in LOGO_CHOICES" :key="l.v" :value="l.v">{{ l.label }}</option>
-              </select>
-            </label>
-            <label class="field">
-              Presented by
-              <select v-model="settings.endPresentedBy">
-                <option v-for="l in LOGO_CHOICES.filter((c) => c.v !== 'both')" :key="l.v" :value="l.v">{{ l.label }}</option>
-              </select>
-            </label>
-            <label class="field">
-              Adds
-              <select v-model.number="settings.endBeats">
-                <option v-for="b in [2, 4, 8]" :key="b" :value="b">{{ b }} beats{{ synced ? ` ≈ ${(b * period).toFixed(1)}s` : ` ≈ ${b / 2}s` }}</option>
-              </select>
-            </label>
-          </template>
-        </div>
-        <div class="musicrow" v-if="settings.endCard">
-          <label class="field endlines">
-            Lines (the first is big)
-            <textarea rows="3" v-model="settings.endLines" :placeholder="endHint" @keydown.tab="takeHint($event, 'endLines', endHint)"></textarea>
-          </label>
           <div class="field">
-            &nbsp;
-            <button class="btn small" @click="previewCard('end_card')">Preview end card</button>
+            <label for="reel-length">Default cut length (s)</label>
+            <input id="reel-length" type="number" min="0.2" step="0.1" v-model.number="settings.defaultLength" />
+            <button class="link" @click="applyLengthToAll">Set every kept cut to {{ settings.defaultLength }}s</button>
           </div>
+          <div class="field">
+            <label for="reel-hold">Default photo hold (s)</label>
+            <input id="reel-hold" type="number" min="0.2" step="0.1" v-model.number="settings.defaultHold" />
+            <button
+              v-if="kept.some((p) => p.media.kind === 'photo')" class="link" @click="smartHolds" :disabled="timingPhotos"
+              title="Photos with people or animals hold Medium, the rest Small, and look-alike shots taken together flick by as a Burst. Clips keep their lengths."
+            >{{ timingPhotos ? 'Looking at the photos…' : '✦ Smart photo holds' }}</button>
+            <small v-if="smartNote">{{ smartNote }}</small>
+          </div>
+          <label class="field check">
+            <span><input type="checkbox" v-model="settings.originalAudio" /> Keep glasses audio</span>
+            <small>{{ settings.originalAudio ? 'Mixed under any music.' : 'Off: music only, or silent.' }}</small>
+          </label>
+          <label class="field" v-if="settings.originalAudio">
+            Glasses audio volume
+            <input type="number" min="0" max="1" step="0.05" v-model.number="settings.originalVolume" />
+          </label>
         </div>
-        <div class="cardpreview" v-if="cardShot.url || cardShot.error">
-          <p v-if="cardShot.error" class="warn">{{ cardShot.error }}</p>
-          <figure v-else>
-            <img :src="cardShot.url" :alt="cardShot.kind === 'title' ? 'Title preview' : 'End card preview'" />
-            <figcaption class="muted small">
-              {{ cardShot.kind === 'title' ? 'Over the first part.' : 'Over the last part.' }}
-              <button class="btn small" @click="previewCard(cardShot.kind)">Refresh</button>
-              <button class="btn small" @click="closeCard">Close</button>
-            </figcaption>
-          </figure>
-        </div>
       </div>
-      <template v-if="isStack">
-        <label class="field">
-          Split, top / underneath
-          <input type="range" min="0.3" max="0.7" step="0.05" v-model.number="settings.stackSplit" />
-          <small class="mono">{{ Math.round(settings.stackSplit * 100) }} / {{ 100 - Math.round(settings.stackSplit * 100) }}</small>
-        </label>
-        <label class="field">
-          Divider (px at 1080 wide)
-          <input type="number" min="0" max="20" step="2" v-model.number="settings.dividerPx" />
-        </label>
-        <label class="field">
-          Divider colour
-          <input type="color" v-model="settings.dividerColor" />
-        </label>
-        <label class="field check">
-          <span><input type="checkbox" v-model="settings.fitTop" /> Fit timelapse to underneath</span>
-          <small>{{ settings.fitTop ? 'The top clip speeds up or slows down to end with the parts underneath.'
-            : 'The reel runs as long as the top clip at normal speed.' }}</small>
-        </label>
-      </template>
-      <label class="field">
-        {{ isStack ? 'Underneath framing' : 'Framing' }}
-        <select v-model="settings.fit">
-          <option value="fill">Fill (crop to 9:16)</option>
-          <option value="blur">Blurred background</option>
-          <option value="pad">Brand colour bars</option>
-        </select>
-      </label>
-      <label class="field check">
-        <span><input type="checkbox" v-model="settings.originalAudio" /> Keep glasses audio</span>
-        <small>{{ settings.originalAudio ? 'Mixed under any music.' : 'Off: music only, or silent.' }}</small>
-      </label>
-      <label class="field" v-if="settings.originalAudio">
-        Glasses audio volume
-        <input type="number" min="0" max="1" step="0.05" v-model.number="settings.originalVolume" />
-      </label>
-      <label class="field">
-        Default transition
-        <select v-model="settings.transition">
-          <option v-for="t in TRANSITIONS" :key="t.v" :value="t.v">{{ t.label }}</option>
-        </select>
-      </label>
-      <div class="field">
-        &nbsp;
-        <button class="btn small" @click="useDefaultEverywhere">Use {{ label(settings.transition || 'cut') }} between every part</button>
-      </div>
-      <label class="field">
-        Default cut length (s)
-        <input type="number" min="0.2" step="0.1" v-model.number="settings.defaultLength" />
-      </label>
-      <label class="field">
-        Default photo hold (s)
-        <input type="number" min="0.2" step="0.1" v-model.number="settings.defaultHold" />
-      </label>
-      <div class="field">
-        &nbsp;
-        <button class="btn small" @click="applyLengthToAll">Set every kept cut to {{ settings.defaultLength }}s</button>
-      </div>
-      <div class="field" v-if="kept.some((p) => p.media.kind === 'photo')">
-        &nbsp;
-        <button
-          class="btn small" @click="smartHolds" :disabled="timingPhotos"
-          title="Photos with people or animals hold Medium, the rest Small, and look-alike shots taken together flick by as a Burst. Clips keep their lengths."
-        >{{ timingPhotos ? 'Looking at the photos…' : '✦ Smart photo holds' }}</button>
-        <small v-if="smartNote">{{ smartNote }}</small>
-      </div>
-      <div class="field">
-        &nbsp;
+
+      <div class="sgroup reelactions">
         <button class="btn small" @click="duplicateReel" title="Make a copy of this reel to experiment on">Duplicate this reel</button>
-      </div>
-      <div class="field">
-        &nbsp;
         <button class="btn small danger" @click="removeReel">Delete this reel</button>
       </div>
     </section>
@@ -514,7 +500,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
@@ -561,6 +547,18 @@ function takeHint(e, key, hint = e.target.placeholder) {
   if (!settings[key] && hint) settings[key] = hint
 }
 const cardShot = reactive({ kind: '', url: '', error: '' })
+// The preview under a card's fields: the picture, or why there isn't one.
+const CardShot = {
+  setup: () => () => h('div', { class: 'cardpreview' }, cardShot.error
+    ? [h('p', { class: 'warn small' }, cardShot.error), h('button', { class: 'link', onClick: closeCard }, 'Close')]
+    : cardShot.url && [
+      h('img', { src: cardShot.url, alt: 'Preview' }),
+      h('div', { class: 'cardpreview-actions' }, [
+        h('button', { class: 'link', onClick: () => previewCard(cardShot.kind) }, 'Refresh'),
+        h('button', { class: 'link', onClick: closeCard }, 'Close'),
+      ]),
+    ]),
+}
 async function previewCard(kind) {
   await saver.flushAll()
   try {
@@ -1386,7 +1384,7 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .rename:hover { border-bottom-color: var(--sage); }
 .total { color: var(--forest); }
 .save { font-size: 12px; }
-.settings { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+.settings { display: block; }
 .settings .wide { grid-column: span 2; }
 .field.check span { display: flex; gap: 6px; align-items: center; color: var(--ink); font-size: 14px; }
 .field.check small { font-size: 12px; }
@@ -1403,18 +1401,35 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .row.playing :deep(.clip) { border-color: var(--forest); box-shadow: 0 0 0 2px var(--forest); }
 .row.playing .num { color: var(--forest); font-size: 13px; }
 .preload { display: none; }
-.music { grid-column: 1 / -1; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
-.music h3 { margin: 0 0 8px; }
-.cards p { margin: 0 0 8px; }
-.endlines { flex: 1; min-width: 300px; }
-.cards input::placeholder, .cards textarea::placeholder { color: var(--muted); opacity: 0.55; font-style: italic; }
-.cardpreview figure { margin: 10px 0 0; display: flex; gap: 12px; align-items: flex-end; }
-.cardpreview img { width: 270px; height: 480px; border-radius: 8px; border: 1px solid var(--line); }
-.cardpreview figcaption { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
-.endlines textarea {
+.sgroup { padding: 4px 0 16px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+.sgroup:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }
+.sgroup h3 { margin: 0 0 8px; }
+.sgroup > p.small { margin: 0 0 12px; }
+.sgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 16px 20px; align-items: start; }
+.cardgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; align-items: start; }
+.cardbox { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px 14px; background: var(--cream); }
+.cardbox.off { background: transparent; }
+.cardbox header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.cardbox header strong { color: var(--ink); font-size: 15px; }
+.cardbox header .btn { margin-left: auto; }
+.cardbox header .check { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.cardbox p.small { margin: 0; }
+.cardfields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
+.cardfields .span2 { grid-column: 1 / -1; }
+.cardfields small { font-size: 11px; }
+.cardfields textarea {
   border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; resize: vertical;
-  background: var(--paper); font: inherit; font-size: 15px; color: var(--ink);
+  background: var(--paper); font: inherit; font-size: 15px; color: var(--ink); width: 100%; box-sizing: border-box;
 }
+.cards input::placeholder, .cards textarea::placeholder { color: var(--muted); opacity: 0.55; font-style: italic; }
+.cardbox :deep(.cardpreview) { display: flex; gap: 12px; align-items: flex-end; margin-top: 14px; }
+.cardbox :deep(.cardpreview img) { width: 180px; height: 320px; border-radius: 8px; border: 1px solid var(--line); display: block; }
+.cardbox :deep(.cardpreview-actions) { display: flex; flex-direction: column; gap: 6px; }
+.link, .cardbox :deep(.link) { background: none; border: 0; padding: 2px 0; color: var(--forest); font: inherit; font-size: 13px; text-align: left; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.link:hover, .cardbox :deep(.link:hover) { color: var(--forest-2); }
+.link:disabled { opacity: 0.5; cursor: default; }
+.reelactions { display: flex; gap: 10px; }
+.reelactions .danger { margin-left: auto; }
 .musicrow { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; }
 .musicrow .field { min-width: 160px; }
 .musicrow .field select { min-width: 260px; }
