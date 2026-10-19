@@ -10,7 +10,7 @@
       <div v-for="(g, i) in gaps" :key="`g${i}`" class="shade" :style="{ left: pct(g[0]), width: pct(g[1] - g[0]) }"></div>
       <div
         v-for="(s, j) in starts" :key="j" class="win" :class="{ on: j === selected }"
-        :style="{ left: pct(s), width: pct(length) }" :title="`${letter(j)}: ${fmtTime(s)} → ${fmtTime(s + length)}`"
+        :style="{ left: pct(s), width: pct(lenOf(j)) }" :title="`${letter(j)}: ${fmtTime(s)} → ${fmtTime(s + lenOf(j))}`"
         @pointerdown.stop="down($event, j)"
       >
         <span class="tag">{{ letter(j) }}</span>
@@ -33,12 +33,12 @@ import { computed, ref } from 'vue'
 import { clamp, fmtTime, stripTimes as filmstrip } from '../time'
 import { letter } from '../weave'
 
-// A clip's parts for Weave: several windows of the same length that slide
-// along the filmstrip but never cross, so a always comes before b.
+// A clip's parts for Weave: several windows, each as long as its part, that
+// slide along the filmstrip but never cross, so a always comes before b.
 const props = defineProps({
   duration: { type: Number, required: true },
   starts: { type: Array, required: true },
-  length: { type: Number, required: true },
+  length: { type: [Number, Array], required: true },   // one for every window, or one each
   selected: { type: Number, default: 0 },
   playhead: { type: Number, default: 0 },
   thumbAt: { type: Function, required: true },
@@ -52,14 +52,16 @@ let grabOffset = 0
 
 const stripTimes = computed(() => filmstrip(props.duration))
 const pct = (t) => `${(clamp(t, 0, props.duration) / (props.duration || 1)) * 100}%`
+const lenOf = (j) => (Array.isArray(props.length) ? props.length[j] : props.length)
 
 // The footage between the windows, dimmed.
 const gaps = computed(() => {
   const out = []
   let at = 0
-  for (const s of [...props.starts].sort((a, b) => a - b)) {
+  const wins = props.starts.map((s, j) => [s, s + lenOf(j)]).sort((a, b) => a[0] - b[0])
+  for (const [s, e] of wins) {
     if (s > at) out.push([at, s])
-    at = Math.max(at, s + props.length)
+    at = Math.max(at, e)
   }
   if (at < props.duration) out.push([at, props.duration])
   return out
@@ -92,9 +94,9 @@ function move(e) {
   if (dragging < 0) return emit('seek', t)
   const j = dragging
   const s = props.starts
-  const len = props.length
+  const len = lenOf(j)
   // Between its neighbours; where they already overlap, just keep the order.
-  let lo = j > 0 ? s[j - 1] + len : 0
+  let lo = j > 0 ? s[j - 1] + lenOf(j - 1) : 0
   let hi = j < s.length - 1 ? s[j + 1] - len : props.duration - len
   if (lo > hi) {
     lo = j > 0 ? s[j - 1] : 0

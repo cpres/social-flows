@@ -29,6 +29,10 @@
       <button class="link" @click="startOver">Start over</button>
     </p>
     <p v-if="notice" class="notice">{{ notice }}</p>
+    <p v-if="step === 2 && leftOut" class="notice">
+      Left out {{ leftOut.clip.media.file }}.
+      <button class="link" @click="putBack">Put it back</button>
+    </p>
 
     <!-- 1. Order: what goes in, and in what order -->
     <section v-if="step === 0" class="panel">
@@ -239,7 +243,7 @@
 
           <template v-if="moment.kind === 'video'">
             <SplitBar
-              :duration="moment.media.duration" :starts="moment.parts.map((p) => p.start)" :length="len"
+              :duration="moment.media.duration" :starts="moment.parts.map((p) => p.start)" :length="lens(moment)"
               :selected="sel" :playhead="player.playhead.value" :activity="activityOf[moment.mediaId]"
               :thumb-at="(t) => api.thumb(moment.media.folder, moment.media.file, t, 160)"
               @update="(s) => setStarts(moment, s, true)" @select="selectWindow" @seek="player.seek"
@@ -251,17 +255,37 @@
               <span class="spacer"></span>
               <span class="muted">{{ moment.parts.length }} part{{ moment.parts.length === 1 ? '' : 's' }}</span>
               <button class="btn small" @click="removePart(moment)" :disabled="moment.parts.length <= 1" title="One part fewer (−)">−</button>
-              <button class="btn small" @click="addPart(moment)" :disabled="moment.parts.length >= maxParts(moment.media.duration, len)" title="One more part (+)">+</button>
+              <button class="btn small" @click="addPart(moment)" :disabled="!canAdd(moment)" title="One more part (+)">+</button>
             </div>
             <div class="controls">
               <button class="btn small" @click="suggest(moment)" :disabled="activityOf[moment.mediaId] === null">Suggest busy moments</button>
               <button class="btn small" @click="spread(moment)">Spread evenly</button>
-              <span class="muted small" v-if="active">{{ letter(sel) }}: {{ fmtTime(active.start) }} → {{ fmtTime(active.start + len) }}</span>
+              <span class="muted small" v-if="active">{{ letter(sel) }}: {{ fmtTime(active.start) }} → {{ fmtTime(active.start + partLen(active)) }}</span>
+            </div>
+            <div class="field" v-if="active">
+              <span>{{ moment.parts.length > 1 ? `Length of ${letter(sel)}` : 'Length' }} <b class="mono" v-if="!synced">{{ partLen(active).toFixed(1) }}s</b></span>
+              <div class="chips" v-if="synced">
+                <button
+                  v-for="b in BEAT_CHOICES" :key="b" class="btn small" :class="{ active: beatsOf(active) === b }"
+                  :disabled="beatsOf(active) !== b && b * period > room(moment, sel) + 0.01"
+                  :title="b * period > room(moment, sel) + 0.01 ? 'Longer than this clip has room for' : ''"
+                  @click="sizePart(moment, sel, b)"
+                >{{ b }}♩ ≈ {{ (b * period).toFixed(2) }}s<template v-if="b === pace.beatsPerCut"> · pace</template></button>
+                <button v-if="moment.parts.length > 1" class="btn small" :disabled="!fitsAll(moment)" @click="sizeAll(moment)">Use on every part</button>
+              </div>
+              <div class="lenrow" v-else>
+                <input
+                  type="range" min="0.5" :max="longest(moment, sel)" step="0.1" :value="partLen(active)"
+                  aria-label="Length of this part" @input="sizePart(moment, sel, Number($event.target.value))"
+                />
+                <button class="btn small" :disabled="!own(active)" @click="sizePart(moment, sel)">Pace · {{ pace.len.toFixed(1) }}s</button>
+                <button v-if="moment.parts.length > 1" class="btn small" :disabled="!fitsAll(moment)" @click="sizeAll(moment)">Use on every part</button>
+              </div>
             </div>
             <p class="muted small">
               Drag the windows along the filmstrip to pick each moment; they keep their order, so
               <b>a</b> always comes before <b>b</b>. The green lane under it shows where things move.
-              Lengths follow the pace ({{ len.toFixed(1) }}s); fine-tune any part later in the reel.
+              Each part runs for the pace ({{ synced ? `${pace.beatsPerCut} beats, ` : '' }}{{ len.toFixed(1) }}s) unless you give it a length of its own.
             </p>
           </template>
           <template v-else>
@@ -276,8 +300,7 @@
               <small>{{ whyText(moment) }}</small>
             </div>
             <p class="muted">
-              This photo holds for {{ holdText(moment) }} between rounds. Drag the window on the left to frame it,
-              or go back to <button class="link" @click="go(0)">Order</button> to leave it out.
+              This photo holds for {{ holdText(moment) }} between rounds. Drag the window on the left to frame it.
             </p>
           </template>
 
@@ -285,11 +308,16 @@
             <button class="btn" @click="pick(cur - 1)" :disabled="cur === 0">↑ Previous</button>
             <button class="btn" @click="pick(cur + 1)" :disabled="cur >= included.length - 1">↓ Next</button>
             <span class="spacer"></span>
+            <button
+              class="btn" @click="leaveOut(moment)" :disabled="!canLeaveOut(moment)"
+              :title="canLeaveOut(moment) ? `Take this ${moment.kind === 'video' ? 'clip' : 'photo'} out of the reel` : 'A weave needs at least one clip'"
+            >Leave it out <kbd>X</kbd></button>
             <button class="btn primary" v-if="cur >= included.length - 1" @click="go(3)">Stitch them together →</button>
           </div>
           <p class="muted keys">
             <kbd>Space</kbd> play the part · <kbd>1</kbd>–<kbd>6</kbd> pick a part · <kbd>←</kbd>/<kbd>→</kbd> nudge it 0.1s (<kbd>Shift</kbd> 1s) ·
-            <kbd>+</kbd>/<kbd>−</kbd> more or fewer parts · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next clip
+            <kbd>[</kbd>/<kbd>]</kbd> shorter/longer · <kbd>+</kbd>/<kbd>−</kbd> more or fewer parts ·
+            <kbd>X</kbd> leave it out · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next clip
           </p>
         </div>
       </section>
@@ -311,7 +339,7 @@
             @dragleave="dragOver = null" @drop="dropTile(i)" @dragend="dragOver = null"
             :title="`${e.clip.media.file}${e.part ? ` · ${fmtTime(e.part.start)}` : ''}`"
           >
-            <img :src="e.kind === 'video' ? api.thumb(e.clip.media.folder, e.clip.media.file, e.part.start + len / 2, 240) : thumbOf(e.clip)" alt="" draggable="false" />
+            <img :src="e.kind === 'video' ? api.thumb(e.clip.media.folder, e.clip.media.file, e.part.start + partLen(e.part) / 2, 240) : thumbOf(e.clip)" alt="" draggable="false" />
             <span class="slabel" :style="{ background: e.kind === 'video' ? reelColor(e.number) : null }">{{ e.label }}</span>
             <span class="slen">{{ synced ? `${fmtBeats(timing.get(e.key).beats)}♩` : `${lengthOf(e).toFixed(1)}s` }}</span>
           </div>
@@ -334,7 +362,7 @@
         </button>
       </div>
       <p class="muted small" v-if="reelId">
-        Saving puts every part back to the pace length; framing, lighten and zoom set on parts in the reel are kept.
+        Saving keeps the framing, lighten and zoom set on parts in the reel, and any length that isn't the pace.
       </p>
     </section>
   </main>
@@ -349,7 +377,7 @@ import { clamp, clockTime, fmtBeats, fmtTime, folderTitle, reelColor, savedAt } 
 import { PHOTO_STYLES, STYLES, holdLengths, photoStyles, timeline } from '../hold'
 import {
   MAX_PARTS, MIN_PARTS, SECONDS_PER_PART, autoParts, busyStarts, fromReel, inOrder, letter,
-  maxParts, settle, spreadStarts, weave,
+  partKey, settle, spreadStarts, weave,
 } from '../weave'
 import ReelFrame from '../components/ReelFrame.vue'
 import SplitBar from '../components/SplitBar.vue'
@@ -480,17 +508,21 @@ watch(songUrl, async (url) => {
 })
 onBeforeUnmount(stopListening)
 
-// Set the pace so the reel comes out about this long.
+// Set the pace so the reel comes out about this long. Parts given a length
+// of their own stay that long; the rest follow the pace.
 function aimFor(seconds) {
-  const v = videos.value.length ? partCount.value : 0
+  const parts = videos.value.flatMap((c) => c.parts)
+  const v = parts.filter((q) => !own(q)).length
+  const fixed = parts.filter(own).reduce((a, q) => a + partLen(q), 0)
   // The photos, counted in parts: how long they hold now, over a part's length.
   const p = seq.value.filter((e) => e.kind === 'photo').reduce((a, e) => a + lengthOf(e), 0) / len.value
   if (!v && !p) return
+  const left = Math.max(0, seconds - fixed)
   if (synced.value) {
-    const want = seconds / ((v + p) * period.value)
+    const want = left / ((v + p) * period.value)
     pace.beatsPerCut = BEAT_CHOICES.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a))
   } else {
-    pace.len = Math.round(clamp(seconds / (v + p), 1, 4) * 10) / 10
+    pace.len = Math.round(clamp(left / (v + p), 1, 4) * 10) / 10
   }
 }
 
@@ -511,10 +543,52 @@ function newClip(m, on) {
   return c
 }
 
-// New starts for a clip's windows; parts keep their ids by position.
+// New starts for a clip's windows; parts keep their ids (and lengths) by position.
 function setStarts(c, starts, placed = c.placed) {
   c.parts = starts.map((start, j) => ({ ...(c.parts[j] || {}), start }))
   c.placed = placed
+}
+
+// How long a part plays: its own length if it was given one (beats on the
+// beat, else seconds), else the pace.
+const own = (p) => !!(synced.value ? p.beats : p.length)
+const beatsOf = (p) => p.beats || pace.beatsPerCut
+const partLen = (p) => (synced.value ? beatsOf(p) * period.value : p.length || pace.len)
+// Each of a clip's n windows, as long as its part (parts still to come: the pace).
+const lens = (c, n = c.parts.length) => Array.from({ length: n }, (_, j) => (c.parts[j] ? partLen(c.parts[j]) : len.value))
+// How long part j can be before it runs into the clip's other parts.
+const room = (c, j) => c.media.duration - lens(c).reduce((a, l, k) => (k === j ? a : a + l), 0)
+const longest = (c, j) => Math.max(0.5, Math.floor(Math.min(8, room(c, j)) * 10) / 10)
+const canAdd = (c) => lens(c).reduce((a, l) => a + l, 0) + len.value <= c.media.duration + 1e-6
+const fitsAll = (c) => partLen(active.value) * c.parts.length <= c.media.duration + 0.01
+
+// Give part j of a clip a length of its own: v beats on the beat, else v
+// seconds. The pace's length (or none) puts it back on the pace. Beats keep
+// their seconds too, so the part stays about as long off the beat.
+function sizePart(c, j, v) {
+  const p = c.parts[j]
+  let mine = {}
+  if (synced.value && v && v !== pace.beatsPerCut) mine = { beats: v, length: Math.round(v * period.value * 10) / 10 }
+  else if (!synced.value && v && Math.abs(v - pace.len) >= 0.05) mine = { length: v }
+  c.parts[j] = { id: p.id, start: p.start, ...mine }
+  const d = c.media.duration
+  if (!c.placed) setStarts(c, spreadStarts(d, c.parts.length, lens(c)), false)
+  else setStarts(c, settle(c.parts.map((q) => q.start), lens(c), d))
+}
+function sizeAll(c) {
+  const p = c.parts[sel.value]
+  const v = synced.value ? p.beats : p.length
+  for (let j = 0; j < c.parts.length; j++) sizePart(c, j, v)
+}
+// [ and ]: the next beat choice that fits, or half a second off the beat.
+function stepLength(c, dir) {
+  const j = sel.value
+  const p = c.parts[j]
+  if (!synced.value) return sizePart(c, j, Math.round(clamp(partLen(p) + dir * 0.5, 0.5, longest(c, j)) * 10) / 10)
+  const now = beatsOf(p)
+  const fit = BEAT_CHOICES.filter((b) => (dir > 0 ? b > now : b < now) && b * period.value <= room(c, j) + 0.01)
+  const b = dir > 0 ? fit[0] : fit[fit.length - 1]
+  if (b) sizePart(c, j, b)
 }
 
 // The pace or the split length changed: recount and respread the clips that
@@ -522,8 +596,8 @@ function setStarts(c, starts, placed = c.placed) {
 function refit(c) {
   const d = c.media.duration
   const n = c.auto ? autoParts(d, pace.splitOver, len.value) : c.parts.length
-  if (!c.placed || n !== c.parts.length) setStarts(c, spreadStarts(d, n, len.value), false)
-  else setStarts(c, settle(c.parts.map((p) => p.start), len.value, d))
+  if (!c.placed || n !== c.parts.length) setStarts(c, spreadStarts(d, n, lens(c, n)), false)
+  else setStarts(c, settle(c.parts.map((p) => p.start), lens(c), d))
 }
 watch([len, () => pace.splitOver], () => {
   for (const c of clips.value) if (c.kind === 'video') refit(c)
@@ -531,29 +605,31 @@ watch([len, () => pace.splitOver], () => {
 
 function addPart(c) {
   const d = c.media.duration
-  if (c.parts.length >= maxParts(d, len.value)) return
+  if (!canAdd(c)) return
   c.auto = false
-  if (!c.placed) return setStarts(c, spreadStarts(d, c.parts.length + 1, len.value))
+  if (!c.placed) return setStarts(c, spreadStarts(d, c.parts.length + 1, lens(c, c.parts.length + 1)))
   // Placed by hand: the new part goes in the middle of the biggest gap.
   const s = c.parts.map((p) => p.start)
-  const edges = [0, ...s.flatMap((t) => [t, t + len.value]), d]
+  const l = lens(c)
+  const edges = [0, ...s.flatMap((t, j) => [t, t + l[j]]), d]
   let best = 0
   for (let i = 0; i < edges.length; i += 2) if (edges[i + 1] - edges[i] > edges[best + 1] - edges[best]) best = i
   const at = (edges[best] + edges[best + 1] - len.value) / 2
   const k = best / 2
   c.parts.splice(k, 0, { start: at })
-  setStarts(c, settle(c.parts.map((p) => p.start), len.value, d))
+  setStarts(c, settle(c.parts.map((p) => p.start), lens(c), d))
   sel.value = k
 }
+// The selected part goes; the rest of a clip not placed by hand respread.
 function removePart(c) {
   if (c.parts.length <= 1) return
   c.auto = false
-  if (!c.placed) setStarts(c, spreadStarts(c.media.duration, c.parts.length - 1, len.value))
-  else c.parts.splice(sel.value, 1)
+  c.parts.splice(sel.value, 1)
+  if (!c.placed) setStarts(c, spreadStarts(c.media.duration, c.parts.length, lens(c)), false)
   sel.value = Math.min(sel.value, c.parts.length - 1)
 }
 function spread(c) {
-  setStarts(c, spreadStarts(c.media.duration, c.parts.length, len.value), false)
+  setStarts(c, spreadStarts(c.media.duration, c.parts.length, lens(c)), false)
 }
 function spreadAll() {
   for (const c of videos.value) spread(c)
@@ -574,7 +650,7 @@ async function measure(c) {
 async function suggest(c) {
   const points = await measure(c)
   const s = c.parts.map((p) => p.start)
-  if (points?.length) setStarts(c, busyStarts(points, c.media.duration, s.length, len.value, s), true)
+  if (points?.length) setStarts(c, busyStarts(points, c.media.duration, s.length, lens(c), s), true)
 }
 const measuring = ref('')
 async function suggestAll() {
@@ -625,7 +701,9 @@ function sizeLabel(style) {
 }
 const holdRows = computed(() => {
   const n = (k, one, many) => `${k} ${k === 1 ? one : many}`
-  const rows = [{ style: 'clip', hint: STYLES.clip.hint, count: n(partCount.value, 'part', 'parts') }]
+  const mine = videos.value.reduce((a, c) => a + c.parts.filter(own).length, 0)
+  const rows = [{ style: 'clip', hint: STYLES.clip.hint,
+                  count: n(partCount.value, 'part', 'parts') + (mine ? ` (${mine} with a length of ${mine === 1 ? 'its' : 'their'} own)` : '') }]
   for (const s of smart.value ? PHOTO_STYLES : ['medium']) {
     let count = n(photos.value.filter((c) => styleOf(c) === s).length, 'photo', 'photos')
     if (s === 'burst') {
@@ -694,9 +772,12 @@ const woven = computed(() => weave(clips.value, pace.between,
 const seq = computed(() => inOrder(woven.value, order.value)
   .map((e) => ({ ...e, transition: e.key in overrides ? overrides[e.key] : e.transition })))
 // How long each entry plays, in the order it plays: key -> { seconds, beats }.
+// A part of a clip plays its own length (whole beats, so photos still land
+// back on the beat).
 const timing = computed(() => {
   const t = timeline(seq.value.map((e) => (e.kind === 'video' ? 'clip' : styleOf(e.clip))), sizes.value)
-  return new Map(seq.value.map((e, i) => [e.key, t[i]]))
+  return new Map(seq.value.map((e, i) => [e.key, e.kind === 'video'
+    ? { seconds: partLen(e.part), beats: synced.value ? beatsOf(e.part) : 0 } : t[i]]))
 })
 const lengthOf = (e) => timing.value.get(e.key)?.seconds ?? len.value
 const total = computed(() => seq.value.reduce((a, e) => a + lengthOf(e), 0))
@@ -750,7 +831,7 @@ const cur = ref(0)
 const sel = ref(0)
 const moment = computed(() => included.value[Math.min(cur.value, included.value.length - 1)])
 const active = computed(() => (moment.value?.kind === 'video' ? moment.value.parts[sel.value] : null))
-const player = usePlayer(() => active.value && { start: active.value.start, length: len.value })
+const player = usePlayer(() => active.value && { start: active.value.start, length: partLen(active.value) })
 
 function pick(i) {
   if (i < 0 || i >= included.value.length) return
@@ -774,13 +855,34 @@ function onLoaded() {
 function nudge(by) {
   const c = moment.value
   const s = c.parts.map((p) => p.start)
+  const l = lens(c)
   const j = sel.value
-  const lo = j > 0 ? s[j - 1] + len.value : 0
-  const hi = j < s.length - 1 ? s[j + 1] - len.value : c.media.duration - len.value
+  const lo = j > 0 ? s[j - 1] + l[j - 1] : 0
+  const hi = j < s.length - 1 ? s[j + 1] - l[j] : c.media.duration - l[j]
   s[j] = Math.round(clamp(s[j] + by, Math.min(lo, s[j]), Math.max(hi, s[j])) * 100) / 100
   setStarts(c, s, true)
   player.seek(s[j])
 }
+// Leave a clip or photo out right from its moment, with a way to put it back.
+// An order dragged in Stitch keeps everything else where it was.
+const leftOut = ref(null)   // { clip, order } the last one left out
+const canLeaveOut = (c) => c.kind === 'photo' || videos.value.length > 1
+const keysOf = (c) => (c.kind === 'video' ? c.parts.map((_, j) => partKey(c.mediaId, j)) : [String(c.mediaId)])
+function leaveOut(c) {
+  if (!canLeaveOut(c)) return
+  leftOut.value = { clip: c, order: order.value }
+  if (order.value) order.value = order.value.filter((k) => !keysOf(c).includes(k))
+  c.on = false
+  pick(Math.min(cur.value, included.value.length - 1))
+}
+function putBack() {
+  const { clip, order: was } = leftOut.value
+  clip.on = true
+  order.value = was
+  leftOut.value = null
+  pick(included.value.indexOf(clip))
+}
+
 function setFocus({ x, y, zoom }) {
   const c = moment.value
   c.focusX = x
@@ -793,6 +895,7 @@ function go(i) {
   if (i < 0 || i > 3 || (i > 0 && !videos.value.length)) return
   player.video.value?.pause()
   stopListening()
+  leftOut.value = null
   step.value = i
   if (i === 2) pick(Math.min(cur.value, included.value.length - 1))
 }
@@ -809,6 +912,9 @@ function onKey(e) {
   else if (k === 'ArrowRight' && video) nudge(e.shiftKey ? 1 : 0.1)
   else if ((k === '+' || k === '=') && video) addPart(moment.value)
   else if ((k === '-' || k === '_') && video) removePart(moment.value)
+  else if (k === '[' && video) stepLength(moment.value, -1)
+  else if (k === ']' && video) stepLength(moment.value, 1)
+  else if (k === 'x' || k === 'X') leaveOut(moment.value)
   else if (/^[1-9]$/.test(k) && video && Number(k) <= moment.value.parts.length) selectWindow(Number(k) - 1)
   else return
   e.preventDefault()
@@ -856,7 +962,8 @@ function startFresh(imported) {
     beatsPerCut: Number(s.beatsPerCut) || 4, hold: w.hold || 'smart',
   })
   Object.assign(chosen, w.styles || {})
-  const back = fromReel(reelData.items.filter(managed), w)
+  const back = fromReel(reelData.items.filter(managed), w,
+                        { beatSync: !!(pace.music && pace.beatSync), beatsPerCut: pace.beatsPerCut, len: pace.len })
   const inReel = new Set(back.clips.map((c) => c.mediaId))
   clips.value = [...back.clips, ...folderMedia.filter((m) => !inReel.has(m.id)).map((m) => newClip(m, false))]
   order.value = back.keys
@@ -890,7 +997,7 @@ function snapshot() {
     clips: clips.value.map((c) => ({
       mediaId: c.mediaId, kind: c.kind, on: c.on, auto: c.auto, placed: c.placed, framed: c.framed,
       focusX: c.focusX, focusY: c.focusY, zoom: c.zoom, id: c.id,
-      parts: c.parts.map((p) => ({ id: p.id, start: p.start })),
+      parts: c.parts.map((p) => ({ id: p.id, start: p.start, beats: p.beats, length: p.length })),
     })),
   }
 }
@@ -1026,7 +1133,7 @@ async function save() {
     if (id) item.id = id
     if (e.kind === 'video') {
       item.start = e.part.start
-      item.beats = 0                     // the reel's beats per part
+      item.beats = synced.value && e.part.beats ? e.part.beats : 0   // 0: the reel's beats per part
     } else {
       item.beats = synced.value ? t.beats : 0
     }
@@ -1133,6 +1240,8 @@ async function save() {
 }
 .mseg.photo { background: var(--paper); color: var(--muted); }
 .holds { border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+.lenrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.lenrow input[type='range'] { flex: 1; min-width: 160px; padding: 0; accent-color: var(--forest); }
 .holds td { padding: 2px 10px 2px 0; white-space: nowrap; }
 .holds td:nth-child(2) { white-space: normal; }
 

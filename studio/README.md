@@ -153,8 +153,12 @@ at once. It's a four-step wizard that makes a normal reel:
    changes how many. The lane under the filmstrip shows how much is moving where
    (measured once from the keyframes, cached), and *Suggest busy moments* starts
    each part on the liveliest stretch of its share of the clip. Framing set here
-   applies to every part of the clip. For a photo, pick its hold (Medium, Small
-   or Burst); it says why it got the one it has.
+   applies to every part of the clip. Each part runs for the pace unless you give
+   it a **length** of its own: on the beat, 1, 2, 4 or 8 beats (the pace's is
+   marked), else a length in seconds; `[`/`]` makes it shorter or longer. For a
+   photo, pick its hold (Medium, Small or Burst); it says why it got the one it
+   has. **Leave it out** (`X`) takes the clip or photo out of the reel right
+   there, and *Put it back* undoes it.
 4. **Stitch**: the woven order as tiles. Every clip shows up in the first round
    and ends in the last; a clip with more parts than the others is spread across
    the rounds, and photos go between rounds, the last one closing the reel (a
@@ -164,8 +168,8 @@ at once. It's a four-step wizard that makes a normal reel:
    fine-tune and render.
 
 A reel made this way has **Re-weave** in its header, which reopens the wizard and
-saves back into the same reel. That puts every part back to the pace length;
-framing, lighten and zoom set on parts in the reel are kept.
+saves back into the same reel. Parts keep the framing, lighten and zoom set on
+them in the reel, and any length that isn't the pace; the rest follow the pace.
 
 **Drafts.** The wizard saves what you've chosen as you go (the header says
 "draft saved 10:42"), so leaving it loses nothing. ← takes you Home, where the

@@ -1,9 +1,10 @@
 // Weave: cut each clip into a few parts and interleave them, so several
 // things seem to happen at once (1a 2a 3a ▣ 1b 2b ▣ 1c 2c …).
 //
-// A clip in the wizard is { mediaId, media, kind, on, parts: [{ id?, start }],
-// auto, focusX, focusY, zoom, framed }; every part of a clip is the same
-// length (the pace), so only the starts are stored.
+// A clip in the wizard is { mediaId, media, kind, on, parts: [{ id?, start,
+// beats?, length? }], auto, focusX, focusY, zoom, framed }. A part is as long
+// as the pace unless it was given its own length: beats on the beat, else
+// seconds.
 
 import { clamp, defaultStart } from './time'
 
@@ -12,6 +13,8 @@ export const MIN_PARTS = 2           // …at least two…
 export const MAX_PARTS = 6           // …and no more than six
 
 const round2 = (t) => Math.round(t * 100) / 100
+// len below is one length for every window, or one per window.
+const lenAt = (len, j) => (Array.isArray(len) ? len[j] : len)
 
 // The stretch worth cutting from: not the first 2s (the camera settling) or
 // the last half second. Same rule as the engine's default start.
@@ -29,16 +32,13 @@ export function autoParts(duration, splitOver, len) {
   return Math.min(clamp(Math.round(duration / SECONDS_PER_PART), MIN_PARTS, MAX_PARTS), fits)
 }
 
-// The most parts a clip can hold without them overlapping.
-export const maxParts = (duration, len) => Math.max(1, Math.floor(duration / len))
-
 // Keep a clip's windows in order and apart where there's room: each starts
 // after the one before it ends, and none runs past the end of the clip.
 export function settle(starts, len, duration) {
-  const s = starts.map((t) => clamp(t, 0, Math.max(0, duration - len)))
-  for (let j = 1; j < s.length; j++) s[j] = Math.max(s[j], s[j - 1] + len)
+  const s = starts.map((t, j) => clamp(t, 0, Math.max(0, duration - lenAt(len, j))))
+  for (let j = 1; j < s.length; j++) s[j] = Math.max(s[j], s[j - 1] + lenAt(len, j - 1))
   for (let j = s.length - 1; j >= 0; j--) {
-    const next = j + 1 < s.length ? s[j + 1] - len : duration - len
+    const next = (j + 1 < s.length ? s[j + 1] : duration) - lenAt(len, j)
     s[j] = Math.max(0, Math.min(s[j], next))
   }
   return s.map(round2)
@@ -47,9 +47,9 @@ export function settle(starts, len, duration) {
 // n windows spread evenly over the usable stretch; a single one goes where
 // the engine would cut by default (30% in).
 export function spreadStarts(duration, n, len) {
-  if (n <= 1) return [defaultStart(duration, len)]
+  if (n <= 1) return [defaultStart(duration, lenAt(len, 0))]
   const [lo, hi] = usable(duration)
-  const starts = Array.from({ length: n }, (_, j) => lo + ((hi - lo) * (j + 0.5)) / n - len / 2)
+  const starts = Array.from({ length: n }, (_, j) => lo + ((hi - lo) * (j + 0.5)) / n - lenAt(len, j) / 2)
   return settle(starts, len, duration)
 }
 
@@ -65,11 +65,12 @@ export function busyStarts(points, duration, n, len, fallback) {
   const step = (hi - lo) / n
   const starts = []
   for (let j = 0; j < n; j++) {
+    const l = lenAt(len, j)
     const a = lo + j * step
-    const b = Math.max(a, a + step - len)
+    const b = Math.max(a, a + step - l)
     const options = points.filter(([t]) => t >= a && t <= a + step).map(([t]) => {
-      const s = clamp(t - len / 3, a, b)
-      const inside = points.filter(([u]) => u >= s && u <= s + len)
+      const s = clamp(t - l / 3, a, b)
+      const inside = points.filter(([u]) => u >= s && u <= s + l)
       return { s, score: inside.length ? inside.reduce((acc, [, v]) => acc + v, 0) / inside.length : 0 }
     })
     const top = Math.max(0, ...options.map((o) => o.score))
@@ -144,9 +145,15 @@ export function inOrder(seq, keys) {
 }
 
 // Rebuild the wizard's clips from a reel made with Weave, so it can be
-// reopened: parts grouped by clip in start order, keeping their ids.
+// reopened: parts grouped by clip in start order, keeping their ids, and the
+// lengths of any that aren't the reel's pace (pace: { beatSync, beatsPerCut,
+// len }), so they stay that long.
 // Returns { clips (in the saved order), keys (the reel's order), transitions }.
-export function fromReel(items, weaveSettings) {
+export function fromReel(items, weaveSettings, pace) {
+  const own = (it) => {
+    if (pace.beatSync) return it.beats && it.beats !== pace.beatsPerCut ? { beats: it.beats, length: it.length } : {}
+    return Math.abs(it.length - pace.len) > 0.05 ? { length: it.length } : {}
+  }
   const byMedia = new Map()
   for (const it of items) {
     if (!byMedia.has(it.mediaId)) byMedia.set(it.mediaId, [])
@@ -159,7 +166,7 @@ export function fromReel(items, weaveSettings) {
     const first = its[0]
     return {
       mediaId, media: first.media, kind: first.media.kind, on: true, auto: false, placed: true, framed: false,
-      parts: first.media.kind === 'video' ? its.map((it) => ({ id: it.id, start: it.start })) : [],
+      parts: first.media.kind === 'video' ? its.map((it) => ({ id: it.id, start: it.start, ...own(it) })) : [],
       id: first.media.kind === 'photo' ? first.id : undefined,
       focusX: first.focusX, focusY: first.focusY, zoom: first.zoom || 1,
     }
