@@ -142,11 +142,12 @@ at once. It's a four-step wizard that makes a normal reel:
    just imported is picked). Drag to reorder, click to leave one out. Each round
    goes through the clips in this order.
 2. **Pace**: the length of every part (1–4s, or *Aim for* 15/30/45/60s), and a
-   song. With a song and beat detection, every part is a whole number of beats
-   (1, 2, 4 or 8). *Photo hold* is *Smart* (below) or *Even*, every photo a bit
-   shorter than a part. Clips longer than *Split clips longer than* (1:00) get
-   about one part per 30s of footage (2–6); shorter ones get one. *Between
-   rounds* picks the transition that marks time moving on.
+   song: *Listen* plays it (drag along it to hear more, or pick another song and
+   that one plays). With a song and beat detection, every part is a whole
+   number of beats (1, 2, 4 or 8). *Photo hold* is *Smart* (below) or *Even*,
+   every photo a bit shorter than a part. Clips longer than *Split clips longer
+   than* (1:00) get about one part per 30s of footage (2–6); shorter ones get
+   one. *Between rounds* picks the transition that marks time moving on.
 3. **Moments**: one clip at a time. Its parts are windows on the filmstrip
    (a, b, c…) that slide but never cross, so a always comes before b; `+`/`−`
    changes how many. The lane under the filmstrip shows how much is moving where

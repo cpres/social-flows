@@ -73,16 +73,32 @@
     <section v-if="step === 1" class="panel pace">
       <div class="col">
         <h3>Music</h3>
-        <label class="field">
-          Song
-          <select v-model="pace.music">
-            <option value="">No music</option>
-            <option v-if="pace.music && !shelfHas(pace.music)" :value="pace.music">{{ pace.music }}</option>
-            <option v-for="t in shelf.tracks" :key="t.name" :value="t.name">
-              {{ t.name.replace(/\.[^.]+$/, '') }}{{ t.bpm ? ` · ${Math.round(t.bpm)} bpm` : '' }}
-            </option>
-          </select>
-        </label>
+        <div class="field">
+          <label for="weave-song">Song</label>
+          <div class="songrow">
+            <select id="weave-song" v-model="pace.music">
+              <option value="">No music</option>
+              <option v-if="pace.music && !shelfHas(pace.music)" :value="pace.music">{{ pace.music }}</option>
+              <option v-for="t in shelf.tracks" :key="t.name" :value="t.name">
+                {{ t.name.replace(/\.[^.]+$/, '') }}{{ t.bpm ? ` · ${Math.round(t.bpm)} bpm` : '' }}
+              </option>
+            </select>
+            <button class="btn" :class="{ active: listening }" :disabled="!songUrl" title="Hear the song before you pick it" @click="listen">
+              {{ listening ? '■ Stop' : '▶ Listen' }}
+            </button>
+          </div>
+          <div class="songbar" v-if="listening">
+            <input type="range" min="0" :max="songLength" step="0.1" :value="songAt" aria-label="Where in the song" @input="seekSong" />
+            <span class="mono">{{ fmtTime(songAt) }} / {{ fmtTime(songLength) }}</span>
+          </div>
+          <small v-if="listening">Drag to hear another part of it. Pick another song and that one plays.</small>
+          <small v-else-if="songError" class="warn">{{ songError }}</small>
+          <audio
+            ref="songEl" v-if="songUrl" :src="songUrl" preload="none"
+            @timeupdate="songAt = $event.target.currentTime" @loadedmetadata="songLength = $event.target.duration || 0"
+            @ended="listening = false" @error="cantPlay"
+          ></audio>
+        </div>
         <label class="field check" v-if="pace.music">
           <span><input type="checkbox" v-model="pace.beatSync" :disabled="!shelf.beatDetection" /> Cut on the beat</span>
           <small v-if="!shelf.beatDetection">Needs beat detection: start the studio with <code>./studio/run.sh --beat</code></small>
@@ -325,7 +341,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
@@ -420,6 +436,49 @@ watch(() => [pace.music, pace.beatSync], loadBeats)
 // Picking a song turns cutting on the beat on, when the studio can find beats.
 let ready = false
 watch(() => pace.music, (m, was) => { if (ready && m && !was && shelf.value.beatDetection) pace.beatSync = true })
+
+// Listening before picking: the song plays from where the reel would start
+// it, and picking another one while it plays switches to that one.
+const songEl = ref(null)
+const listening = ref(false)
+const songAt = ref(0)
+const songLength = ref(0)
+const songError = ref('')
+const songUrl = computed(() => (pace.music && shelfHas(pace.music) ? api.musicFile(pace.music) : null))
+
+function playSong() {
+  const a = songEl.value
+  if (!a) return
+  a.currentTime = songAt.value = Number(pace.musicStart) || 0
+  listening.value = true
+  // Switching songs cuts the last one's play short: that's not a failure.
+  a.play().catch((e) => { if (e.name !== 'AbortError') cantPlay() })
+}
+function stopListening() {
+  songEl.value?.pause()
+  listening.value = false
+}
+function listen() {
+  if (listening.value) stopListening()
+  else playSong()
+}
+function seekSong(e) {
+  if (songEl.value) songEl.value.currentTime = Number(e.target.value)
+}
+function cantPlay() {
+  listening.value = false
+  songError.value = "This browser couldn't play this song."
+}
+watch(songUrl, async (url) => {
+  songAt.value = 0
+  songLength.value = shelf.value.tracks.find((t) => t.name === pace.music)?.duration || 0
+  songError.value = ''
+  if (!listening.value) return
+  if (!url) return stopListening()
+  await nextTick()   // the player has the new song
+  playSong()
+})
+onBeforeUnmount(stopListening)
 
 // Set the pace so the reel comes out about this long.
 function aimFor(seconds) {
@@ -733,6 +792,7 @@ function setFocus({ x, y, zoom }) {
 function go(i) {
   if (i < 0 || i > 3 || (i > 0 && !videos.value.length)) return
   player.video.value?.pause()
+  stopListening()
   step.value = i
   if (i === 2) pick(Math.min(cur.value, included.value.length - 1))
 }
@@ -1056,6 +1116,12 @@ async function save() {
 .field small { font-size: 12px; }
 .field.check span { display: flex; gap: 6px; align-items: center; color: var(--ink); font-size: 14px; }
 .field input[type='range'] { padding: 0; accent-color: var(--forest); }
+.songrow { display: flex; gap: 8px; align-items: center; }
+.songrow select { flex: 1; min-width: 0; }
+.songrow .btn { align-self: stretch; font-size: 14px; }
+.songbar { display: flex; gap: 10px; align-items: center; }
+.songbar input { flex: 1; }
+.songbar .mono { color: var(--ink); white-space: nowrap; }
 .estimate {
   display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 10px;
   background: var(--sage-soft); font-size: 14px;
