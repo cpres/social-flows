@@ -74,6 +74,12 @@ python3 studio/server.py --open
   with *Use on every part* to match the rest. It lifts shadows and midtones
   rather than flat brightness, so shade opens up without blowing out the sky.
   The preview shows it live; parts with it on get a ☀ in the list.
+- **Title & end card** (*Settings*): a title (with an optional line under it,
+  like "October Edition") over the opening shots, and an end card with logos
+  and a few lines over the last ones. Both are a dark, see-through layer over
+  the footage with cream text, fading in. Put `oufp.png` and
+  `garden-steward.png` (transparent PNGs) in `brand/` at the top of the repo;
+  that folder isn't committed. The render shows them; Play reel doesn't.
 - **Duplicate** (reel header) makes a full copy of a reel (parts, trims,
   framing, transitions, music) so you can try a different cut without losing
   the one you have.
@@ -163,7 +169,10 @@ at once. It's a four-step wizard that makes a normal reel:
    marked), else a length in seconds; `[`/`]` makes it shorter or longer. For a
    photo, pick its hold (Medium, Small or Burst); it says why it got the one it
    has. **Leave it out** (`X`) takes the clip or photo out of the reel right
-   there, and *Put it back* undoes it.
+   there, and *Put it back* undoes it. The song is here too (♪, *Change* to
+   pick another or cut on the beat), and playing a part (`Space`) plays the song
+   under it from where that part lands in the reel; a photo plays the song for
+   as long as it holds. *Play with the music* off plays them silent.
 4. **Stitch**: the woven order as tiles. Every clip shows up in the first round
    and ends in the last; a clip with more parts than the others is spread across
    the rounds, and photos go between rounds, the last one closing the reel (a

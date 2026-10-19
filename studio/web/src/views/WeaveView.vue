@@ -90,11 +90,6 @@
           </div>
           <small v-if="listening">Drag to hear another part of it. Pick another song and that one plays.</small>
           <small v-else-if="songError" class="warn">{{ songError }}</small>
-          <audio
-            ref="songEl" v-if="songUrl" :src="songUrl" preload="none"
-            @timeupdate="songAt = $event.target.currentTime" @loadedmetadata="songLength = $event.target.duration || 0"
-            @ended="listening = false" @error="cantPlay"
-          ></audio>
         </div>
         <label class="field check" v-if="pace.music">
           <span><input type="checkbox" v-model="pace.beatSync" :disabled="!shelf.beatDetection" /> Cut on the beat</span>
@@ -234,6 +229,25 @@
             <span class="muted mono">{{ cur + 1 }} of {{ included.length }}</span>
           </h2>
 
+          <details class="musicbar" :open="musicOpen" @toggle="musicOpen = $event.target.open">
+            <summary>
+              <span class="songname">♪ {{ pace.music ? songTitle(shelf, pace.music) : 'No music yet' }}</span>
+              <span class="muted small" v-if="hereAt !== null">{{ momentName }} starts at {{ fmtTime(hereAt) }} in the reel</span>
+              <span class="muted small change">Change</span>
+            </summary>
+            <SongPicker id="moment-song" v-model="pace.music" v-model:shelf="shelf" />
+            <div class="chips">
+              <label class="check" v-if="pace.music">
+                <input type="checkbox" v-model="withMusic" :disabled="!songUrl" /> Play with the music
+              </label>
+              <label class="check" v-if="pace.music">
+                <input type="checkbox" v-model="pace.beatSync" :disabled="!shelf.beatDetection" /> Cut on the beat
+              </label>
+              <small class="muted" v-if="analyzing">Finding the beat…</small>
+              <small class="warn" v-else-if="musicError">{{ musicError }}</small>
+            </div>
+          </details>
+
           <template v-if="moment.kind === 'video'">
             <SplitBar
               :duration="moment.media.duration" :starts="moment.parts.map((p) => p.start)" :length="lens(moment)"
@@ -292,6 +306,9 @@
               </div>
               <small>{{ whyText(moment) }}</small>
             </div>
+            <div class="controls" v-if="songUrl && withMusic">
+              <button class="btn" :class="{ active: photoPlaying }" @click="playPhoto">▶ Play it with the music <kbd>Space</kbd></button>
+            </div>
             <p class="muted">
               This photo holds for {{ holdText(moment) }} between rounds. Drag the window on the left to frame it.
             </p>
@@ -308,13 +325,20 @@
             <button class="btn primary" v-if="cur >= included.length - 1" @click="go(3)">Stitch them together →</button>
           </div>
           <p class="muted keys">
-            <kbd>Space</kbd> play the part · <kbd>1</kbd>–<kbd>6</kbd> pick a part · <kbd>←</kbd>/<kbd>→</kbd> nudge it 0.1s (<kbd>Shift</kbd> 1s) ·
+            <kbd>Space</kbd> play the part{{ songUrl && withMusic ? ' with the music' : '' }} · <kbd>1</kbd>–<kbd>6</kbd> pick a part · <kbd>←</kbd>/<kbd>→</kbd> nudge it 0.1s (<kbd>Shift</kbd> 1s) ·
             <kbd>[</kbd>/<kbd>]</kbd> shorter/longer · <kbd>+</kbd>/<kbd>−</kbd> more or fewer parts ·
             <kbd>X</kbd> leave it out · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next clip
           </p>
         </div>
       </section>
     </template>
+
+    <!-- the song: heard on Pace, and under the parts on Moments -->
+    <audio
+      ref="songEl" v-if="songUrl" :src="songUrl" preload="auto"
+      @timeupdate="songAt = $event.target.currentTime" @loadedmetadata="songLength = $event.target.duration || 0"
+      @ended="listening = false" @error="cantPlay"
+    ></audio>
 
     <!-- 4. Stitch: the woven order, to drag around -->
     <section v-if="step === 3" class="panel">
@@ -374,6 +398,7 @@ import {
 } from '../weave'
 import ReelFrame from '../components/ReelFrame.vue'
 import SongPicker from '../components/SongPicker.vue'
+import { songTitle } from '../songs'
 import SplitBar from '../components/SplitBar.vue'
 
 const props = defineProps({ folder: { type: String, required: true } })
@@ -827,6 +852,58 @@ const moment = computed(() => included.value[Math.min(cur.value, included.value.
 const active = computed(() => (moment.value?.kind === 'video' ? moment.value.parts[sel.value] : null))
 const player = usePlayer(() => active.value && { start: active.value.start, length: partLen(active.value) })
 
+// The song under a part as you watch it: from where that part lands in the
+// reel, so you see and hear what the reel will do there.
+const withMusic = ref(true)
+const musicOpen = ref(false)   // the song picker on Moments; open to start with when there's no song
+// Where the reel starts in the song: on the first beat at or after the start
+// when cutting on the beat (the engine's rule), else at the start.
+const songT0 = computed(() => {
+  const s = Number(pace.musicStart) || 0
+  return synced.value ? beatData.value.beats.find((b) => b >= s - 0.02) ?? s : s
+})
+// Where each entry starts in the reel: key -> seconds.
+const startsAt = computed(() => {
+  const out = new Map()
+  let t = 0
+  for (const e of seq.value) { out.set(e.key, t); t += lengthOf(e) }
+  return out
+})
+const momentKey = computed(() => (moment.value?.kind === 'video' ? partKey(moment.value.mediaId, sel.value) : String(moment.value?.mediaId)))
+const hereAt = computed(() => startsAt.value.get(momentKey.value) ?? null)
+const momentName = computed(() => (moment.value?.kind === 'video' ? letter(sel.value) : 'This photo'))
+
+function songUnder(key) {
+  const a = songEl.value
+  if (!a || !withMusic.value || !startsAt.value.has(key)) return false
+  a.currentTime = songT0.value + startsAt.value.get(key)
+  a.play().catch(() => {})
+  return true
+}
+watch(() => player.playingPart.value, (on) => {
+  if (on) songUnder(momentKey.value)
+  else if (!photoPlaying.value) songEl.value?.pause()
+})
+
+// A photo has nothing to play, so it plays the song for as long as it holds.
+const photoPlaying = ref(false)
+let photoTimer
+function playPhoto() {
+  clearTimeout(photoTimer)
+  if (photoPlaying.value) return stopPhoto()
+  const t = timing.value.get(momentKey.value)
+  if (!t || !songUnder(momentKey.value)) return
+  photoPlaying.value = true
+  photoTimer = setTimeout(stopPhoto, t.seconds * 1000)
+}
+function stopPhoto() {
+  clearTimeout(photoTimer)
+  if (photoPlaying.value) songEl.value?.pause()
+  photoPlaying.value = false
+}
+watch(momentKey, stopPhoto)
+onBeforeUnmount(stopPhoto)
+
 function pick(i) {
   if (i < 0 || i >= included.value.length) return
   cur.value = i
@@ -891,7 +968,10 @@ function go(i) {
   stopListening()
   leftOut.value = null
   step.value = i
-  if (i === 2) pick(Math.min(cur.value, included.value.length - 1))
+  if (i === 2) {
+    musicOpen.value = !pace.music
+    pick(Math.min(cur.value, included.value.length - 1))
+  }
 }
 
 function onKey(e) {
@@ -900,6 +980,7 @@ function onKey(e) {
   const k = e.key
   const video = moment.value.kind === 'video'
   if (k === ' ' && video) player.playPart()
+  else if (k === ' ' && songUrl.value && withMusic.value) playPhoto()
   else if (k === 'ArrowDown') pick(cur.value + 1)
   else if (k === 'ArrowUp') pick(cur.value - 1)
   else if (k === 'ArrowLeft' && video) nudge(e.shiftKey ? -1 : -0.1)
@@ -1250,6 +1331,15 @@ async function save() {
 .dot.on { outline-color: var(--forest); }
 .dot.on img { opacity: 1; }
 .moments { margin-top: 14px; }
+.musicbar { margin: 10px 0; padding: 8px 12px; border-radius: 10px; background: var(--sage-soft); font-size: 14px; }
+.musicbar summary { display: flex; gap: 10px; align-items: baseline; cursor: pointer; list-style: none; }
+.musicbar summary::-webkit-details-marker { display: none; }
+.musicbar .songname { font-weight: 600; color: var(--forest); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.musicbar .change { margin-left: auto; text-decoration: underline; }
+.musicbar[open] .change { visibility: hidden; }
+.musicbar[open] > :not(summary) { margin-top: 8px; }
+.musicbar .check { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+.musicbar input[type='checkbox'] { accent-color: var(--forest); }
 .mtitle { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 17px; word-break: break-all; }
 .mtitle .num {
   display: grid; place-items: center; min-width: 26px; height: 26px; border-radius: 50%;

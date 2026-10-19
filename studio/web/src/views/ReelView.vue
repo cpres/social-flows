@@ -111,6 +111,42 @@
           </label>
         </div>
       </div>
+      <div class="music cards">
+        <h3>Title &amp; end card</h3>
+        <p class="muted small">Shown over your footage, dimmed, with cream text. Logos come from <code>brand/</code> in the repo (<code>oufp.png</code>, <code>garden-steward.png</code>).</p>
+        <div class="musicrow">
+          <label class="field">
+            Title
+            <input v-model="settings.titleText" placeholder="3rd Sundays" />
+          </label>
+          <label class="field">
+            Under the title
+            <input v-model="settings.titleSub" :placeholder="`${MONTH} Edition`" />
+          </label>
+          <label class="field">
+            Title logo
+            <select v-model="settings.titleLogo">
+              <option v-for="l in LOGO_CHOICES" :key="l.v" :value="l.v">{{ l.label }}</option>
+            </select>
+          </label>
+        </div>
+        <div class="musicrow">
+          <label class="field check">
+            <span><input type="checkbox" v-model="settings.endCard" /> End card</span>
+            <small>Fades in over the last few seconds, starting on a cut.</small>
+          </label>
+          <label class="field" v-if="settings.endCard">
+            End card logos
+            <select v-model="settings.endLogo">
+              <option v-for="l in LOGO_CHOICES" :key="l.v" :value="l.v">{{ l.label }}</option>
+            </select>
+          </label>
+          <label class="field endlines" v-if="settings.endCard">
+            Lines (the first is big)
+            <textarea rows="3" v-model="settings.endLines" placeholder="Oakland Urban Farming Project&#10;3rd Sundays · Next: Sun Nov 16"></textarea>
+          </label>
+        </div>
+      </div>
       <template v-if="isStack">
         <label class="field">
           Split, top / underneath
@@ -470,6 +506,9 @@ const loading = ref(true)
 const error = ref('')
 const saveState = ref('')
 const showSettings = ref(false)
+const LOGO_CHOICES = [{ v: '', label: 'None' }, { v: 'oufp', label: 'OUFP' },
+  { v: 'garden-steward', label: 'Garden Steward' }, { v: 'both', label: 'Both' }]
+const MONTH = new Date().toLocaleString('en-US', { month: 'long' })
 const exporting = ref(false)
 const exportResult = ref(null)
 const listEl = ref(null)
@@ -1298,6 +1337,12 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .preload { display: none; }
 .music { grid-column: 1 / -1; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
 .music h3 { margin: 0 0 8px; }
+.cards p { margin: 0 0 8px; }
+.endlines { flex: 1; min-width: 300px; }
+.endlines textarea {
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; resize: vertical;
+  background: var(--paper); font: inherit; font-size: 15px; color: var(--ink);
+}
 .musicrow { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; }
 .musicrow .field { min-width: 160px; }
 .musicrow .field select { min-width: 260px; }
