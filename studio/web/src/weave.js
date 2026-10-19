@@ -8,7 +8,7 @@
 
 import { clamp, defaultStart } from './time'
 
-export const SECONDS_PER_PART = 30   // a long clip gets about one part per 30s…
+export const SECONDS_PER_PART = 15   // a long clip gets about one part per 15s…
 export const MIN_PARTS = 2           // …at least two…
 export const MAX_PARTS = 6           // …and no more than six
 
@@ -23,10 +23,10 @@ export function usable(duration) {
   return [lo, Math.max(lo, duration - 0.5)]
 }
 
-// How many parts a clip gets: one if it isn't longer than splitOver, else
-// about one per 30s of footage, as many as fit without overlapping.
+// How many parts a clip gets: one if it's shorter than splitOver, else
+// about one per 15s of footage, as many as fit without overlapping.
 export function autoParts(duration, splitOver, len) {
-  if (!(duration > splitOver)) return 1
+  if (!(duration >= splitOver)) return 1
   const [lo, hi] = usable(duration)
   const fits = Math.max(1, Math.floor((hi - lo) / len))
   return Math.min(clamp(Math.round(duration / SECONDS_PER_PART), MIN_PARTS, MAX_PARTS), fits)

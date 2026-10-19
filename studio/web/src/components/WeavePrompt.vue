@@ -2,7 +2,7 @@
   <section class="weaveprompt" role="dialog" aria-label="Weave a reel">
     <span class="ico" aria-hidden="true">⧉</span>
     <div class="text">
-      <b>You brought in {{ videos }} video{{ videos === 1 ? '' : 's' }}<template v-if="long"> ({{ long }} over a minute)</template><template
+      <b>You brought in {{ videos }} video{{ videos === 1 ? '' : 's' }}<template v-if="long"> ({{ long }} of 15s or more)</template><template
         v-if="photos"> and {{ photos }} photo{{ photos === 1 ? '' : 's' }}</template>.</b>
       <template v-if="draft">You have a weave draft for this shoot; they'll be added to it.</template>
       <template v-else>

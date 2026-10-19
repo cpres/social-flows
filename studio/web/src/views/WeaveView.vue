@@ -160,7 +160,7 @@
       <div class="col">
         <h3>Splitting</h3>
         <label class="field">
-          Split clips longer than
+          Split clips this long or longer
           <select v-model.number="pace.splitOver">
             <option v-for="o in SPLIT_CHOICES" :key="o.v" :value="o.v">{{ o.label }}</option>
           </select>
@@ -437,7 +437,7 @@ const STEPS = ['Order', 'Pace', 'Moments', 'Stitch']
 const BEAT_CHOICES = [1, 2, 4, 8]
 const TARGETS = [15, 30, 45, 60]
 const SPLIT_CHOICES = [
-  { v: 30, label: '0:30' }, { v: 45, label: '0:45' }, { v: 60, label: '1:00' }, { v: 90, label: '1:30' },
+  { v: 15, label: '0:15' }, { v: 20, label: '0:20' }, { v: 30, label: '0:30' }, { v: 45, label: '0:45' }, { v: 60, label: '1:00' }, { v: 90, label: '1:30' },
   { v: 120, label: '2:00' }, { v: 1e9, label: 'Never split' },
 ]
 const TRANSITIONS = [
@@ -459,7 +459,7 @@ const step = ref(0)
 const clips = ref([])
 const existingName = ref('')
 const newName = ref(`${props.folder} weave`)
-const PACE = { len: 2, splitOver: 60, between: 'dissolve', music: '', musicStart: 0, beatSync: false, beatsPerCut: 4,
+const PACE = { len: 2, splitOver: 15, between: 'dissolve', music: '', musicStart: 0, beatSync: false, beatsPerCut: 4,
                hold: 'smart' }   // hold: how photos hold, smart | even
 const pace = reactive({ ...PACE })
 const order = ref(null)          // the keys in the order dragged in Stitch; null = woven

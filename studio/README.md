@@ -50,7 +50,7 @@ python3 studio/server.py --open
   renamed copies like `IMG_1234 2.MOV` count), or that's a repeat of another
   file in Downloads, isn't copied again: importing just deletes it from
   Downloads. `DOWNLOADS_DIR` points it somewhere else. If what came in is two
-  or more videos (or one over a minute), the shoot page offers to **weave** them
+  or more videos (or one of 15s or more), the shoot page offers to **weave** them
   (below).
 - **Open a shoot** to go through its clips in the order they were shot. Under the
   video, a filmstrip shows what happens where; drag the handles to pick a part,
@@ -160,9 +160,9 @@ at once. It's a four-step wizard that makes a normal reel:
    song: *Listen* plays it (drag along it to hear more, or pick another song and
    that one plays). With a song and beat detection, every part is a whole
    number of beats (1, 2, 4 or 8). *Photo hold* is *Smart* (below) or *Even*,
-   every photo a bit shorter than a part. Clips longer than *Split clips longer
-   than* (1:00) get about one part per 30s of footage (2–6); shorter ones get
-   one. *Between rounds* picks the transition that marks time moving on.
+   every photo a bit shorter than a part. Clips at least *Split clips this long
+   or longer* (0:15) get about one part per 15s of footage (2–6), so a 30s clip
+   gives its first and second 15 seconds; shorter ones get one. *Between rounds* picks the transition that marks time moving on.
 3. **Moments**: one clip at a time. Its parts are windows on the filmstrip
    (a, b, c…) that slide but never cross, so a always comes before b; `+`/`−`
    changes how many. The lane under the filmstrip shows how much is moving where
