@@ -15,7 +15,9 @@ brew install ffmpeg node python@3.12   # once
 
 Beat detection (for *Cut on the beat*) is optional and fairly large:
 `./studio/run.sh --beat` installs it once. Plain `./studio/run.sh` skips it,
-and everything else works the same.
+and everything else works the same. Transcribing voice takes (for captions)
+is optional in the same way: `./studio/run.sh --voice` installs it once, and
+the speech model (about 1.6 GB) downloads the first time you transcribe.
 
 Needs Python 3.9 or newer; `run.sh` looks for `python3.13` … `python3.9`
 before plain `python3`, so an old default `python3` (e.g. 3.7) is fine as long
@@ -146,6 +148,46 @@ the parts. Turned off, the reel runs as long as the top clip at normal speed;
 the parts are cut where it ends, or the last one holds. The line under the
 timeline shows the lengths and the speed. The top clip is silent; the parts
 keep their sound.
+
+**Voice & captions.** *🎙 Voice* (in a reel's header) lays a reading over the
+footage, a poem or an idea, with its words on screen as they're said.
+
+- **Takes** are recordings in a shoot folder: voice memos (M4A, MP3, WAV…) or
+  the sound of a video. AirDropped memos waiting in Downloads are listed under
+  the folder picker; *Move to this folder* brings one in.
+- **Transcribe** a take once (it runs in the background; transcripts are kept
+  in `~/Footage/.studio/voice/`) and its words come back as lines, broken at
+  your pauses and punctuation, with a gap between stanzas. Click the first line
+  you want and shift-click the last, then *Add lines … as a piece*: the piece is
+  trimmed to exactly those words. *Use the whole take* works without
+  transcribing. Add more pieces, from the same take or others, to build the
+  reading from your best lines.
+- **Pieces** play one after another, each after its *breath* (the pause
+  before it; the first one's is the lead-in). Reorder them with ↑ ↓; *Lines*
+  opens a piece's trim (*From*/*To* in the take) and its caption lines: edit the
+  words, `Enter` splits a line at the cursor, *join ↓* joins two, ¶ starts a new
+  stanza, ✕ leaves a line uncaptioned. *Paste the written text* times your own
+  text (a line per caption line, a blank line between stanzas) to what's said,
+  keeping your exact words and breaks.
+- **Sound:** the song sits at *Song under the voice* (15%) while it speaks and
+  rises to *Song in the breaths* (30%) around it; *Clean up the voice* cuts low
+  rumble and hiss, and each piece is evened out to the same loudness. Adding the
+  first piece turns glasses audio off. *Fit to the voice* (on) holds the last
+  part until the reading ends, then the end card plays; the strip shows the hold
+  as a striped block.
+- **Captions** come in four styles, each with a font and background you can
+  change: *Stanza* (the whole stanza shows, the line being said bright, the rest
+  dim), *Unfold* (lines fade in as they're said and stay until the stanza ends),
+  *Breath* (one line at a time, centred, drifting up) and *Page* (set left on a
+  cream panel under a small title). Backgrounds: a see-through layer over the
+  whole frame, a band, a paper panel, blur behind the words, or just a shadow.
+  The fonts are in `brand/fonts/`. The preview beside them shows the captions
+  over the part playing at that point (*← line* / *line →* step through);
+  *Show as rendered* draws that frame exactly as the render will. Captions stay
+  clear of Instagram's caption and buttons.
+- Under the strip, the voice lane shows the pieces and the caption lane the
+  lines, on the reel's clock. *Play reel* plays the voice with the song lowered
+  under it and shows the captions over the frame.
 
 **Weave.** Long clips are dull watched end to end. *Weave a reel* (on a shoot's
 page, or offered right after an import) cuts each clip into a few parts and

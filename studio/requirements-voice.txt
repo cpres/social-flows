@@ -1,0 +1,4 @@
+# Transcribing voice takes, for picking lines and making captions: Whisper
+# (large-v3-turbo) through faster-whisper, on the CPU. run.sh --voice installs
+# it; the model itself (~1.6 GB) downloads the first time a take is transcribed.
+faster-whisper>=1.1

@@ -41,6 +41,7 @@
         <Guides v-if="guides" />
       </div>
       <Guides v-else-if="guides" />
+      <slot name="overlay" />
     </div>
     <slot />
   </div>

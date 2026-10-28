@@ -74,6 +74,24 @@ export const api = {
   importFiles: (body) => send('POST', '/api/import', body),
   importMusic: (files) => send('POST', '/api/import/music', { files }),
 
+  // A voice track's takes: recordings in the shoot folders, and what's said in them.
+  voiceFolders: () => fetch('/api/voice/folders').then(json),
+  voiceTakes: (folder) => fetch(`/api/voice/takes/${enc(folder)}`).then(json),
+  voiceAudio: (folder, file) => `/api/voice/audio/${enc(folder)}/${enc(file)}`,
+  voicePeaks: (folder, file) => fetch(`/api/voice/peaks/${enc(folder)}/${enc(file)}`).then(json),
+  transcribe: (folder, file) => send('POST', `/api/voice/transcribe/${enc(folder)}/${enc(file)}`),
+  transcript: (folder, file) => fetch(`/api/voice/transcript/${enc(folder)}/${enc(file)}`).then(json),
+  // Time pasted text to a stretch of a take: { folder, file, start, end, text } -> { lines }.
+  alignText: (body) => send('POST', '/api/voice/align', body),
+  voiceDownloads: () => fetch('/api/voice/downloads').then(json),
+  importVoice: (file, folder) => send('POST', '/api/voice/import', { file, folder }),
+  // The captions at reel time t over the frame of `item` at `src`, as the render draws them.
+  captionPreview: (id, item, src, t) => fetch(`/api/reels/${id}/captions/preview?item=${item}&src=${src.toFixed(2)}&t=${t.toFixed(2)}`)
+    .then(async (res) => {
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText)
+      return URL.createObjectURL(await res.blob())
+    }),
+
   media: (folder, file) => `/api/media/${enc(folder)}/${enc(file)}`,
   thumb: (folder, file, t = 0, w = 480) =>
     `/api/thumb/${enc(folder)}/${enc(file)}?t=${Math.max(0, t).toFixed(1)}&w=${w}`,

@@ -3,13 +3,17 @@
 #   ./studio/run.sh               # http://localhost:3009
 #   ./studio/run.sh --port 9000
 #   ./studio/run.sh --beat        # also install beat detection (for cutting on the beat)
+#   ./studio/run.sh --voice       # also install transcribing (voice takes -> captions)
 set -euo pipefail
 cd "$(dirname "$0")"
 
 BEAT=0
+VOICE=0
 ARGS=()
 for arg in "$@"; do
-  if [ "$arg" = "--beat" ]; then BEAT=1; else ARGS+=("$arg"); fi
+  if [ "$arg" = "--beat" ]; then BEAT=1
+  elif [ "$arg" = "--voice" ]; then VOICE=1
+  else ARGS+=("$arg"); fi
 done
 
 if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
@@ -56,6 +60,17 @@ if [ "$BEAT" = 1 ] && { [ ! -f .venv/.music-installed ] || [ requirements-music.
   else
     echo "  Beat detection isn't available for this Python on this Mac (details: studio/.venv/beat-install.log)." >&2
     echo "  The studio works without it; cuts just won't snap to beats." >&2
+  fi
+fi
+# Transcribing (faster-whisper) is optional too, and only installed with --voice.
+if [ "$VOICE" = 1 ] && { [ ! -f .venv/.voice-installed ] || [ requirements-voice.txt -nt .venv/.voice-installed ]; }; then
+  echo "Installing transcribing ..."
+  if .venv/bin/python -m pip install --only-binary=:all: -r requirements-voice.txt > .venv/voice-install.log 2>&1; then
+    touch .venv/.voice-installed
+    echo "  The speech model (about 1.6 GB) downloads the first time you transcribe a take."
+  else
+    echo "  Transcribing isn't available for this Python on this Mac (details: studio/.venv/voice-install.log)." >&2
+    echo "  Voice tracks still work; pick their stretch by ear, and type or paste the captions." >&2
   fi
 fi
 # Finding people and animals in photos (Smart hold) uses macOS's own Vision

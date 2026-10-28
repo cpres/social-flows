@@ -26,6 +26,9 @@
         class="btn" v-if="settings.weave?.folder" @click="reweave"
         :title="draftAt ? 'Pick up the weave edit you started (not saved yet)' : 'Edit this reel in the Weave wizard; saving updates this reel'"
       >⧉ Edit weave{{ draftAt ? ' (unsaved)' : '' }}</button>
+      <button class="btn" :class="{ active: showVoice }" @click="showVoice = !showVoice" title="A reading over the footage, and its captions">
+        🎙 Voice{{ voiceTl.pieces.length ? ` · ${voiceTl.pieces.length}` : '' }}
+      </button>
       <button class="btn" :class="{ active: showSettings }" @click="showSettings = !showSettings">Settings</button>
       <button class="btn" @click="doExport" :disabled="exporting || !kept.length">
         {{ exporting ? 'Checking…' : 'Preview cut list' }}
@@ -243,6 +246,11 @@
       </div>
     </section>
 
+    <VoicePanel
+      v-if="showVoice" :reel-id="id" :settings="settings" :reel-length="reelLength" :part-at="partAt"
+      :flush="() => saver.flushAll()"
+    />
+
     <!-- the reel at a glance: one block per kept part, sized by its length -->
     <section class="transport" v-if="kept.length">
       <button class="btn primary playreel" @click="toggleReel" :title="reelOn ? 'Pause (Space) · Shift+Space: from the start' : 'Play the reel (Space) · Shift+Space: from the start'">
@@ -274,7 +282,22 @@
           :style="{ left: `${x}%` }"
         ></div>
         <div v-if="spare > 0" class="seg spare" :style="{ flexGrow: spare }" title="The last part holds while the top clip finishes"></div>
+        <div v-if="voiceHold > 0 && !spare" class="seg spare" :style="{ flexGrow: voiceHold }" :title="`The last part holds ${voiceHold.toFixed(1)}s longer, until the voice ends`"></div>
         <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
+      </div>
+      <!-- the voice track and its captions, on the same clock -->
+      <div v-if="voiceTl.pieces.length" class="lane vlane" @click="seekLane" title="The voice: click to play from there">
+        <div
+          v-for="p in voiceTl.pieces" :key="p.id" class="vpiece" :style="laneStyle(p.at, p.length)"
+          :title="`${p.file} · ${fmtTime(p.at)} → ${fmtTime(p.at + p.length)}`"
+        >🎙 {{ p.file }}</div>
+        <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
+      </div>
+      <div v-if="voiceTl.lines.length && settings.captions" class="lane clane" @click="seekLane">
+        <div
+          v-for="(l, i) in voiceTl.lines" :key="i" class="cline" :style="laneStyle(l.start, l.end - l.start)" :title="l.text"
+          :class="{ on: reelTime !== null && reelTime >= l.start && reelTime < l.end }"
+        >{{ l.text }}</div>
       </div>
       </div>
     </section>
@@ -383,12 +406,14 @@
               This browser can't play this file's codec (HEVC often won't play in Chrome — try Safari).
               Thumbnails and trimming still work.
             </p>
+            <template #overlay><CaptionLayer v-if="showCaptions" v-bind="captionProps" /></template>
           </StackFrame>
           <ReelFrame v-else :key="current.mediaId" v-bind="frameProps" v-on="frameOn" :guides="guides">
             <p v-if="player.failed.value" class="unplayable">
               This browser can't play this file's codec (HEVC often won't play in Chrome — try Safari).
               Thumbnails and trimming still work.
             </p>
+            <template #overlay><CaptionLayer v-if="showCaptions" v-bind="captionProps" /></template>
           </ReelFrame>
           <label class="guides-toggle muted"><input type="checkbox" v-model="guides" /> Show Instagram overlays <kbd>G</kbd></label>
           <audio ref="audioEl" v-if="musicUrl" :src="musicUrl" preload="auto" @ended="onSongEnded"></audio>
@@ -507,6 +532,10 @@ import { usePlayer } from '../player'
 import { fitRange, fmtBeats, fmtTime, folderTitle, parseTime, reelColor, snapBeats } from '../time'
 import { holdLengths, photoStyles, timeline } from '../hold'
 import { songTitle } from '../songs'
+import { songLevel, VOICE_TAIL, voiceTimeline } from '../captions'
+import { useVoicePlayer } from '../voicePlayer'
+import CaptionLayer from '../components/CaptionLayer.vue'
+import VoicePanel from '../components/VoicePanel.vue'
 import ClipCard from '../components/ClipCard.vue'
 import SendToPhone from '../components/SendToPhone.vue'
 import SongPicker from '../components/SongPicker.vue'
@@ -530,6 +559,7 @@ const loading = ref(true)
 const error = ref('')
 const saveState = ref('')
 const showSettings = ref(false)
+const showVoice = ref(false)
 const LOGO_CHOICES = [{ v: '', label: 'None' }, { v: 'oufp', label: 'OUFP' },
   { v: 'garden-steward', label: 'Garden Steward' }, { v: 'both', label: 'Both' }]
 const MONTH = new Date().toLocaleString('en-US', { month: 'long' })
@@ -594,7 +624,7 @@ const topPart = computed(() => (settings.format === 'stack'
 const kept = computed(() => items.value.filter((p) => p.keep && !p.media.missing && p !== topPart.value))
 // Fit off, a Stack reel runs as long as its top clip.
 const reelLength = computed(() => (topPart.value && !settings.fitTop
-  ? topPart.value.length : bounds.value[bounds.value.length - 1] || 0))
+  ? topPart.value.length : (bounds.value[bounds.value.length - 1] || 0) + voiceHold.value))
 const player = usePlayer(() => current.value && { start: current.value.start, length: len(current.value) })
 const reelName = (rid) => reels.value.find((r) => r.id === rid)?.name ?? 'reel'
 
@@ -967,7 +997,7 @@ const songT0 = computed(() => (synced.value && grid.value ? grid.value.songT0 : 
 function startSong(at) {
   const a = audioEl.value
   if (!a) return
-  a.volume = Math.min(1, Math.max(0, Number(settings.musicVolume ?? 0.8)))
+  a.volume = Math.min(1, Math.max(0, songVolume(at)))
   a.currentTime = songT0.value + at
   a.play().catch(() => {})
   cancelAnimationFrame(songRaf)
@@ -975,6 +1005,7 @@ function startSong(at) {
     if (!reelOn.value) return
     const t = a.currentTime - songT0.value
     songClock.value = t
+    if (voiceTl.value.pieces.length) a.volume = Math.min(1, Math.max(0, songVolume(t)))
     const end = bounds.value[reelIdx.value + 1]
     if (end !== undefined && t >= end) startPart(reelIdx.value + 1)
     songRaf = requestAnimationFrame(tick)
@@ -1000,6 +1031,52 @@ function stopListening() {
   listening.value = false
 }
 onBeforeUnmount(() => { cancelAnimationFrame(songRaf); audioEl.value?.pause() })
+
+// ---------------------------------------------------------------- voice & captions
+
+// The reading over the footage: its pieces and caption lines on the reel's
+// clock. With Fit to voice, the last part holds until the voice is done.
+const voiceTl = computed(() => voiceTimeline(settings.voice))
+const voiceHold = computed(() => {
+  const end = voiceTl.value.end
+  if (!end || settings.voiceFit === false || (topPart.value && !settings.fitTop)) return 0
+  return Math.max(0, end + VOICE_TAIL - (bounds.value[bounds.value.length - 1] || 0))
+})
+const voicePlayer = useVoicePlayer()
+watch(() => voiceTl.value.pieces.map((p) => `${p.folder}/${p.file}`).join('|'), (keys) => {
+  if (keys) voicePlayer.prepare(voiceTl.value.pieces)
+})
+const showCaptions = computed(() => reelOn.value && settings.captions !== false && voiceTl.value.lines.length > 0)
+const captionProps = computed(() => ({
+  lines: voiceTl.value.lines, variant: settings.captionStyle, font: settings.captionFont, bg: settings.captionBg,
+  size: Number(settings.captionSize) || 1, title: settings.captionTitle || '', t: reelTime.value ?? 0,
+}))
+const laneStyle = (at, length) => ({
+  left: `${(at / (reelLength.value || 1)) * 100}%`, width: `${(length / (reelLength.value || 1)) * 100}%`,
+})
+// The part on screen at reel time t, and where in its clip: for the captions preview.
+function partAt(t) {
+  const list = kept.value
+  if (!list.length) return null
+  let k = list.length - 1
+  for (let i = 0; i < list.length; i++) if (t < bounds.value[i + 1]) { k = i; break }
+  const p = list[k]
+  const within = Math.max(0, t - bounds.value[k])
+  const src = p.media.kind === 'video'
+    ? Math.floor(Math.max(0, Math.min(p.start + within, (p.media.duration || Infinity) - 0.2)) * 2) / 2 : 0
+  return { item: p.id, src, thumb: api.thumb(p.media.folder, p.media.file, src, 480) }
+}
+// Clicking the voice or caption lane: play (or select) the part under that point.
+function seekLane(e) {
+  const r = e.currentTarget.getBoundingClientRect()
+  const t = ((e.clientX - r.left) / r.width) * reelLength.value
+  const k = kept.value.findIndex((p, i) => t < bounds.value[i + 1])
+  jumpTo(kept.value[k < 0 ? kept.value.length - 1 : k])
+}
+// The song while a voice plays: low under it, a little up in the breaths.
+const songVolume = (t) => (voiceTl.value.pieces.length
+  ? songLevel(voiceTl.value.pieces, Number(settings.voiceSongUnder ?? 0.15), Number(settings.voiceSongBetween ?? 0.3), t)
+  : Number(settings.musicVolume ?? 0.8))
 
 // ---------------------------------------------------------------- transitions
 
@@ -1167,10 +1244,25 @@ const reelIdx = ref(0)
 const photoT = ref(0)
 const effect = ref(null)   // the transition to preview into the part now playing
 let photoTimer, photoTick, restart = false
+// After the last part, the reel holds on it while the voice finishes.
+const holdT = ref(null)
+let holdTimer, holdTick
+function startHold() {
+  const t0 = performance.now()
+  holdT.value = 0
+  holdTick = setInterval(() => { holdT.value = (performance.now() - t0) / 1000 }, 40)
+  holdTimer = setTimeout(() => { stopReel(); restart = true }, voiceHold.value * 1000)
+}
+function clearHold() {
+  clearTimeout(holdTimer)
+  clearInterval(holdTick)
+  holdT.value = null
+}
 
 const offsetOf = (k) => bounds.value[k] || 0
 const reelTime = computed(() => {
   if (reelOn.value && clocked.value) return songClock.value
+  if (reelOn.value && holdT.value !== null) return (bounds.value[kept.value.length] || 0) + holdT.value
   const k = kept.value.indexOf(current.value)
   if (k < 0) return null
   const p = current.value
@@ -1196,7 +1288,9 @@ function clearPhoto() {
 function startPart(k) {
   clearPhoto()
   const list = kept.value
-  if (k >= list.length) {       // end of the reel
+  if (k >= list.length) {       // end of the reel (or of its parts, while the voice finishes)
+    if (holdT.value !== null) return
+    if (voiceHold.value > 0.05) return startHold()
     stopReel()
     restart = true
     return
@@ -1265,6 +1359,8 @@ function playReel() {
   restart = false
   reelOn.value = true
   stopListening()
+  clearHold()
+  if (voiceTl.value.pieces.length) voicePlayer.play(voiceTl.value.pieces, offsetOf(k))
   if (clocked.value) startSong(offsetOf(k))
   startPart(k)
 }
@@ -1273,6 +1369,8 @@ function stopReel() {
   if (!reelOn.value) return
   reelOn.value = false
   clearPhoto()
+  clearHold()
+  voicePlayer.stop()
   player.video.value?.pause()
   audioEl.value?.pause()
   cancelAnimationFrame(songRaf)
@@ -1290,6 +1388,8 @@ function playFromTop() {
 function jumpTo(p) {
   if (reelOn.value) {
     const k = kept.value.indexOf(p)
+    clearHold()
+    if (voiceTl.value.pieces.length) voicePlayer.play(voiceTl.value.pieces, offsetOf(k))
     if (clocked.value) startSong(offsetOf(k))
     startPart(k)
   } else select(items.value.indexOf(p))
@@ -1299,7 +1399,7 @@ function playThisPart() {
   stopReel()
   player.playPart()
 }
-onBeforeUnmount(clearPhoto)
+onBeforeUnmount(() => { clearPhoto(); clearHold(); voicePlayer.stop() })
 
 // ---------------------------------------------------------------- render
 
@@ -1307,14 +1407,15 @@ const rendering = computed(() => job.value?.status === 'running')
 const renderPct = computed(() => {
   const j = job.value
   if (!j) return 0
-  if (j.stage === 'joining') return 92
+  if (j.stage === 'joining') return 90
+  if (j.stage === 'captions') return 94
   if (j.stage === 'mixing') return 97
   if (j.stage === 'done') return 100
   return j.total ? Math.round((j.done / j.total) * 90) : 0
 })
 const stageText = computed(() => ({
   starting: 'Starting…', cutting: `Cutting ${job.value.done} of ${job.value.total}`,
-  joining: 'Joining cuts and transitions…', mixing: 'Mixing sound…',
+  joining: 'Joining cuts and transitions…', captions: 'Laying the captions over…', mixing: 'Mixing sound…',
 }[job.value.stage] || job.value.stage))
 const elapsed = computed(() => Math.max(0, Math.round(clock.value - job.value.startedAt)))
 
@@ -1441,6 +1542,18 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
   flex: none; font-size: 12px; color: var(--forest); background: var(--sage-soft);
   border-radius: 999px; padding: 2px 10px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.lane { position: relative; flex: none; height: 20px; cursor: pointer; border-radius: 4px; background: rgb(128 128 128 / 8%); }
+.vpiece {
+  position: absolute; top: 0; bottom: 0; border: 1.5px solid var(--warn); border-radius: 4px; font-size: 10px; font-weight: 600;
+  padding: 0 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink); line-height: 17px;
+  background: rgb(181 100 45 / 10%);
+}
+.clane { height: 18px; }
+.cline {
+  position: absolute; top: 1px; bottom: 1px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper);
+  font-size: 10px; padding: 0 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 14px; color: var(--muted);
+}
+.cline.on { border-color: var(--warn); color: var(--ink); }
 .tick { position: absolute; bottom: -6px; width: 1px; height: 4px; background: var(--muted); pointer-events: none; }
 .tick.bar { height: 7px; bottom: -9px; background: var(--forest); }
 .row { flex-wrap: wrap; }

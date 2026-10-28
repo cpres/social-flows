@@ -12,6 +12,7 @@
         <div class="g-caption">caption</div>
         <div class="g-buttons">buttons</div>
       </div>
+      <slot name="overlay" />
     </div>
     <slot />
   </div>

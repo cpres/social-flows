@@ -54,6 +54,7 @@ import looks  # noqa: E402
 from db import DEFAULT_SETTINGS, Library, default_start, now, settings_of  # noqa: E402
 from music import AUDIO_EXTS, Shelf, beat_detection_available  # noqa: E402
 from share import Shares  # noqa: E402
+from voice import MODEL as VOICE_MODEL, Voice, align, lines_from_words, transcription_available  # noqa: E402
 
 ROOT = Path(os.environ.get("FOOTAGE_DIR", "~/Footage")).expanduser().resolve()
 RENDERS = Path(os.environ.get("RENDER_DIR", "~/Movies/Footage Studio")).expanduser()
@@ -65,6 +66,7 @@ TRANSITIONS = ("", "cut", "flash", "whip", "zoom", "dissolve", "dip")   # per-fo
 
 lib = Library(ROOT)
 shelf = Shelf(os.environ.get("MUSIC_DIR", "~/Music/Reels"), lib.home / "music")
+voice = Voice(CACHE / "voice", lib.home / "voice")
 shares = Shares(port=int(os.environ.get("SHARE_PORT", 3010)),
                 ttl=int(os.environ.get("SHARE_TTL", 3600)))
 ITEM_COLUMNS = ("media_id", "position", "start", "length", "keep", "focus_x", "focus_y",
@@ -665,6 +667,135 @@ def music_beats(name: str):
                                  "with ./studio/run.sh --beat")
 
 
+# ---------------------------------------------------------------- voice
+# Takes of a reading in the shoot folders: their sound, what's said in them
+# (transcribed once, in the background), and lines for the captions.
+
+def take_path(folder, file):
+    path = resolve(folder, file)
+    if path.suffix.lower() not in AUDIO_EXTS and Library.kind_of(path) != "video":
+        raise HTTPException(404, "Not a recording")
+    return path
+
+
+@app.get("/api/voice/folders")
+def voice_folders():
+    """The shoot folders, newest first, with how many recordings each has."""
+    out = []
+    for d in lib.shoot_folders():
+        audio = video = 0
+        for p in d.iterdir():
+            if p.name.startswith(".") or not p.is_file():
+                continue
+            if p.suffix.lower() in AUDIO_EXTS:
+                audio += 1
+            elif Library.kind_of(p) == "video":
+                video += 1
+        out.append({"name": d.name, "audio": audio, "video": video})
+    out.sort(key=lambda f: f["name"], reverse=True)
+    return {"folders": out, "transcribe": transcription_available(), "model": VOICE_MODEL}
+
+
+@app.get("/api/voice/takes/{folder}")
+def voice_takes(folder: str):
+    """A folder's recordings: audio files first, then videos (their sound)."""
+    d = resolve(folder)
+    takes = []
+    for p in sorted(d.iterdir(), key=lambda q: q.name.lower()):
+        if p.name.startswith(".") or not p.is_file():
+            continue
+        kind = "audio" if p.suffix.lower() in AUDIO_EXTS else "video" if Library.kind_of(p) == "video" else None
+        if kind:
+            takes.append({"folder": folder, "file": p.name, "kind": kind,
+                          "duration": voice.duration(p), **voice.status(p)})
+    takes.sort(key=lambda t: t["kind"] != "audio")
+    return {"folder": folder, "takes": takes, "transcribe": transcription_available()}
+
+
+@app.get("/api/voice/audio/{folder}/{file}")
+def voice_audio(folder: str, file: str):
+    try:
+        return FileResponse(voice.audio(take_path(folder, file)), media_type="audio/mp4")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/voice/peaks/{folder}/{file}")
+def voice_peaks(folder: str, file: str):
+    try:
+        return voice.peaks(take_path(folder, file))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/voice/transcribe/{folder}/{file}")
+def voice_transcribe(folder: str, file: str):
+    path = take_path(folder, file)
+    if not voice.transcript(path) and not transcription_available():
+        raise HTTPException(503, "Transcribing isn't installed: start the studio with ./studio/run.sh --voice")
+    return voice.start(path)
+
+
+@app.get("/api/voice/transcript/{folder}/{file}")
+def voice_transcript(folder: str, file: str):
+    """What's said in the take: its words and the lines made from them (once
+    transcribed), or how far along transcribing is."""
+    path = take_path(folder, file)
+    data = voice.transcript(path)
+    if not data:
+        return {**voice.status(path), "duration": voice.duration(path)}
+    return {"status": "done", "progress": 1.0, "duration": data["duration"] or voice.duration(path),
+            "language": data.get("language"), "words": data["words"], "lines": lines_from_words(data["words"])}
+
+
+@app.post("/api/voice/align")
+def voice_align(body: dict = Body(...)):
+    """Time pasted text to a stretch of a take: {folder, file, start, end, text} -> {lines}."""
+    path = take_path(body["folder"], body["file"])
+    data = voice.transcript(path) or {"words": []}
+    start, end = float(body.get("start") or 0), float(body.get("end") or 0)
+    words = [w for w in data["words"] if w["e"] > start and w["s"] < end]
+    return {"lines": align(words, body.get("text") or "", start, end)}
+
+
+@app.get("/api/voice/downloads")
+def voice_downloads():
+    """Recordings that arrived in Downloads lately (AirDropped voice memos),
+    newest first, to bring into a shoot folder as takes."""
+    if not DOWNLOADS.is_dir():
+        return {"files": []}
+    since = (datetime.now() - timedelta(days=IMPORT_DAYS)).timestamp()
+    files = []
+    for p in DOWNLOADS.iterdir():
+        if is_song(p) and arrived(p.stat()) >= since:
+            files.append({"name": p.name, "arrived": arrived(p.stat()), "duration": voice.duration(p)})
+    files.sort(key=lambda f: f["arrived"], reverse=True)
+    return {"files": files}
+
+
+@app.post("/api/voice/import")
+def voice_import(body: dict = Body(...)):
+    """Move a recording from Downloads into a shoot folder: {file, folder}."""
+    src = download_path(body.get("file") or "", is_song)
+    dest = resolve(body.get("folder") or "")
+    if not dest.is_dir() or dest == ROOT:
+        raise HTTPException(400, "Pick a shoot folder")
+    target = dest / src.name
+    if target.exists():
+        target = free_name(target)
+    shutil.move(str(src), str(target))
+    return {"folder": dest.name, "file": target.name}
+
+
+@app.get("/api/fonts/{name}")
+def font_file(name: str):
+    """The caption fonts in brand/fonts, so the preview uses the render's."""
+    path = (BRAND / "fonts" / name).resolve()
+    if path.parent != (BRAND / "fonts").resolve() or path.suffix.lower() not in (".ttf", ".otf") or not path.exists():
+        raise HTTPException(404, "No such font")
+    return FileResponse(path, headers={"Cache-Control": "max-age=86400"})
+
+
 # ---------------------------------------------------------------- export
 
 def build_config(reel, rows):
@@ -738,6 +869,20 @@ def build_config(reel, rows):
             except ImportError:
                 raise HTTPException(400, "Cutting on the beat needs beat detection: "
                                          "start the studio with ./studio/run.sh --beat")
+    pieces, lines = voice_timeline(s)
+    if pieces:
+        for p in pieces:
+            if not (ROOT / p["folder"] / p["file"]).exists():
+                raise HTTPException(400, f"A voice take is missing: {p['folder']}/{p['file']}")
+        cfg["voice"] = {"pieces": [{"file": str(ROOT / p["folder"] / p["file"]), "start": p["start"],
+                                    "end": p["end"], "at": p["at"]} for p in pieces],
+                        "fit": bool(s.get("voiceFit", True)), "clean": bool(s.get("voiceClean", True)),
+                        "song_under": float(s.get("voiceSongUnder", 0.15)),
+                        "song_between": float(s.get("voiceSongBetween", 0.3))}
+    if lines and s.get("captions", True):
+        cfg["captions"] = {"style": s.get("captionStyle"), "font": s.get("captionFont"),
+                           "background": s.get("captionBg"), "size": float(s.get("captionSize") or 1),
+                           "title": (s.get("captionTitle") or "").strip(), "lines": lines}
     if (s.get("titleText") or "").strip():
         cfg["title"] = {"text": s["titleText"].strip()}
         if (s.get("titleSub") or "").strip():
@@ -770,6 +915,27 @@ def build_config(reel, rows):
         "preset": "veryfast",
     })
     return cfg
+
+
+def voice_timeline(s):
+    """A reel's voice pieces placed one after another (each after its breath),
+    and their caption lines, on the reel's clock. Same as captions.js."""
+    pieces, lines, t = [], [], 0.0
+    for p in s.get("voice") or []:
+        start, end = float(p.get("start") or 0), float(p.get("end") or 0)
+        if end - start < 0.1:
+            continue
+        t += max(0.0, float(p.get("gap") or 0))
+        pieces.append({"folder": p["folder"], "file": p["file"], "start": round(start, 3),
+                       "end": round(end, 3), "at": round(t, 3)})
+        for l in p.get("lines") or []:
+            ls, le = max(float(l["s"]), start), min(float(l["e"]), end)
+            if le - ls < 0.05 or not str(l.get("text", "")).strip():
+                continue
+            lines.append({"start": round(t + ls - start, 3), "end": round(t + le - start, 3),
+                          "text": " ".join(str(l["text"]).split()), "stanza": bool(l.get("br"))})
+        t += end - start
+    return pieces, lines
 
 
 def logo_files(choice):
@@ -836,6 +1002,62 @@ def card_preview(reel_id: int, kind: str):
     return FileResponse(out, headers={"Cache-Control": "no-store"})
 
 
+@app.get("/api/reels/{reel_id}/captions/preview")
+def caption_preview(reel_id: int, item: int, src: float = 0.0, t: float = 0.0):
+    """The captions at reel time t, drawn as the render will, over the frame
+    of the part playing then (item, at src seconds into its clip), half size."""
+    import tempfile
+    from PIL import Image, ImageFilter, ImageOps
+    import montage
+    reel, rows = reel_and_rows(reel_id)
+    cfg = build_config(reel, rows)
+    if "captions" not in cfg:
+        raise HTTPException(400, "Add a voice piece with lines first.")
+    row = next((r for r in rows if r["id"] == item), None)
+    if not row or row["missing"]:
+        raise HTTPException(404, "No such part")
+    cfg.update(width=1080, height=1920, fps=30)
+    frame = Image.open(thumb_file(ROOT / row["path"], src, 1280)).convert("RGBA")
+    frame = ImageOps.fit(frame, (1080, 1920), centering=(row["focus_x"], row["focus_y"]))
+    cap = cfg["captions"]
+    with tempfile.TemporaryDirectory() as tmp:
+        for l in montage.caption_layers(cap["lines"], cap, cfg, ENGINE.parent, Path(tmp), 1e9):
+            a = layer_alpha(l, t)
+            if a <= 0.001:
+                continue
+            y = l["y"]
+            if l.get("drift"):
+                up, away, ga, gb, fi, fo = l["drift"]
+                y += up * max(0, 1 - (t - ga) / max(fi, 0.01)) - away * max(0, 1 - (gb - t) / max(fo, 0.01))
+            if l["kind"] == "png":
+                im = Image.open(l["path"]).convert("RGBA")
+            elif l["kind"] == "color":
+                rgb, alpha = l["color"].split("@")
+                im = Image.new("RGBA", l["size"], (*bytes.fromhex(rgb[2:]), round(255 * float(alpha))))
+            else:
+                box = (l["x"], round(y), l["x"] + l["size"][0], round(y) + l["size"][1])
+                im = frame.crop(box).filter(ImageFilter.GaussianBlur(l["sigma"]))
+            im.putalpha(im.getchannel("A").point(lambda v: v * a))
+            layer = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+            layer.paste(im, (l["x"], round(y)))
+            frame = Image.alpha_composite(frame, layer)
+    out = CACHE / f"captions-{reel_id}.jpg"
+    frame.convert("RGB").resize((540, 960), Image.LANCZOS).save(out, quality=88)
+    return FileResponse(out, headers={"Cache-Control": "no-store"})
+
+
+def layer_alpha(l, t):
+    """How visible a caption layer is at t, with its fades."""
+    if t < l["t0"] or t > l["t1"]:
+        return 0.0
+    a = 1.0
+    if l["fi"] > 0:
+        a = min(a, (t - l["t0"]) / l["fi"])
+    if l["fo"] > 0:
+        a = min(a, (l["t1"] - t) / l["fo"])
+    return max(0.0, min(a, 1.0))
+
+
 @app.post("/api/reels/{reel_id}/export")
 def export(reel_id: int):
     out, cfg = write_config(reel_id)
@@ -880,6 +1102,8 @@ def run_render(job, config_path):
                 job["stage"], job["done"], job["total"] = "cutting", int(m[1]), int(m[2])
             elif line.startswith("joining"):
                 job["stage"] = "joining"
+            elif line.startswith("laying the captions"):
+                job["stage"] = "captions"
             elif line.startswith("mixing"):
                 job["stage"] = "mixing"
             elif line.startswith("Song left out"):

@@ -52,6 +52,33 @@ end_card:
 
 The title fades in just after the start. The end card comes in with the last part, which holds `beats` (or `hold` seconds) longer for it, so the piece runs that much longer; a clip too short for that holds its last frame. The end card's first line is set large; the others are smaller. Text stays inside the area Reels and TikTok don't cover. The cards use Playfair Display and Roboto when they're installed or in `brand/` (`fonts: {display: ..., body: ...}` picks other files), otherwise Georgia and Helvetica. They need Pillow (`pip install pillow`).
 
+## Voice and captions
+
+A reading laid over the footage: pieces of one or more takes (audio files, or videos for their sound), each placed on the piece's clock, with the song kept low under it. Its lines can show as captions.
+
+```yaml
+voice:
+  pieces:
+    - {file: "takes/reading take 2.m4a", start: 0.5, end: 11.0, at: 0.5}   # start/end in the take, at = on the piece
+    - {file: "takes/reading take 4.m4a", start: 12.1, end: 22.1, at: 11.6}
+  fit: true          # the last part holds until the voice ends (+0.8s), then the end card
+  clean: true        # highpass and denoise; every piece is loudness-normalised either way
+  song_under: 0.15   # the song's volume while the voice speaks
+  song_between: 0.3  # ... and around it (replaces music_volume)
+
+captions:
+  style: stanza      # stanza | unfold | breath | page
+  font: playfair     # playfair, playfair-italic, garamond-italic, cormorant-italic, courier, roboto, caveat
+  background: band   # scrim | band | paper | blur | shadow
+  size: 1            # 0.85 small, 1.18 large
+  title: ""          # page: a small title over the words
+  lines:             # on the piece's clock; stanza: true starts a new stanza
+    - {start: 0.6, end: 2.6, text: "We push the cloves in, point up,", stanza: true}
+    - {start: 3.6, end: 5.6, text: "two knuckles deep in the cold bed."}
+```
+
+*stanza* shows the whole stanza with the line being said bright and the rest dim; *unfold* fades lines in as they're said, keeping them until the stanza ends; *breath* shows one line at a time, centred, drifting up as it comes in; *page* sets the lines left on a cream panel under the title. The fonts are the files in `brand/fonts/` (Footage Studio's preview uses the same ones). The captions go over the picture before the title and end card.
+
 If a cut would run past the end of a clip, the script slides it earlier so it stays on the beat. The dry run tells you when that happens.
 
 Output is 1080×1920 at 30fps. Photos should be JPG or PNG; convert HEIC files first.

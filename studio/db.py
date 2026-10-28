@@ -121,6 +121,22 @@ DEFAULT_SETTINGS = {
     "endLogo": "oufp",
     "endPresentedBy": "garden-steward",   # "presented by" + this logo, small, underneath
     "endBeats": 4,          # how much longer the last part holds for the card
+    # A voice track: a reading laid over the footage, made of pieces of takes
+    # (audio files or videos in the shoot folders), one after another. Each
+    # piece: {id, folder, file, start, end (in the take), gap (the breath
+    # before it), lines: [{s, e, text, br (a stanza starts here), words}]}.
+    "voice": [],
+    "voiceFit": True,       # the last part holds until the voice has finished
+    "voiceClean": True,     # cut low rumble and hiss
+    "voiceSongUnder": 0.15, # the song's volume while the voice speaks
+    "voiceSongBetween": 0.3,  # ... and around it
+    # Captions: the voice's lines on screen as they're said.
+    "captions": True,
+    "captionStyle": "breath",   # stanza | unfold | breath | page
+    "captionFont": "cormorant-italic",
+    "captionBg": "shadow",      # scrim | band | paper | blur | shadow
+    "captionSize": 1.0,
+    "captionTitle": "",         # Page: a small title over the words
 }
 
 

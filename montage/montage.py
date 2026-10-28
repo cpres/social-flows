@@ -17,7 +17,9 @@ Two styles, one engine:
             `file:` and it picks a moment inside each clip for you.
 
 Sound: cuts can land on the beats of the music track, and the glasses audio
-can sit quietly underneath as an ambient bed.
+can sit quietly underneath as an ambient bed. A voice track (a reading, laid
+over the footage from one or more takes) plays on top, with the song kept low
+under it, and its words can be shown as captions.
 
 Usage:
     python3 montage.py montage.yaml            # render
@@ -303,7 +305,7 @@ def transition_between(a, b, cfg, index):
     return TRANSITIONS.get(name, name)
 
 
-def build_plan(cfg, base_dir, beats):
+def build_plan(cfg, base_dir, beats, voice=None):
     fps = cfg["fps"]
     default_len = float(cfg.get("clip_length", 1.5))
     default_hold = float(cfg.get("image_hold", 2.5))
@@ -366,23 +368,46 @@ def build_plan(cfg, base_dir, beats):
     end = cfg.get("end_card")
     if end and plan:
         end = end if isinstance(end, dict) else {}
-        plan[-1]["beats"] += beat_count(end.get("beats"), 4)
-        plan[-1]["seconds"] += float(end.get("hold", 2.0))
+        plan[-1]["card_beats"] = beat_count(end.get("beats"), 4)
+        plan[-1]["card_seconds"] = float(end.get("hold", 2.0))
+        plan[-1]["beats"] += plan[-1]["card_beats"]
+        plan[-1]["seconds"] += plan[-1]["card_seconds"]
         plan[-1]["end_card"] = True
 
     # 2. Where each cut lands on the timeline, snapped to whole frames
     #    (and to beats when beat sync is on) so nothing drifts.
     cut_points, cursor_beat, t = [0.0], 0, 0.0
+    card_at = None   # where the end card's extra hold starts
     for seg in plan:
         if beats is not None:
+            if seg.get("end_card"):
+                card_at = beat_time(beats, cursor_beat + seg["beats"] - seg["card_beats"])
             cursor_beat += seg["beats"]
             t = beat_time(beats, cursor_beat)
         else:
+            if seg.get("end_card"):
+                card_at = t + seg["seconds"] - seg["card_seconds"]
             t += seg["seconds"]
         cut_points.append(t)
     frames = [round(c * fps) for c in cut_points]
     for i, seg in enumerate(plan):
         seg["length"] = (frames[i + 1] - frames[i]) / fps
+        seg["hold_extra"] = 0.0
+
+    # A reading that runs past the parts: the last part holds until the voice
+    # has finished (and a moment after), then the end card plays.
+    if voice and voice["fit"] and plan:
+        body_end = card_at if card_at is not None else frames[-1] / fps
+        need = voice["end"] + VOICE_TAIL - body_end
+        if need > 0:
+            extra = -(-round(need * fps * 1000) // 1000) / fps   # whole frames, rounded up
+            plan[-1]["length"] += extra
+            plan[-1]["hold_extra"] = extra
+            card_at = card_at + extra if card_at is not None else None
+    if card_at is not None:
+        # The card comes in with the last part, or once the voice is done.
+        last_start = frames[-2] / fps
+        plan[-1]["card_from"] = max(last_start, min(voice["end"] + VOICE_TAIL, card_at)) if voice else last_start
 
     # 3. Transitions between neighbours. Soft ones overlap, so the outgoing
     #    cut renders a little extra tail.
@@ -418,7 +443,8 @@ def build_plan(cfg, base_dir, beats):
     for i, seg in enumerate(plan):
         if seg["kind"] != "video":
             continue
-        overflow = seg["start"] + seg["render_length"] - seg["src_duration"]
+        # (a hold for the voice plays on past the clip's end on its last frame; it doesn't move the cut)
+        overflow = seg["start"] + seg["render_length"] - seg["hold_extra"] - seg["src_duration"]
         if overflow > 0:
             new_start = max(0.0, seg["start"] - overflow - 0.05)
             warnings.append(f"round {seg['round']}: '{seg['label']}' cut moved "
@@ -647,38 +673,103 @@ def compose_top(top, assembled, cfg, under, workdir):
     return out
 
 
-def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output):
+def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output, voice=None):
+    """Mix the sound under the finished picture: the clips' own audio (as a
+    bed), the song, and the voice track, with the song kept low under it."""
     # music_in_video: false times the cuts to the song but leaves it out of the
     # file, for adding the same song in Instagram (which licenses it).
     music = cfg.get("music") if cfg.get("music_in_video", True) else None
     common = ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
               "-movflags", "+faststart", "-t", f"{total_len:.3f}", str(output)]
 
-    if not music:
+    if not music and not voice:
         audio = ["-map", "0:a"] if keep_audio else ["-an"]
         run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(assembled),
              "-map", "0:v", *audio, *common])
         return
 
-    music_file = music_path(cfg, base_dir)
-    music_vol = float(cfg.get("music_volume", 1.0))
-    fade = min(float(cfg.get("music_fade_out", 2.0)), total_len / 3)
-    music_chain = (f"[1:a]aformat=sample_rates=48000:channel_layouts=stereo,"
-                   f"volume={music_vol},"
-                   f"afade=t=out:st={max(total_len - fade, 0):.3f}:d={fade:.3f}")
+    inputs = ["-i", str(assembled)]
+    graph, mix = [], []
+    # The assembled audio sets the length; silent unless the clips' sound is kept.
+    bed = (float(cfg.get("original_volume", 0.35)) if music else 1.0) if keep_audio else 0.0
+    graph.append(f"[0:a]volume={bed}[o]")
+    mix.append("[o]")
+    if music:
+        inputs += ["-ss", f"{music_start:.3f}", "-i", str(music_path(cfg, base_dir))]
+        fade = min(float(cfg.get("music_fade_out", 2.0)), total_len / 3)
+        level = (f"volume='{song_level(voice)}':eval=frame" if voice
+                 else f"volume={float(cfg.get('music_volume', 1.0))}")
+        graph.append(f"[1:a]aformat=sample_rates=48000:channel_layouts=stereo,{level},"
+                     f"afade=t=out:st={max(total_len - fade, 0):.3f}:d={fade:.3f}[m]")
+        mix.append("[m]")
+    if voice:
+        n0 = inputs.count("-i")
+        for i, p in enumerate(voice["pieces"]):
+            inputs += ["-ss", f"{p['start']:.3f}", "-t", f"{p['length']:.3f}", "-i", str(p["path"])]
+            clean = "highpass=f=80,afftdn=nf=-25," if voice["clean"] else ""
+            delay = round(p["at"] * 1000)
+            graph.append(f"[{n0 + i}:a:0]aformat=channel_layouts=mono,{clean}"
+                         f"loudnorm=I=-16:TP=-1.5:LRA=11,"
+                         f"aformat=sample_rates=48000:channel_layouts=stereo,"
+                         f"afade=t=in:d={VOICE_EDGE},"
+                         f"afade=t=out:st={max(p['length'] - VOICE_EDGE * 2, 0):.3f}:d={VOICE_EDGE * 2},"
+                         f"volume={voice['volume']},adelay=delays={delay}:all=1[v{i}]")
+        k = len(voice["pieces"])
+        if k > 1:
+            graph.append("".join(f"[v{i}]" for i in range(k))
+                         + f"amix=inputs={k}:normalize=0:duration=longest[voice]")
+        else:
+            graph.append("[v0]anull[voice]")
+        mix.append("[voice]")
+    graph.append("".join(mix) + f"amix=inputs={len(mix)}:duration=first:normalize=0,"
+                 "alimiter=limit=0.95[a]")
+    run(["ffmpeg", "-nostdin", "-y", "-v", "error", *inputs,
+         "-filter_complex", ";".join(graph), "-map", "0:v", "-map", "[a]", *common])
 
-    if keep_audio:  # glasses audio as a quiet ambient bed under the music
-        bed = float(cfg.get("original_volume", 0.35))
-        graph = (f"{music_chain}[m];[0:a]volume={bed}[o];"
-                 f"[o][m]amix=inputs=2:duration=first:normalize=0,"
-                 f"alimiter=limit=0.95[a]")
-    else:
-        graph = f"{music_chain}[a]"
 
-    run(["ffmpeg", "-nostdin", "-y", "-v", "error",
-         "-i", str(assembled),
-         "-ss", f"{music_start:.3f}", "-i", str(music_file),
-         "-filter_complex", graph, "-map", "0:v", "-map", "[a]", *common])
+# ---------------------------------------------------------------- voice
+
+# A reading laid over the footage: pieces of one or more takes (audio files,
+# or the sound of videos), each placed at a time on the reel. The song dips
+# to `song_under` while the voice speaks and sits at `song_between` around it.
+VOICE_TAIL = 0.8     # the last part holds this long after the voice ends
+VOICE_EDGE = 0.04    # fade at each end of a piece, so cuts in a take never click
+DUCK_RAMP = 0.4      # how long the song takes to dip under the voice, and come back
+
+
+def load_voice(cfg, base_dir):
+    """`voice:` from the config, checked: {pieces, end, ...}, or None."""
+    v = cfg.get("voice")
+    if not v or not v.get("pieces"):
+        return None
+    pieces = []
+    for p in v["pieces"]:
+        path = (base_dir / p["file"]).expanduser()
+        if not path.exists():
+            sys.exit(f"Voice file not found: {path}")
+        start, end = parse_time(p.get("start", 0)), parse_time(p["end"])
+        if end - start < 0.1:
+            continue
+        pieces.append({"path": path, "start": start, "length": end - start,
+                       "at": parse_time(p.get("at", 0))})
+    if not pieces:
+        return None
+    return {"pieces": pieces, "end": max(p["at"] + p["length"] for p in pieces),
+            "fit": bool(v.get("fit", True)), "clean": bool(v.get("clean", True)),
+            "volume": float(v.get("volume", 1.0)),
+            "under": float(v.get("song_under", 0.15)), "between": float(v.get("song_between", 0.3))}
+
+
+def song_level(voice):
+    """The song's volume over time as an ffmpeg expression: `between`, dipping
+    to `under` while each piece of the voice plays."""
+    r = DUCK_RAMP
+    envs = [f"clip((t-{p['at'] - r:.3f})/{r},0,1)*clip(({p['at'] + p['length'] + r:.3f}-t)/{r},0,1)"
+            for p in voice["pieces"]]
+    duck = envs[0]
+    for e in envs[1:]:
+        duck = f"max({duck},{e})"
+    return f"{voice['between']:.3f}+({voice['under'] - voice['between']:.3f})*{duck}"
 
 
 # ---------------------------------------------------------------- title and end card
@@ -693,7 +784,8 @@ SAFE_TOP, SAFE_BOTTOM, SAFE_SIDE = 250, 420, 120
 
 FONT_DIRS = ["~/Library/Fonts", "/Library/Fonts", "/System/Library/Fonts",
              "/System/Library/Fonts/Supplemental", "/usr/share/fonts", "/usr/local/share/fonts"]
-DISPLAY_FONTS = ["PlayfairDisplay-ExtraBold.*", "PlayfairDisplay-Bold.*", "PlayfairDisplay*.ttf",
+DISPLAY_FONTS = ["PlayfairDisplay-ExtraBold.*", "PlayfairDisplay-Bold.*", "PlayfairDisplay[[]wght[]].ttf",
+                 "PlayfairDisplay*.ttf",
                  "Georgia Bold.ttf", "DejaVuSerif-Bold.ttf"]
 BODY_FONTS = ["Roboto-Regular.*", "Roboto*.ttf", "Avenir Next.ttc", "Helvetica.ttc", "DejaVuSans.ttf"]
 
@@ -789,8 +881,8 @@ def card_times(cards, plan, total):
     to the end."""
     times = {}
     if any(card["kind"] == "end_card" for card in cards):
-        start = min(sum(seg["length"] for seg in plan[:-1]), total)
-        times["end_card"] = (start, total)
+        start = plan[-1].get("card_from", sum(seg["length"] for seg in plan[:-1]))
+        times["end_card"] = (min(start, total), total)
     for card in cards:
         spec = card["spec"]
         if card["kind"] == "title":
@@ -920,6 +1012,353 @@ def add_cards(assembled, cards, times, cfg, base_dir, total, workdir):
     return out
 
 
+# ---------------------------------------------------------------- captions
+
+# The words of the voice track, on screen as they're said. Four styles:
+#   stanza  the whole stanza shows; the line being said is bright, the rest dim
+#   unfold  lines fade in as they're said and stay until the stanza ends
+#   breath  one line at a time, centred, drifting up as it comes in
+#   page    set left on the panel under a small title, lines appearing as said
+# over one of five backgrounds: scrim (the whole frame dimmed), band, paper (a
+# cream panel, forest ink), blur (the footage blurred behind the words) or
+# shadow (just a soft shadow). Sizes are in % of the frame's width, like CSS
+# cqw; Footage Studio's preview (web/src/captions.js) follows the same rules.
+CAPTION_SIZE = {"stanza": 4.3, "unfold": 4.3, "breath": 6.2, "page": 4.3}
+CAPTION_BGS = ("scrim", "band", "paper", "blur", "shadow")
+CAPTION_FONTS = {   # file in brand/fonts, weight, size next to the others
+    "playfair": ("PlayfairDisplay[wght].ttf", 600, 1.0),
+    "playfair-italic": ("PlayfairDisplay-Italic[wght].ttf", 500, 1.0),
+    "garamond-italic": ("EBGaramond-Italic[wght].ttf", 400, 1.12),
+    "cormorant-italic": ("CormorantGaramond-Italic[wght].ttf", 500, 1.18),
+    "courier": ("CourierPrime-Regular.ttf", 400, 0.9),
+    "roboto": ("Roboto[wdth,wght].ttf", 400, 0.96),
+    "caveat": ("Caveat[wght].ttf", 500, 1.32),
+}
+# Where the words sit: the panel's sides and the padding inside it (% of width).
+CAPTION_BOX = {"band": (0, 11, 3.4), "paper": (9, 5.4, 4.4), "blur": (7, 4, 3.6),
+               "scrim": (11, 0, 0), "shadow": (11, 0, 0)}
+CAPTION_LEADING = 1.32
+CAPTION_BOTTOM = 0.75   # the block's bottom edge, as a share of the height (breath: centred)
+CAPTION_DIM = 0.38      # stanza: the lines not being said
+CAPTION_PAST = 0.82     # unfold: lines already said
+CAPTION_X = 0.3         # crossfade as a line brightens or dims
+CAPTION_APPEAR = 0.5    # unfold and page: a new line fading in
+PAPER_INK = (0x2d, 0x3e, 0x26)
+
+
+def caption_groups(lines, style):
+    """What's on screen together: a stanza (lines up to a stanza break), or for
+    breath a single line. Each {a, b, fi, fo, lines}: on screen from a to b,
+    fading in over fi and out over fo, never overlapping the next."""
+    lines = sorted((l for l in lines if str(l.get("text", "")).strip()), key=lambda l: l["start"])
+    if style == "breath":
+        sets = [[l] for l in lines]
+        lead, tail, fi, fo = 0.35, 0.6, 0.7, 0.6
+    else:
+        sets = []
+        for l in lines:
+            if not sets or l.get("stanza"):
+                sets.append([])
+            sets[-1].append(l)
+        lead, tail, fi, fo = 0.45, 0.8, 0.5, 0.5
+    groups = [{"a": max(0.0, ls[0]["start"] - lead), "b": ls[-1]["end"] + tail, "lines": ls} for ls in sets]
+    for prev, g in zip(groups, groups[1:]):
+        if prev["b"] > g["a"] - 0.05:
+            prev["b"] = max(prev["lines"][-1]["end"] + 0.05, g["a"] - 0.05)
+            g["a"] = max(g["a"], prev["b"])
+    for g in groups:
+        span = g["b"] - g["a"]
+        g["fi"], g["fo"] = min(fi, span / 2), min(fo, span / 2)
+    return groups
+
+
+def caption_segments(group, style):
+    """For each line of a group, the stretches it's on screen at one opacity:
+    [(alpha, t0, t1, fade_in, fade_out)]. Changes of opacity crossfade."""
+    ls, a, b = group["lines"], group["a"], group["b"]
+    last = len(ls) - 1
+    out = []
+    for k, l in enumerate(ls):
+        if style == "stanza":   # bright from just before it's said until the next line
+            on = a if k == 0 else l["start"] - 0.15
+            points = [(a, CAPTION_DIM), (on, 1.0)] if k else [(a, 1.0)]
+            if k < last:
+                points.append((ls[k + 1]["start"] - 0.15, CAPTION_DIM))
+        elif style in ("unfold", "page"):
+            at = a if k == 0 else max(a, l["start"] - 0.2)
+            points = [(at, 1.0)]
+            if style == "unfold" and k < last:
+                points.append((max(at, ls[k + 1]["start"] - 0.2), CAPTION_PAST))
+        else:
+            points = [(a, 1.0)]
+        first_fade = group["fi"] if points[0][0] <= a + 1e-6 else CAPTION_APPEAR
+        segs = []
+        for i, (t, alpha) in enumerate(points):
+            t0 = t if i == 0 else t - CAPTION_X / 2
+            t1 = points[i + 1][0] + CAPTION_X / 2 if i + 1 < len(points) else b
+            t0, t1 = max(t0, a), min(t1, b)
+            if t1 - t0 < 0.04:
+                continue
+            fin = first_fade if i == 0 else CAPTION_X
+            fout = CAPTION_X if i + 1 < len(points) else group["fo"]
+            segs.append((alpha, t0, t1, min(fin, (t1 - t0) / 2), min(fout, (t1 - t0) / 2)))
+        out.append(segs)
+    return out
+
+
+def caption_font_path(name, base_dir):
+    """A caption font's file: brand/fonts (next to the config or in the repo),
+    else installed; else the card's display font."""
+    file = CAPTION_FONTS.get(name, CAPTION_FONTS["playfair"])[0]
+    repo = Path(__file__).resolve().parent.parent / "brand"
+    for d in [base_dir / "brand" / "fonts", repo / "fonts", base_dir / "brand", repo, *FONT_DIRS]:
+        p = Path(d).expanduser() / file
+        if p.exists():
+            return p
+    return find_font(None, DISPLAY_FONTS, base_dir)
+
+
+def load_caption_font(path, size, weight):
+    from PIL import ImageFont
+    if path is None:
+        return ImageFont.load_default(size)
+    font = ImageFont.truetype(str(path), size)
+    try:   # a variable font: set its weight axis
+        axes = font.get_variation_axes()
+        font.set_variation_by_axes([weight if str(ax.get("name", b"")).find("Weight") >= 0
+                                    else ax["default"] for ax in axes])
+    except (OSError, AttributeError):
+        pass
+    return font
+
+
+def caption_layout(cap, cfg, base_dir):
+    """The font and where the block of words sits, in pixels."""
+    w, h = cfg["width"], cfg["height"]
+    style = cap.get("style") if cap.get("style") in CAPTION_SIZE else "breath"
+    bg = cap.get("background") if cap.get("background") in CAPTION_BGS else "shadow"
+    name = cap.get("font") if cap.get("font") in CAPTION_FONTS else "playfair"
+    _, weight, scale = CAPTION_FONTS[name]
+    size = CAPTION_SIZE[style] * scale * float(cap.get("size", 1) or 1) * w / 100
+    font = load_caption_font(caption_font_path(name, base_dir), max(8, round(size)), weight)
+    side, pad_x, pad_y = (v * w / 100 for v in CAPTION_BOX[bg])
+    lay = {"w": w, "h": h, "style": style, "bg": bg, "font": font, "size": size,
+           "lead": size * CAPTION_LEADING, "x0": side, "x1": w - side, "pad_x": pad_x, "pad_y": pad_y,
+           "ink": PAPER_INK if bg == "paper" else CARD_INK, "title": "", "base_dir": base_dir,
+           "fps": cfg["fps"]}
+    lay["text_x"] = side + pad_x
+    lay["text_w"] = w - 2 * (side + pad_x)
+    if style == "page" and str(cap.get("title") or "").strip():
+        lay["title"] = str(cap["title"]).strip().upper()
+        lay["title_font"] = load_caption_font(caption_font_path(name, base_dir),
+                                              max(8, round(size * 0.62)), weight)
+    return lay
+
+
+def caption_block(lay, group):
+    """Where a group's block and each of its lines sit: {y0, y1, lines: [(y, rows)],
+    title_y}. The rows are each line wrapped to the block's width."""
+    from PIL import Image, ImageDraw
+    scratch = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    lead = lay["lead"]
+    fold = wrap if lay["style"] == "page" else balanced   # a page wraps like print
+    rows = [[r for r in fold(scratch, l["text"].strip(), lay["font"], lay["text_w"]) if r] or [""]
+            for l in group["lines"]]
+    title_h = lay["size"] * 0.62 * (CAPTION_LEADING + 0.9) if lay["title"] else 0
+    content = title_h + lead * sum(len(r) for r in rows)
+    block = content + 2 * lay["pad_y"]
+    y0 = lay["h"] / 2 - block / 2 if lay["style"] == "breath" else lay["h"] * CAPTION_BOTTOM - block
+    y = y0 + lay["pad_y"] + title_h
+    placed = []
+    for r in rows:
+        placed.append((y, r))
+        y += lead * len(r)
+    return {"y0": y0, "y1": y0 + block, "lines": placed, "title_y": y0 + lay["pad_y"]}
+
+
+def balanced(draw, text, font, width):
+    """Wrap text into as few rows as fit, with the rows as even as they can be
+    (like CSS text-wrap: balance), so no word is left on its own."""
+    rows = [r for r in wrap(draw, text, font, width) if r] or [""]
+    if len(rows) < 2:
+        return rows
+    lo, hi = width / len(rows), width
+    while hi - lo > 2:
+        mid = (lo + hi) / 2
+        if len([r for r in wrap(draw, text, font, mid) if r]) <= len(rows):
+            hi = mid
+        else:
+            lo = mid
+    return [r for r in wrap(draw, text, font, hi) if r]
+
+
+def caption_line_image(lay, rows, alpha, out):
+    """One line (wrapped to one or more rows) as a transparent PNG, with room
+    around it for its shadow. Returns (path, margin)."""
+    from PIL import Image, ImageDraw, ImageFilter
+    k = lay["w"] / 1080
+    m = round(40 * k)
+    lead, font = lay["lead"], lay["font"]
+    ascent, descent = font.getmetrics()
+    im = Image.new("RGBA", (round(lay["text_w"]) + 2 * m, round(lead * len(rows)) + 2 * m), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    for i, row in enumerate(rows):
+        rw = d.textlength(row, font=font)
+        x = m + (0 if lay["style"] == "page" else (lay["text_w"] - rw) / 2)
+        d.text((x, m + i * lead + (lead - ascent - descent) / 2), row, font=font, fill=(*lay["ink"], 255))
+    if lay["bg"] in ("shadow", "scrim"):   # a soft shadow keeps the words clear on bright footage
+        shadow = Image.new("RGBA", im.size, (0, 0, 0, 0))
+        shadow.putalpha(im.getchannel("A").point(lambda v: v * 0.55))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(13 * k))
+        base = Image.new("RGBA", im.size, (0, 0, 0, 0))
+        base.alpha_composite(shadow, (0, round(3 * k)))
+        base.alpha_composite(im)
+        im = base
+    if alpha < 1:
+        im.putalpha(im.getchannel("A").point(lambda v: v * alpha))
+    im.save(out)
+    return out, m
+
+
+def caption_title_image(lay, out):
+    from PIL import Image, ImageDraw
+    font = lay["title_font"]
+    ascent, descent = font.getmetrics()
+    lead = lay["size"] * 0.62 * CAPTION_LEADING
+    im = Image.new("RGBA", (round(lay["text_w"]), round(lead)), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    x, spacing = 0.0, lay["size"] * 0.62 * 0.14
+    for ch in lay["title"]:   # letter-spaced, like the preview
+        d.text((x, (lead - ascent - descent) / 2), ch, font=font, fill=(*lay["ink"], round(255 * 0.75)))
+        x += d.textlength(ch, font=font) + spacing
+    im.save(out)
+    return out
+
+
+def caption_panel_image(lay, width, height, out):
+    """The paper background: a cream panel with soft corners and a shadow."""
+    from PIL import Image, ImageDraw, ImageFilter
+    k = lay["w"] / 1080
+    sigma = 21.6 * k
+    m = round(3 * sigma)
+    im = Image.new("RGBA", (round(width) + 2 * m, round(height) + 2 * m + round(11 * k)), (0, 0, 0, 0))
+    shadow = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).rectangle([m, m + round(11 * k), m + width, m + height + round(11 * k)],
+                                     fill=(0, 0, 0, round(255 * 0.3)))
+    im.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(sigma)))
+    ImageDraw.Draw(im).rounded_rectangle([m, m, m + width, m + height], radius=round(8.6 * k),
+                                         fill=(*CARD_INK, round(255 * 0.95)))
+    im.save(out)
+    return out, m
+
+
+def caption_layers(lines, cap, cfg, base_dir, workdir, total):
+    """Everything to lay over the picture for the captions, in order:
+    {kind: png | color | blur, t0, t1, fi, fo, x, y, ...}."""
+    lay = caption_layout(cap, cfg, base_dir)
+    w, k = lay["w"], lay["w"] / 1080
+    layers, n = [], 0
+    for gi, g in enumerate(caption_groups(lines, lay["style"])):
+        if g["a"] >= total:
+            break
+        g["b"] = min(g["b"], total)
+        geo = caption_block(lay, g)
+        span = {"t0": g["a"], "t1": g["b"], "fi": g["fi"], "fo": g["fo"]}
+        top, bh = round(geo["y0"]), round(geo["y1"] - geo["y0"])
+        x0, x1 = round(lay["x0"]), round(lay["x1"])
+        if lay["bg"] == "scrim":
+            layers.append({"kind": "color", "color": "0x2d3e26@0.48", "x": 0, "y": 0, "size": (w, lay["h"]), **span})
+        elif lay["bg"] == "band":
+            layers.append({"kind": "color", "color": "0x2d3e26@0.64", "x": 0, "y": top, "size": (w, bh), **span})
+        elif lay["bg"] == "blur":
+            layers.append({"kind": "blur", "x": x0, "y": top, "size": (x1 - x0, bh), "sigma": 26 * k, **span})
+            layers.append({"kind": "color", "color": "0x121812@0.26", "x": x0, "y": top, "size": (x1 - x0, bh), **span})
+        elif lay["bg"] == "paper":
+            png, m = caption_panel_image(lay, x1 - x0, bh, workdir / f"cap-panel-{gi}.png")
+            layers.append({"kind": "png", "path": png, "x": x0 - m, "y": top - m, **span})
+        if lay["title"]:
+            png = caption_title_image(lay, workdir / "cap-title.png")
+            layers.append({"kind": "png", "path": png, "x": round(lay["text_x"]), "y": round(geo["title_y"]), **span})
+        drift = lay["style"] == "breath"
+        for (y, rows), segs in zip(geo["lines"], caption_segments(g, lay["style"])):
+            for alpha, t0, t1, fi, fo in segs:
+                if t0 >= total:
+                    continue
+                n += 1
+                png, m = caption_line_image(lay, rows, alpha, workdir / f"cap-{n:03d}.png")
+                layer = {"kind": "png", "path": png, "x": round(lay["text_x"]) - m, "y": round(y) - m,
+                         "t0": t0, "t1": min(t1, total), "fi": fi, "fo": fo}
+                if drift:   # rises 2.2% of the width as it comes in, 1.2% as it goes
+                    layer["drift"] = (2.2 * w / 100, 1.2 * w / 100, g["a"], g["b"], g["fi"], g["fo"])
+                layers.append(layer)
+    return layers
+
+
+def add_captions(assembled, lines, cap, cfg, base_dir, total, workdir):
+    """Lay the captions over the picture: each line and background only for
+    the time it's on screen, fading in and out."""
+    fps, w, h = cfg["fps"], cfg["width"], cfg["height"]
+    layers = caption_layers(lines, cap, cfg, base_dir, workdir, total)
+    if not layers:
+        return assembled
+    out = workdir / "captioned.mkv"
+    inputs, graph = ["-i", str(assembled)], []
+    blurs = [l for l in layers if l["kind"] == "blur"]
+    cur = "[0:v]"
+    if blurs:
+        graph.append(f"[0:v]split={len(blurs) + 1}[base]" + "".join(f"[bl{i}]" for i in range(len(blurs))))
+        cur = "[base]"
+    nb = 0
+    for i, l in enumerate(layers):
+        dur = l["t1"] - l["t0"]
+        if dur < 0.04:
+            continue
+        fades = (f"fade=t=in:st=0:d={l['fi']:.3f}:alpha=1,"
+                 f"fade=t=out:st={max(dur - l['fo'], 0):.3f}:d={l['fo']:.3f}:alpha=1,"
+                 f"setpts=PTS-STARTPTS+{l['t0']:.3f}/TB")
+        if l["kind"] == "blur":
+            cw, ch = l["size"]
+            graph.append(f"[bl{nb}]trim=start={l['t0']:.3f}:end={l['t1']:.3f},setpts=PTS-STARTPTS,"
+                         f"crop={cw}:{ch}:{l['x']}:{l['y']},gblur=sigma={l['sigma']:.1f},format=rgba,{fades}[L{i}]")
+            nb += 1
+        else:
+            idx = inputs.count("-i")
+            if l["kind"] == "color":
+                cw, ch = l["size"]
+                inputs += ["-f", "lavfi", "-t", f"{dur:.3f}", "-i",
+                           f"color=c={l['color']}:s={cw}x{ch}:r={fps},format=rgba"]
+            else:
+                inputs += ["-loop", "1", "-framerate", str(fps), "-t", f"{dur:.3f}", "-i", str(l["path"])]
+            graph.append(f"[{idx}:v]format=rgba,{fades}[L{i}]")
+        y = str(l["y"])
+        if l.get("drift"):
+            up, away, a, b, fi, fo = l["drift"]
+            y = (f"'{l['y']}+{up:.1f}*max(0,1-(t-{a:.3f})/{max(fi, 0.01):.3f})"
+                 f"-{away:.1f}*max(0,1-({b:.3f}-t)/{max(fo, 0.01):.3f})'")
+        graph.append(f"{cur}[L{i}]overlay=x={l['x']}:y={y}:eof_action=pass[c{i}]")
+        cur = f"[c{i}]"
+    graph.append(f"{cur}format=yuv420p[v]")
+    run(["ffmpeg", "-nostdin", "-y", "-v", "error", *inputs, "-filter_complex", ";".join(graph),
+         "-map", "[v]", "-map", "0:a", *video_codec(cfg), "-r", str(fps), "-c:a", "copy", str(out)])
+    return out
+
+
+def load_captions(cfg):
+    """`captions:` from the config: (lines, style settings), or (None, None)."""
+    cap = cfg.get("captions")
+    if not cap or not cap.get("lines"):
+        return None, None
+    lines = [{"start": parse_time(l["start"]), "end": parse_time(l["end"]),
+              "text": str(l.get("text", "")), "stanza": bool(l.get("stanza"))}
+             for l in cap["lines"] if str(l.get("text", "")).strip()]
+    if lines:
+        try:
+            import PIL  # noqa: F401
+        except ImportError:
+            sys.exit("Captions need Pillow: pip install pillow")
+    return (lines or None), cap
+
+
 # ---------------------------------------------------------------- main
 
 def main():
@@ -945,7 +1384,9 @@ def main():
     beats, music_start = load_beats(cfg, base_dir)
     top = load_top(cfg, base_dir)
     cards = load_cards(cfg, base_dir)
-    plan, warnings = build_plan(cfg, base_dir, beats)
+    voice = load_voice(cfg, base_dir)
+    cap_lines, cap = load_captions(cfg)
+    plan, warnings = build_plan(cfg, base_dir, beats, voice)
     if not plan:
         sys.exit("Nothing to cut. Check your start/step/times against clip lengths.")
 
@@ -981,6 +1422,19 @@ def main():
         name = "title" if card["kind"] == "title" else "end card"
         print(f"\n  {name}: {fmt(start)} -> {fmt(end)}  {what or ''}".rstrip()
               + (f"  [{', '.join(p.name for p in card['logos'])}]" if card["logos"] else ""))
+    if voice:
+        print(f"\n  voice: {len(voice['pieces'])} piece{'s' if len(voice['pieces']) != 1 else ''}, "
+              f"{fmt(voice['pieces'][0]['at'])} -> {fmt(voice['end'])}"
+              + (f" · song at {round(voice['under'] * 100)}% under it" if cfg.get("music") else ""))
+        for p in voice["pieces"]:
+            print(f"  {fmt(p['at']):>7}  {p['path'].name:<24} {fmt(p['start'])} -> {fmt(p['start'] + p['length'])}")
+        if plan[-1]["hold_extra"]:
+            print(f"  {'':>7}  last part holds {plan[-1]['hold_extra']:.1f}s longer for the voice")
+        if voice["end"] > length + 0.05:
+            warnings.append(f"the voice runs {voice['end'] - length:.1f}s past the end and is cut there")
+    if cap_lines:
+        print(f"\n  captions: {len(cap_lines)} lines · {cap.get('style', 'breath')}, "
+              f"{cap.get('font', 'playfair')}, {cap.get('background', 'shadow')}")
     for w in warnings:
         print(f"  ! {w}")
     print()
@@ -1004,11 +1458,14 @@ def main():
             print("  stacking under the top clip...          ", end="\r")
             assembled = compose_top(top, assembled, cfg, total, workdir)
             total = top_length(top, total)
+        if cap_lines:
+            print("  laying the captions over...             ", end="\r")
+            assembled = add_captions(assembled, cap_lines, cap, cfg, base_dir, total, workdir)
         if cards:
             print("  laying the title and end card over...    ", end="\r")
             assembled = add_cards(assembled, cards, times, cfg, base_dir, total, workdir)
         print("  mixing sound...                         ", end="\r")
-        finish(assembled, cfg, base_dir, music_start, total, keep_audio, output)
+        finish(assembled, cfg, base_dir, music_start, total, keep_audio, output, voice)
 
     print(f"Done: {output}                          ")
     if cfg.get("music") and not cfg.get("music_in_video", True):
