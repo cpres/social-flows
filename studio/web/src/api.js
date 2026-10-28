@@ -19,6 +19,8 @@ export const api = {
   home: () => fetch('/api/folders').then(json),
   folder: (name) => fetch(`/api/folders/${enc(name)}`).then(json),
   folderToReel: (name, reelName) => send('POST', `/api/folders/${enc(name)}/to-reel`, { name: reelName }),
+  // Move files to another shoot folder: { files, to, create } -> { folder, moved, failed, emptied }.
+  moveFiles: (name, body) => send('POST', `/api/folders/${enc(name)}/move`, body),
 
   reels: () => fetch('/api/reels').then(json),
   reel: (id) => fetch(`/api/reels/${id}`).then(json),

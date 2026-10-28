@@ -279,6 +279,71 @@ def folder_to_reel(name: str, body: dict = Body(default={})):
     return {"id": reel_id}
 
 
+@app.post("/api/folders/{name}/move")
+def move_files(name: str, body: dict = Body(...)):
+    """Move clips and photos from this shoot folder into another one.
+
+    {files: [names], to: "2026-10-06 garden", create: true}
+
+    Each file keeps its id, so its parts in reels follow it. A folder left
+    with nothing in it is removed.
+    """
+    src = resolve(name)
+    to = (body.get("to") or "").strip()
+    if not folder_name_ok(to):
+        raise HTTPException(400, "Give the folder a name (no slashes or colons)")
+    if to == name:
+        raise HTTPException(400, "That's the folder they're already in")
+    paths = [resolve(name, f) for f in body.get("files") or []]
+    if not paths:
+        raise HTTPException(400, "Pick at least one file to move")
+    dest = ROOT / to
+    if body.get("create"):
+        if dest.exists():
+            raise HTTPException(409, f"There's already a folder called '{to}'")
+        dest.mkdir()
+    elif not dest.is_dir():
+        raise HTTPException(404, f"No folder called '{to}'")
+
+    lib.scan([src])   # so every file has its row before it moves
+    moved, failed = [], []
+    for p in paths:
+        try:
+            if p.parent != src or not lib.kind_of(p):
+                raise ValueError("not a clip or photo in this folder")
+            target = dest / p.name
+            with lib.connect() as db:
+                # A different file with the same name, or a row kept for one
+                # that went missing (its reel parts wait for it): another name.
+                taken = lambda t: t.exists() or db.execute(
+                    "SELECT 1 FROM media WHERE path = ?", (t.relative_to(ROOT).as_posix(),)).fetchone()
+                n = 2
+                while taken(target):
+                    target = dest / f"{p.stem} ({n}){p.suffix}"
+                    n += 1
+                shutil.move(str(p), str(target))
+                db.execute("UPDATE media SET path = ?, folder = ?, name = ?, mtime = ?, missing = 0 "
+                           "WHERE path = ?", (target.relative_to(ROOT).as_posix(), to, target.name,
+                                              target.stat().st_mtime, p.relative_to(ROOT).as_posix()))
+            moved.append(target.name)
+        except Exception as e:   # one bad file shouldn't stop the rest
+            failed.append({"name": p.name, "error": str(e)})
+    lib.scan([src, dest])
+
+    # Nothing left but Finder's .DS_Store: the folder was all a mistake.
+    emptied = False
+    if all(p.name == ".DS_Store" for p in src.iterdir()):
+        for p in src.iterdir():
+            p.unlink()
+        src.rmdir()
+        emptied = True
+        with lib.connect() as db:
+            db.execute("DELETE FROM weave_drafts WHERE key = ?", (draft_key(folder=name),))
+    if not moved and body.get("create") and not any(dest.iterdir()):
+        dest.rmdir()
+    return {"folder": to, "moved": moved, "failed": failed, "emptied": emptied}
+
+
 # ---------------------------------------------------------------- reels
 
 @app.get("/api/reels")

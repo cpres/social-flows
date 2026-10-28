@@ -54,6 +54,12 @@ python3 studio/server.py --open
   Downloads. `DOWNLOADS_DIR` points it somewhere else. If what came in is two
   or more videos (or one of 15s or more), the shoot page offers to **weave** them
   (below).
+- **Imported into the wrong folder?** The shoot page says what just came in,
+  with *Move them* next to it. Any time, *↪ Move files* in a shoot's header
+  puts checkboxes on the clip list (*All* / *None*, `Esc` to stop); pick some
+  and move them to another shoot folder or a new one. Their parts in reels
+  come along, a name clash gets ` (2)` added, and a folder left empty is
+  removed (you're taken to where everything went).
 - **Open a shoot** to go through its clips in the order they were shot. Under the
   video, a filmstrip shows what happens where; drag the handles to pick a part,
   or type exact start and length. Then click a reel (or press `1`–`9`) to add
@@ -271,7 +277,8 @@ between rounds. People and animals are found by macOS's own Vision framework
 unless you pick, and bursts still work. What it finds is cached per photo.
 
 Everything is stored in one SQLite file, `~/Footage/.studio/studio.db`
-(no database server to run). Files are never copied or moved. If you rename a
+(no database server to run). Files are never copied, and only moved when you
+say so (Import, *Move files*). If you rename a
 file or move it to another shoot folder, it relinks automatically (matched on
 size and capture time).
 

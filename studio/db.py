@@ -10,7 +10,7 @@ The studio's library: one SQLite file at ~/Footage/.studio/studio.db.
     songs       a name, artist and categories given to a song in the music
                 folder (by file name), over what the file itself says
 
-Files are never moved or copied. Each media row remembers size and capture
+Files are only moved when asked (Import, Move files). Each media row remembers size and capture
 time, so a file that is renamed or moved to another shoot folder is relinked
 instead of dropping out of its reels.
 """

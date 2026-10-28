@@ -19,7 +19,19 @@
       <button class="btn" @click="folderToReel" title="Make a reel from everything in this folder">
         {{ hasSidecar ? 'Turn earlier trims into a reel' : 'Make a reel from this folder' }}
       </button>
+      <button
+        class="btn" :class="{ active: picking }" @click="picking ? stopPicking() : startPicking()" :disabled="!media.length"
+        title="Move clips or photos into another shoot folder"
+      >↪ Move files</button>
     </section>
+    <p v-if="imported?.length && !picking" class="justin muted">
+      Just imported {{ imported.length }} file{{ imported.length === 1 ? '' : 's' }} here.
+      Wrong folder? <button class="link" @click="startPicking(imported)">Move {{ imported.length === 1 ? 'it' : 'them' }}</button>
+    </p>
+    <p v-if="movedTo" class="justin">
+      Moved {{ movedTo.count }} file{{ movedTo.count === 1 ? '' : 's' }} to
+      <RouterLink :to="`/shoot/${encodeURIComponent(movedTo.folder)}`">{{ folderTitle(movedTo.folder) }}</RouterLink>.
+    </p>
     <WeavePrompt
       v-if="offer" :videos="offer.videos" :long="offer.long" :photos="offer.photos" :draft="!!draftAt"
       @weave="weave" @dismiss="dismissOffer"
@@ -27,6 +39,14 @@
 
     <div class="workspace" v-if="media.length">
       <aside class="cliplist" ref="listEl">
+        <div v-if="picking" class="pickbar">
+          <span><b>{{ picked.size }}</b> picked ·
+            <button class="link" @click="pickAll(true)">All</button> ·
+            <button class="link" @click="pickAll(false)">None</button></span>
+          <span class="spacer"></span>
+          <button class="btn small" @click="stopPicking">Cancel</button>
+          <button class="btn small primary" :disabled="!picked.size" @click="moving = true">Move {{ picked.size || '' }}…</button>
+        </div>
         <button class="refresh" @click="reload" :disabled="refreshing" title="Look for new clips in this folder">
           ↻ {{ refreshing ? 'Checking…' : 'Check for new clips' }}
           <span v-if="newCount" class="new">+{{ newCount }} new</span>
@@ -36,8 +56,11 @@
           :thumb-time="m.kind === 'video' ? draftOf(m).start : 0"
           :sub="clockTime(m.capturedAt)"
           :dots="partsOf(m.id).map((p) => ({ color: reelColor(p.reelId), label: reelName(p.reelId) }))"
-          :selected="i === selected" :used="partsOf(m.id).length > 0" @select="select(i)"
-        />
+          :selected="!picking && i === selected" :used="partsOf(m.id).length > 0"
+          @select="picking ? togglePick(m.id) : select(i)"
+        >
+          <input v-if="picking" type="checkbox" class="pickbox" :checked="picked.has(m.id)" tabindex="-1" />
+        </ClipCard>
         <button class="refresh" @click="reload" :disabled="refreshing" title="Look for new clips in this folder">
           ↻ {{ refreshing ? 'Checking…' : 'Check for new clips' }}
         </button>
@@ -144,6 +167,10 @@
       </section>
     </div>
     <p v-else class="muted">No clips or photos in this folder.</p>
+    <MoveDialog
+      v-if="moving" :from="name" :files="media.filter((m) => picked.has(m.id))"
+      :all="picked.size === media.length" @close="moving = false" @moved="moved"
+    />
   </main>
 </template>
 
@@ -155,6 +182,7 @@ import { usePlayer } from '../player'
 import { useRefreshOnFocus } from '../refresh'
 import { clockTime, defaultStart, fitRange, fmtTime, folderTitle, reelColor, savedAt } from '../time'
 import ClipCard from '../components/ClipCard.vue'
+import MoveDialog from '../components/MoveDialog.vue'
 import ReelFrame from '../components/ReelFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
 import TrimBar from '../components/TrimBar.vue'
@@ -405,6 +433,46 @@ async function folderToReel() {
   }
 }
 
+// ---------------------------------------------------------------- moving
+
+// Pick files in the list, then move them to another shoot folder (say, after
+// importing a day into the wrong one). Their parts in reels follow them.
+const picking = ref(false)
+const picked = ref(new Set())   // media ids
+const moving = ref(false)
+const movedTo = ref(null)       // { folder, count } after a move
+
+function startPicking(files) {
+  // Straight after an import, those files; else the clip you're on.
+  const ids = files ? media.value.filter((m) => files.includes(m.file)).map((m) => m.id) : [current.value?.id]
+  picked.value = new Set(ids.filter(Boolean))
+  picking.value = true
+  movedTo.value = null
+}
+function stopPicking() {
+  picking.value = false
+  picked.value = new Set()
+}
+function togglePick(id) {
+  const s = new Set(picked.value)
+  s.has(id) ? s.delete(id) : s.add(id)
+  picked.value = s
+}
+const pickAll = (on) => { picked.value = new Set(on ? media.value.map((m) => m.id) : []) }
+
+async function moved(r) {
+  moving.value = false
+  stopPicking()
+  if (imported.value) dismissOffer()
+  if (r.emptied) {
+    // Nothing left here: go to where everything went.
+    router.replace(`/shoot/${encodeURIComponent(r.folder)}`)
+    return
+  }
+  movedTo.value = { folder: r.folder, count: r.moved.length }
+  await reload()
+}
+
 let flashTimer
 function showFlash(text) {
   flash.value = text
@@ -426,7 +494,7 @@ function onKey(e) {
   else if (k === 'ArrowUp') select(selected.value - 1)
   else if (k === 'ArrowLeft' && video) { setRange({ ...range.value, start: range.value.start - (e.shiftKey ? 1 : 0.1) }); player.seek(range.value.start) }
   else if (k === 'ArrowRight' && video) { setRange({ ...range.value, start: range.value.start + (e.shiftKey ? 1 : 0.1) }); player.seek(range.value.start) }
-  else if (k === 'Escape') activeId.value = null
+  else if (k === 'Escape') picking.value ? stopPicking() : (activeId.value = null)
   else if (k === 'g' || k === 'G') guides.value = !guides.value
   else if (/^[1-9]$/.test(k) && !active.value && reels.value[Number(k) - 1]) tag(reels.value[Number(k) - 1])
   else return
@@ -444,6 +512,17 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   background: var(--forest); color: var(--cream);
 }
 .key { opacity: 0.55; }
+.justin { margin: 6px 0 0; font-size: 14px; }
+.justin a { font-weight: 600; text-decoration: underline; }
+.pickbar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px; margin-bottom: 4px;
+  border-radius: 8px; background: var(--sage-soft); font-size: 13px; position: sticky; top: 0; z-index: 1;
+}
+.pickbox { accent-color: var(--forest); width: 18px; height: 18px; margin: 0; pointer-events: none; }
+.link {
+  border: 0; background: none; padding: 0; color: var(--forest); font-weight: 600;
+  cursor: pointer; font-size: inherit; text-decoration: underline; text-underline-offset: 2px;
+}
 .flash { margin: 10px 0 0; font-size: 13px; color: var(--forest); }
 .editing {
   margin: -16px 0 18px; padding: 8px 12px; border-left: 4px solid; background: var(--paper);
