@@ -54,7 +54,7 @@
         <ClipCard
           v-for="(m, i) in media" :key="m.id" :media="m"
           :thumb-time="m.kind === 'video' ? draftOf(m).start : 0"
-          :sub="clockTime(m.capturedAt)"
+          :sub="clockTime(m.capturedAt) + (kept.has(m.id) ? ' · picked' : '')"
           :dots="partsOf(m.id).map((p) => ({ color: reelColor(p.reelId), label: reelName(p.reelId) }))"
           :selected="!picking && i === selected" :used="partsOf(m.id).length > 0"
           @select="picking ? togglePick(m.id) : select(i)"
@@ -111,7 +111,12 @@
         <TimingFields
           :kind="current.kind" :start="range.start" :length="range.length"
           :duration="current.duration" @update="setRange"
-        />
+        >
+          <p v-if="!active && kept.has(current.id)" class="muted kept">
+            Kept for this file: reels and Weave start from this pick.
+            <button class="link" @click="resetPick">Reset</button>
+          </p>
+        </TimingFields>
 
         <div class="panel" v-if="current.kind === 'video'">
           <h3>Layout</h3>
@@ -199,7 +204,8 @@ const hasSidecar = ref(false)
 const draftAt = ref(null)      // a Weave draft for this shoot, saved then
 const selected = ref(0)
 const activeId = ref(null)     // a saved part being edited, or null for a new selection
-const drafts = reactive({})    // mediaId -> { start, length } not yet in any reel
+const drafts = reactive({})    // mediaId -> { start, length, ... } picked here, kept on the server
+const kept = reactive(new Set())  // mediaIds whose pick is saved
 const loading = ref(true)
 const error = ref('')
 const flash = ref('')
@@ -221,8 +227,15 @@ const segments = computed(() =>
 
 const DEFAULT_LENGTH = 2   // seconds, for a new selection on a video
 
-// A fresh selection per clip, where the engine would cut by default.
+// A clip's selection: the one picked here before, else a fresh one where
+// the engine would cut by default.
 function initDraft(m) {
+  if (m.pick) {
+    drafts[m.id] = { ...m.pick }
+    kept.add(m.id)
+    return
+  }
+  kept.delete(m.id)
   const length = m.kind === 'video' ? Math.min(DEFAULT_LENGTH, m.duration || DEFAULT_LENGTH) : 1.6
   drafts[m.id] = { start: m.kind === 'video' ? defaultStart(m.duration, length) : 0, length, focusX: 0.5, focusY: 0.5, zoom: 1, layout: '' }
 }
@@ -230,6 +243,8 @@ const draftOf = (m) => (m && drafts[m.id]) || { start: 0, length: DEFAULT_LENGTH
 const guides = ref(false)
 
 const saver = debouncedSaver((id, patch) => api.updateItem(id, patch))
+// A pick is saved whole, so it's there next time and when the file goes into a reel.
+const pickSaver = debouncedSaver((id) => api.savePick(id, drafts[id]).catch((e) => showFlash(e.message)))
 
 const refreshing = ref(false)
 const newCount = ref(0)
@@ -260,7 +275,7 @@ async function reload() {
   if (refreshing.value || loading.value) return
   refreshing.value = true
   try {
-    await saver.flushAll()
+    await Promise.all([saver.flushAll(), pickSaver.flushAll()])
     const keep = current.value?.id
     const before = new Set(media.value.map((m) => m.id))
     const data = await api.folder(props.name)
@@ -276,7 +291,7 @@ async function reload() {
   }
 }
 useRefreshOnFocus(reload)
-onBeforeUnmount(() => saver.flushAll())
+onBeforeUnmount(() => { saver.flushAll(); pickSaver.flushAll() })
 
 // ---------------------------------------------------------------- selection
 
@@ -307,24 +322,14 @@ function setRange({ start, length }) {
   const r = current.value.kind === 'video'
     ? fitRange(start, length, current.value.duration)
     : { start: 0, length: Math.max(0.2, Math.round(length * 100) / 100) }
-  if (active.value) {
-    Object.assign(active.value, r)
-    saver.queue(active.value.id, r)
-  } else {
-    Object.assign(draftOf(current.value), r)
-  }
+  patchRange(r)
 }
 
 // Where the 9:16 window sits in a frame that isn't 9:16.
 function setFocus({ x, y, zoom }) {
   const patch = { focusX: x, focusY: y }
   if (zoom !== undefined) patch.zoom = zoom
-  if (active.value) {
-    Object.assign(active.value, patch)
-    saver.queue(active.value.id, patch)
-  } else {
-    Object.assign(draftOf(current.value), patch)
-  }
+  patchRange(patch)
 }
 
 function setIn() {
@@ -350,12 +355,31 @@ const LAYOUTS = [
 function setLayout(v) {
   patchRange({ layout: v === 'fill' ? '' : v })
 }
+// A change to a saved part saves to it; else it's the file's pick, kept for next time.
 function patchRange(patch) {
   if (active.value) {
     Object.assign(active.value, patch)
     saver.queue(active.value.id, patch)
   } else {
-    Object.assign(draftOf(current.value), patch)
+    const m = current.value
+    if (!drafts[m.id]) initDraft(m)
+    Object.assign(drafts[m.id], patch)
+    kept.add(m.id)
+    pickSaver.queue(m.id, {})
+  }
+}
+
+// Back to the default selection, forgetting the pick.
+async function resetPick() {
+  const m = current.value
+  await pickSaver.flushAll()
+  try {
+    await api.deletePick(m.id)
+    initDraft({ ...m, pick: null })
+    m.pick = null
+    player.seek(range.value.start)
+  } catch (e) {
+    showFlash(e.message)
   }
 }
 
@@ -523,6 +547,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   border: 0; background: none; padding: 0; color: var(--forest); font-weight: 600;
   cursor: pointer; font-size: inherit; text-decoration: underline; text-underline-offset: 2px;
 }
+.kept { margin: 0; font-size: 12px; flex-basis: 100%; }
 .flash { margin: 10px 0 0; font-size: 13px; color: var(--forest); }
 .editing {
   margin: -16px 0 18px; padding: 8px 12px; border-left: 4px solid; background: var(--paper);

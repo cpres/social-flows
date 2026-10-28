@@ -53,6 +53,9 @@ export const api = {
   // Name a song and put it in categories: { title, artist, categories }; returns the shelf.
   saveSong: (name, info) => send('PUT', `/api/music/${enc(name)}/info`, info),
 
+  // The part of a file picked in its shoot, kept until it's changed (see db.py).
+  savePick: (mediaId, pick) => send('PUT', `/api/media/${mediaId}/pick`, pick),
+  deletePick: (mediaId) => send('DELETE', `/api/media/${mediaId}/pick`),
   addItem: (reelId, item) => send('POST', `/api/reels/${reelId}/items`, item),
   updateItem: (id, patch) => send('PATCH', `/api/items/${id}`, patch),
   deleteItem: (id) => send('DELETE', `/api/items/${id}`),

@@ -66,6 +66,12 @@ python3 studio/server.py --open
   that part to it. Move the selection and add again to use another part of the
   same clip, in the same reel or a different one. Photos toggle in and out of
   reels with one click.
+- **Picks are kept.** The part you pick of a file (start, length, framing,
+  zoom, layout) is saved as you go, even before it's in any reel: it's there
+  when you open the shoot again (marked *picked* in the list), and it's where
+  the file starts out when it's added to a reel, made into one with *Make a
+  reel from this folder*, or woven (as one part, which you can add to).
+  *Reset* under the lengths forgets it.
 - Coloured marks under the filmstrip show every part of that clip already in a
   reel; click one (or *Edit* in the list below) to adjust it.
 - **Play reel** (`Space` in a reel) plays every kept part in order, cropped

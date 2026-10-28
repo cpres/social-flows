@@ -104,6 +104,17 @@ def item_dict(row):
             "zoom": row["zoom"], "layout": row["layout"]}
 
 
+def pick_dict(row):
+    return {"start": row["start"], "length": row["length"], "focusX": row["focus_x"],
+            "focusY": row["focus_y"], "zoom": row["zoom"], "layout": row["layout"]}
+
+
+def pick_of(db, media_id):
+    """The part of a file picked in its shoot (see db.py), or None."""
+    row = db.execute("SELECT * FROM picks WHERE media_id = ?", (media_id,)).fetchone()
+    return pick_dict(row) if row else None
+
+
 def top_item(db, reel_id, s):
     """A Stack reel's top clip: its pinned row, if that's still a video here."""
     if s.get("format") != "stack" or not s.get("topItemId"):
@@ -229,6 +240,10 @@ def get_folder(name: str):
     with lib.connect() as db:
         media = [media_dict(r) for r in db.execute(
             "SELECT * FROM media WHERE folder = ? AND missing = 0 ORDER BY captured_at", (name,))]
+        picks = {r["media_id"]: pick_dict(r) for r in db.execute(
+            "SELECT p.* FROM picks p JOIN media m ON m.id = p.media_id WHERE m.folder = ?", (name,))}
+        for m in media:
+            m["pick"] = picks.get(m["id"])
         items = [item_dict(r) for r in db.execute("""
             SELECT i.id AS item_id, i.* FROM reel_items i JOIN media m ON m.id = i.media_id
             WHERE m.folder = ? ORDER BY i.start""", (name,))]
@@ -268,14 +283,19 @@ def folder_to_reel(name: str, body: dict = Body(default={})):
             s = saved.get(m["name"], {})
             if not s.get("keep", True):
                 continue
+            # An old trim wins; else the part picked in the shoot; else the default.
+            pick = pick_of(db, m["id"]) or {}
             if m["kind"] == "video":
-                length = float(s.get("length", min(settings["defaultLength"], m["duration"])))
-                start = float(s.get("start", default_start(m["duration"], length)))
+                length = float(s.get("length", pick.get("length", min(settings["defaultLength"], m["duration"]))))
+                start = float(s.get("start", pick.get("start", default_start(m["duration"], length))))
+                start, length = fit(start, length, m["duration"])
             else:
-                length, start = float(s.get("length", settings["defaultHold"])), 0.0
-            db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length) "
-                       "VALUES (?, ?, ?, ?, ?)",
-                       (reel_id, lib.original_of(db, m["id"]), pos, start, length))
+                length, start = float(s.get("length", pick.get("length", settings["defaultHold"]))), 0.0
+            db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length, "
+                       "focus_x, focus_y, zoom, layout) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                       (reel_id, lib.original_of(db, m["id"]), pos, start, length,
+                        pick.get("focusX", 0.5), pick.get("focusY", 0.5), pick.get("zoom", 1),
+                        pick.get("layout", "") if m["kind"] == "video" else ""))
     return {"id": reel_id}
 
 
@@ -429,8 +449,10 @@ def reorder(reel_id: int, body: dict = Body(...)):
 
 # ---------------------------------------------------------------- items
 
-def item_values(m, body, s):
-    """A part's columns from a request body, kept in range (m: its media row)."""
+def item_values(m, body, s, pick=None):
+    """A part's columns from a request body, kept in range (m: its media row).
+    What the body leaves out comes from the file's pick, if it has one."""
+    body = {**(pick or {}), **{k: v for k, v in body.items() if v is not None}}
     if m["kind"] == "video":
         length = float(body.get("length") or min(s["defaultLength"], m["duration"]))
         start = body.get("start")
@@ -459,7 +481,7 @@ def add_item(reel_id: int, body: dict = Body(...)):
         m = db.execute("SELECT * FROM media WHERE id = ?", (body.get("mediaId"),)).fetchone()
         if not m:
             raise HTTPException(404, "No such clip")
-        values = item_values(m, body, settings_of(r))
+        values = item_values(m, body, settings_of(r), pick_of(db, m["id"]))
         values["position"] = db.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM reel_items "
                                         "WHERE reel_id = ?", (reel_id,)).fetchone()[0]
         cols = ", ".join(values)
@@ -499,7 +521,7 @@ def set_items(reel_id: int, body: dict = Body(...)):
                 db.execute(f"UPDATE reel_items SET {sets} WHERE id = :id", {**values, "id": item_id})
                 keep.add(item_id)
             else:
-                values = {**item_values(m, body_item, s), "position": pos}
+                values = {**item_values(m, body_item, s, pick_of(db, m["id"])), "position": pos}
                 cur = db.execute(f"INSERT INTO reel_items (reel_id, {', '.join(values)}) VALUES (:reel_id, "
                                  f"{', '.join(':' + k for k in values)})", {**values, "reel_id": reel_id})
                 keep.add(cur.lastrowid)
@@ -544,6 +566,28 @@ def update_item(item_id: int, body: dict = Body(...)):
         sets = ", ".join(f"{k} = :{k}" for k in fields)
         db.execute(f"UPDATE reel_items SET {sets} WHERE id = :id", {**fields, "id": item_id})
         touch(db, row["reel_id"])
+    return {"ok": True}
+
+
+@app.put("/api/media/{media_id}/pick")
+def save_pick(media_id: int, body: dict = Body(...)):
+    """Keep the part of a file picked in its shoot: {start, length, focusX, focusY, zoom, layout}."""
+    with lib.connect() as db:
+        m = db.execute("SELECT * FROM media WHERE id = ?", (media_id,)).fetchone()
+        if not m:
+            raise HTTPException(404, "No such clip")
+        v = item_values(m, body, DEFAULT_SETTINGS)
+        db.execute("INSERT OR REPLACE INTO picks (media_id, start, length, focus_x, focus_y, zoom, "
+                   "layout, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                   (media_id, v["start"], v["length"], v["focus_x"], v["focus_y"], v["zoom"],
+                    v["layout"] if m["kind"] == "video" else "", now()))
+        return pick_of(db, media_id)
+
+
+@app.delete("/api/media/{media_id}/pick")
+def delete_pick(media_id: int):
+    with lib.connect() as db:
+        db.execute("DELETE FROM picks WHERE media_id = ?", (media_id,))
     return {"ok": True}
 
 

@@ -580,10 +580,16 @@ const rounds = computed(() => Math.max(1, ...videos.value.map((c) => c.parts.len
 const videoNumber = (c) => videos.value.indexOf(c) + 1
 const thumbOf = (c) => api.thumb(c.media.folder, c.media.file, c.kind === 'video' ? c.media.duration * 0.3 : 0, 320)
 
+// A file with a part picked in its shoot starts as that part, framed as it was
+// (more can be added); the rest are cut where the pace puts them.
 function newClip(m, on) {
   const c = { mediaId: m.id, media: m, kind: m.kind, on, auto: true, placed: false, framed: false,
               parts: [], focusX: 0.5, focusY: 0.5, zoom: 1 }
-  if (c.kind === 'video') c.parts = spreadStarts(m.duration, autoParts(m.duration, pace.splitOver, len.value), len.value).map((start) => ({ start }))
+  const pick = m.pick
+  if (pick) Object.assign(c, { framed: true, focusX: pick.focusX, focusY: pick.focusY, zoom: pick.zoom || 1 })
+  if (c.kind === 'video' && pick) Object.assign(c, { auto: false, placed: true, parts: [{ start: pick.start, length: pick.length }] })
+  else if (c.kind === 'video') c.parts = spreadStarts(m.duration, autoParts(m.duration, pace.splitOver, len.value), len.value).map((start) => ({ start }))
+  else if (pick && Math.abs(pick.length - 1.6) >= 0.05) c.hold = { length: pick.length }
   return c
 }
 
