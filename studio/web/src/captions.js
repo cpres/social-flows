@@ -97,13 +97,83 @@ export function voiceTimeline(pieces) {
       const ls = Math.max(l.s, start)
       const le = Math.min(l.e, end)
       if (le - ls < 0.05 || !String(l.text || '').trim()) continue
+      const hits = fx.filter((f) => Math.min(f.e, l.e) - Math.max(f.s, l.s) > 0.1)
+        .map((f) => ({ effect: f.effect, amount: f.amount || 1, start: t + f.s - start, end: t + f.e - start,
+                       words: wordsHit(l, f.s, f.e) }))
       out.lines.push({ start: t + ls - start, end: t + le - start, text: String(l.text).trim().replace(/\s+/g, ' '),
-                       stanza: !!l.br, pieceId: p.id, index: i })
+                       stanza: !!l.br, pieceId: p.id, index: i, fx: hits })
     }
     t += end - start
   }
   out.end = out.pieces.length ? Math.max(t, out.end) : 0   // or later, while an echo rings
   return out
+}
+
+// Which of a line's words (first, last index) are said between s and e in
+// the take: by the transcript's word times while the text still matches,
+// else all of them (as the server's words_hit).
+export function wordsHit(l, s, e) {
+  const text = String(l.text).trim().replace(/\s+/g, ' ')
+  const w = l.words || []
+  if (w.length && w.map((x) => x[0]).join(' ') === text) {
+    const hit = w.map((x, i) => (x[2] > s + 0.02 && x[1] < e - 0.02 ? i : -1)).filter((i) => i >= 0)
+    if (hit.length) return [hit[0], hit[hit.length - 1]]
+  }
+  return [0, text.split(' ').length - 1]
+}
+
+// When an effect hits, its words show it: copies under them, offset,
+// blurred or moving in time with the sound (montage.py emphasis_specs).
+// Here they're CSS text-shadows, in cqw.
+export function emphasisSpecs(f) {
+  const a = f.amount || 1
+  const { start: fs, end: fe } = f
+  const base = { dx: 0, dy: 0, blur: 0, glow: false }
+  if (f.effect === 'echo') {
+    return [[1, 0.5], [2, 0.3], [3, 0.18]].map(([k, dec]) => ({
+      ...base, t0: fs + k * ECHO_GAP, t1: fe + k * ECHO_GAP, fi: 0.06, fo: 0.35,
+      dx: 0.5 * k, dy: 0.9 * k, blur: 0.2 * k, alpha: Math.min(0.9, dec * a * 1.6),
+    }))
+  }
+  if (f.effect === 'hall') {
+    const tail = fxTail('hall', a)
+    const span = { t0: fs, t1: fe + 0.8 * tail, fi: 0.25, fo: 0.6 * tail }
+    return [{ ...base, ...span, blur: 3, glow: true, alpha: Math.min(1, 0.7 + 0.2 * a) },
+            { ...base, ...span, blur: 1, glow: true, alpha: Math.min(1, 0.5 + 0.2 * a) }]
+  }
+  if (f.effect === 'waver') {
+    const amp = 0.45 + 0.25 * a
+    return [{ ...base, t0: fs, t1: fe, fi: 0.1, fo: 0.1, blur: 0.2, alpha: 0.7,
+              move: (t) => [(amp / 2) * Math.cos(2 * Math.PI * 5 * (t - fs)), amp * Math.sin(2 * Math.PI * 5 * (t - fs))] }]
+  }
+  if (f.effect === 'pulse') {
+    const span = { t0: fs, t1: fe, fi: 0.1, fo: 0.1, glow: true, pulse: (t) => 0.6 + 0.4 * Math.sin(2 * Math.PI * 6 * (t - fs)) }
+    return [{ ...base, ...span, blur: 2, alpha: 1 }, { ...base, ...span, blur: 0.6, alpha: Math.min(1, 0.5 + 0.3 * a) }]
+  }
+  const width = 1 + 0.4 * a   // doubled
+  return [[1, 0], [-1, 3.1416]].map(([sign, phase]) => ({
+    ...base, t0: fs, t1: fe, fi: 0.15, fo: 0.15, blur: 0.15, alpha: 0.5,
+    move: (t) => [sign * width * (0.45 + 0.3 * Math.sin(2 * Math.PI * 0.9 * (t - fs) + phase)), 0],
+  }))
+}
+
+const FX_GLOW = '246 223 168'
+// The text-shadows for words with these effects at time t ('' when none show).
+export function emphasisShadow(fxs, t, paper) {
+  const ink = paper ? '45 62 38' : '247 241 227'
+  const out = []
+  for (const f of fxs) {
+    for (const e of emphasisSpecs(f)) {
+      const span = e.t1 - e.t0
+      let v = envelope(t, e.t0, e.t1, Math.min(e.fi, span / 2), Math.min(e.fo, span / 2)) * e.alpha
+      if (e.pulse) v *= e.pulse(t)
+      if (v <= 0.002) continue
+      const [mx, my] = e.move ? e.move(t) : [0, 0]
+      const color = e.glow ? (paper ? '45 62 38' : FX_GLOW) : ink
+      out.push(`${(e.dx + mx).toFixed(3)}cqw ${(e.dy + my).toFixed(3)}cqw ${e.blur}cqw rgb(${color} / ${v.toFixed(3)})`)
+    }
+  }
+  return out.join(', ')
 }
 
 // The song's volume at reel time t with a voice: `between`, dipping to

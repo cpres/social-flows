@@ -17,6 +17,7 @@ DOWNLOADS_DIR is where AirDrop drops things, for Import (default ~/Downloads).
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -1027,6 +1028,19 @@ def build_config(reel, rows):
     return cfg
 
 
+def words_hit(line, start, end):
+    """Which of a caption line's words (first, last index) are said between
+    start and end in the take: by the transcript's word times while the text
+    still matches them, else all of them. As captions.js."""
+    text = " ".join(str(line["text"]).split())
+    words = line.get("words") or []
+    if words and " ".join(w[0] for w in words) == text:
+        hit = [i for i, w in enumerate(words) if w[2] > start + 0.02 and w[1] < end - 0.02]
+        if hit:
+            return [hit[0], hit[-1]]
+    return [0, len(text.split()) - 1]
+
+
 def voice_timeline(s):
     """A reel's voice pieces placed one after another (each after its breath),
     and their caption lines, on the reel's clock. Same as captions.js."""
@@ -1045,8 +1059,15 @@ def voice_timeline(s):
             ls, le = max(float(l["s"]), start), min(float(l["e"]), end)
             if le - ls < 0.05 or not str(l.get("text", "")).strip():
                 continue
-            lines.append({"start": round(t + ls - start, 3), "end": round(t + le - start, 3),
-                          "text": " ".join(str(l["text"]).split()), "stanza": bool(l.get("br"))})
+            line = {"start": round(t + ls - start, 3), "end": round(t + le - start, 3),
+                    "text": " ".join(str(l["text"]).split()), "stanza": bool(l.get("br"))}
+            if s.get("captionFx", True):
+                hits = [{**f, "start": round(t + f["start"] - start, 3), "end": round(t + f["end"] - start, 3),
+                         "words": words_hit(l, f["start"], f["end"])}
+                        for f in fx if min(f["end"], l["e"]) - max(f["start"], l["s"]) > 0.1]
+                if hits:
+                    line["fx"] = hits
+            lines.append(line)
         t += end - start
     return pieces, lines
 
@@ -1136,9 +1157,18 @@ def caption_preview(reel_id: int, item: int, src: float = 0.0, t: float = 0.0):
     with tempfile.TemporaryDirectory() as tmp:
         for l in montage.caption_layers(cap["lines"], cap, cfg, ENGINE.parent, Path(tmp), 1e9):
             a = layer_alpha(l, t)
+            if l.get("pulse"):
+                hz, t0 = l["pulse"]
+                a *= 0.6 + 0.4 * math.sin(2 * math.pi * hz * (t - t0))
             if a <= 0.001:
                 continue
-            y = l["y"]
+            x, y = l["x"], l["y"]
+            # an effect's moving copy: the same expressions the render uses
+            move = {"cos": math.cos, "sin": math.sin, "PI": math.pi, "t": t, "__builtins__": {}}
+            if l.get("xmove"):
+                x += eval(l["xmove"], move)
+            if l.get("ymove"):
+                y += eval(l["ymove"], move)
             if l.get("drift"):
                 up, away, ga, gb, fi, fo = l["drift"]
                 y += up * max(0, 1 - (t - ga) / max(fi, 0.01)) - away * max(0, 1 - (gb - t) / max(fo, 0.01))
@@ -1148,11 +1178,11 @@ def caption_preview(reel_id: int, item: int, src: float = 0.0, t: float = 0.0):
                 rgb, alpha = l["color"].split("@")
                 im = Image.new("RGBA", l["size"], (*bytes.fromhex(rgb[2:]), round(255 * float(alpha))))
             else:
-                box = (l["x"], round(y), l["x"] + l["size"][0], round(y) + l["size"][1])
+                box = (round(x), round(y), round(x) + l["size"][0], round(y) + l["size"][1])
                 im = frame.crop(box).filter(ImageFilter.GaussianBlur(l["sigma"]))
             im.putalpha(im.getchannel("A").point(lambda v: v * a))
             layer = Image.new("RGBA", frame.size, (0, 0, 0, 0))
-            layer.paste(im, (l["x"], round(y)))
+            layer.paste(im, (round(x), round(y)))
             frame = Image.alpha_composite(frame, layer)
     out = CACHE / f"captions-{reel_id}.jpg"
     frame.convert("RGB").resize((540, 960), Image.LANCZOS).save(out, quality=88)

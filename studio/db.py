@@ -153,6 +153,7 @@ DEFAULT_SETTINGS = {
     "captionBg": "shadow",      # scrim | band | paper | blur | shadow
     "captionSize": 1.0,
     "captionTitle": "",         # Page: a small title over the words
+    "captionFx": True,          # words with a voice effect show it too
 }
 
 

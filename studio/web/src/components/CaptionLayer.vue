@@ -10,7 +10,7 @@
         <span
           v-for="(l, i) in group.lines" :key="`${l.start}-${i}`" class="ln"
           :style="{ opacity: lineOpacity(group.segs[i], t) }"
-        >{{ l.text }}</span>
+        ><span v-for="(r, k) in runs(l)" :key="k" :style="r.fx ? { textShadow: shadowFor(r.fx) } : null">{{ r.text }}</span></span>
       </div>
     </template>
   </div>
@@ -18,7 +18,9 @@
 
 <script setup>
 import { computed } from 'vue'
-import { addCaptionFonts, CAPTION_BOX, captionGroups, envelope, fontFamily, fontOf, lineOpacity, styleOf } from '../captions'
+import {
+  addCaptionFonts, CAPTION_BOX, captionGroups, emphasisShadow, envelope, fontFamily, fontOf, lineOpacity, styleOf,
+} from '../captions'
 
 const props = defineProps({
   lines: { type: Array, default: () => [] },   // on the reel's clock: { start, end, text, stanza }
@@ -28,12 +30,35 @@ const props = defineProps({
   size: { type: Number, default: 1 },
   title: { type: String, default: '' },
   t: { type: Number, default: 0 },
+  fx: { type: Boolean, default: true },          // show voice effects on their words
 })
 addCaptionFonts()
 
 const groups = computed(() => captionGroups(props.lines, props.variant))
 const group = computed(() => groups.value.find((g) => props.t >= g.a && props.t <= g.b) || null)
 const shown = computed(() => (group.value ? envelope(props.t, group.value.a, group.value.b, group.value.fi, group.value.fo) : 0))
+
+// A line in runs of words: plain, or lifted out by effects.
+function runs(l) {
+  if (!props.fx || !l.fx?.length) return [{ text: l.text }]
+  const words = l.text.split(' ')
+  const out = []
+  words.forEach((w, i) => {
+    const hits = l.fx.filter((f) => i >= f.words[0] && i <= f.words[1])
+    const last = out[out.length - 1]
+    const sp = i < words.length - 1 ? ' ' : ''
+    if (last && sameFx(last.fx, hits)) last.text += w + sp
+    else out.push({ text: w + sp, fx: hits.length ? hits : null })
+  })
+  return out
+}
+const sameFx = (a, b) => (a || []).length === b.length && b.every((f, i) => a[i] === f)
+// The effect's copies under the words, plus the line's own shadow where it has one.
+function shadowFor(fxs) {
+  const fx = emphasisShadow(fxs, props.t, props.bg === 'paper')
+  const own = props.bg === 'shadow' || props.bg === 'scrim' ? '0 0.3cqw 2.4cqw rgb(0 0 0 / 55%)' : ''
+  return [fx, own].filter(Boolean).join(', ') || 'none'
+}
 
 const blockStyle = computed(() => {
   const f = fontOf(props.font)

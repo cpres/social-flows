@@ -247,6 +247,10 @@
             <option v-for="z in CAPTION_SIZES" :key="z.v" :value="z.v">{{ z.label }}</option>
           </select>
         </label>
+        <label class="field check fxshow">
+          <span><input type="checkbox" v-model="settings.captionFx" /> Show effects in the words</span>
+          <small>Echo leaves ghosts, hall glows, waver trembles, pulse throbs, doubled drifts.</small>
+        </label>
         <label class="field" v-if="settings.captionStyle === 'page'">
           Title over the words
           <input v-model="settings.captionTitle" placeholder="Planting garlic in October" />
@@ -260,6 +264,7 @@
           <CaptionLayer
             v-if="settings.captions && !rendered" :lines="tl.lines" :variant="settings.captionStyle" :font="settings.captionFont"
             :bg="settings.captionBg" :size="Number(settings.captionSize) || 1" :title="settings.captionTitle || ''" :t="pt"
+            :fx="settings.captionFx !== false"
           />
         </div>
         <div class="pctl">
@@ -633,7 +638,8 @@ async function renderFrame() {
     busyFrame.value = false
   }
 }
-watch(() => [settings.captionStyle, settings.captionFont, settings.captionBg, settings.captionSize, settings.captionTitle],
+watch(() => [settings.captionStyle, settings.captionFont, settings.captionBg, settings.captionSize, settings.captionTitle,
+  settings.captionFx],
   () => { rendered.value = '' })
 </script>
 
@@ -711,6 +717,7 @@ li.gap { height: 8px; padding: 0; }
 .field.check span { display: flex; gap: 6px; align-items: center; color: var(--ink); font-size: 14px; }
 .stylepick { display: flex; gap: 4px; flex-wrap: wrap; }
 .cfields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin: 10px 0 14px; }
+.fxshow { grid-column: 1 / -1; }
 .cpreview { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
 .pframe { position: relative; width: 216px; aspect-ratio: 9 / 16; max-width: 100%; border-radius: 10px; overflow: hidden; background: var(--stage); flex: none; }
 .pframe img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }

@@ -191,6 +191,10 @@ footage, a poem or an idea, with its words on screen as they're said.
   to the voice* waits for it. *Hear it* plays the phrase with its effect;
   the line shows the effect's name, and the voice lane marks where it is.
   *Play reel* plays a rough version; the render does the real thing.
+  With *Show effects in the words* (under Captions, on), the words show it
+  too while it plays: an echo leaves three ghosts stepping down and away, one
+  per repeat; a hall glows warm and lingers while the room rings; waver
+  trembles; pulse throbs; doubled drifts two copies either side.
 - **Sound:** the song sits at *Song under the voice* (15%) while it speaks and
   rises to *Song in the breaths* (30%) around it; *Clean up the voice* cuts low
   rumble and hiss, and each piece is evened out to the same loudness. Adding the

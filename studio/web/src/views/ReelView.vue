@@ -1054,6 +1054,7 @@ const showCaptions = computed(() => reelOn.value && settings.captions !== false 
 const captionProps = computed(() => ({
   lines: voiceTl.value.lines, variant: settings.captionStyle, font: settings.captionFont, bg: settings.captionBg,
   size: Number(settings.captionSize) || 1, title: settings.captionTitle || '', t: reelTime.value ?? 0,
+  fx: settings.captionFx !== false,
 }))
 const laneStyle = (at, length) => ({
   left: `${(at / (reelLength.value || 1)) * 100}%`, width: `${(length / (reelLength.value || 1)) * 100}%`,

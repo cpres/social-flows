@@ -79,10 +79,16 @@ captions:
   title: ""          # page: a small title over the words
   lines:             # on the piece's clock; stanza: true starts a new stanza
     - {start: 0.6, end: 2.6, text: "We push the cloves in, point up,", stanza: true}
-    - {start: 3.6, end: 5.6, text: "two knuckles deep in the cold bed."}
+    - start: 3.6
+      end: 5.6
+      text: "two knuckles deep in the cold bed."
+      fx:              # optional: words 2-6 show an effect from 3.9s
+        - {effect: echo, amount: 1, start: 3.9, end: 5.6, words: [2, 6]}
 ```
 
 An effect plays its words in place of the plain voice: *echo* repeats them three times, fading; *hall* puts them in a big room that rings on after; *waver* makes the pitch tremble; *pulse* makes the voice throb; *doubled* adds two drifting voices just behind. An echo or hall carries on past its words, and `fit` waits for it.
+
+A caption line's `fx` shows a voice effect on its words while it plays (copies under them, like CSS text-shadows): echo, three ghosts stepping down and away, one per repeat; hall, a warm glow that lingers; waver, a trembling copy; pulse, a throbbing glow; doubled, two copies drifting either side.
 
 *stanza* shows the whole stanza with the line being said bright and the rest dim; *unfold* fades lines in as they're said, keeping them until the stanza ends; *breath* shows one line at a time, centred, drifting up as it comes in; *page* sets the lines left on a cream panel under the title. The fonts are the files in `brand/fonts/` (Footage Studio's preview uses the same ones). The captions go over the picture before the title and end card.
 

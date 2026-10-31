@@ -1331,6 +1331,79 @@ def caption_panel_image(lay, width, height, out):
     return out, m
 
 
+# When an effect hits, its words show it too: copies of them under the line,
+# offset, blurred or moving in time with the sound (all in % of the width).
+#   echo     three ghosts stepping down and away, one per repeat
+#   hall     a warm glow that swells and lingers while the room rings
+#   waver    a trembling copy
+#   pulse    a glow that throbs
+#   doubled  two copies drifting either side
+# Each is like a CSS text-shadow; the preview (captions.js emphasis) draws
+# the same ones that way.
+FX_GLOW = (0xf6, 0xdf, 0xa8)
+
+
+def emphasis_specs(f):
+    """The copies an effect puts under its words: [{t0, t1, fi, fo, dx, dy,
+    blur, glow, alpha, xmove, ymove, pulse}]. Moves are ffmpeg expressions in
+    t, in units of CQW (1% of the width). Same numbers as captions.js."""
+    a, fs, fe = f["amount"], f["start"], f["end"]
+    base = {"dx": 0.0, "dy": 0.0, "blur": 0.0, "glow": False}
+    if f["effect"] == "echo":
+        return [{**base, "t0": fs + k * ECHO_GAP, "t1": fe + k * ECHO_GAP, "fi": 0.06, "fo": 0.35,
+                 "dx": 0.5 * k, "dy": 0.9 * k, "blur": 0.2 * k, "alpha": min(0.9, dec * a * 1.6)}
+                for k, dec in ((1, 0.5), (2, 0.3), (3, 0.18))]
+    if f["effect"] == "hall":
+        tail = fx_tail("hall", a)
+        span = {"t0": fs, "t1": fe + 0.8 * tail, "fi": 0.25, "fo": 0.6 * tail}
+        return [{**base, **span, "blur": 3.0, "glow": True, "alpha": min(1.0, 0.7 + 0.2 * a)},
+                {**base, **span, "blur": 1.0, "glow": True, "alpha": min(1.0, 0.5 + 0.2 * a)}]
+    if f["effect"] == "waver":
+        amp = 0.45 + 0.25 * a
+        return [{**base, "t0": fs, "t1": fe, "fi": 0.1, "fo": 0.1, "blur": 0.2, "alpha": 0.7,
+                 "xmove": f"{amp / 2:.3f}*CQW*cos(2*PI*5*(t-{fs:.3f}))",
+                 "ymove": f"{amp:.3f}*CQW*sin(2*PI*5*(t-{fs:.3f}))"}]
+    if f["effect"] == "pulse":
+        span = {"t0": fs, "t1": fe, "fi": 0.1, "fo": 0.1, "glow": True, "pulse": (6, fs)}
+        return [{**base, **span, "blur": 2.0, "alpha": 1.0}, {**base, **span, "blur": 0.6, "alpha": min(1.0, 0.5 + 0.3 * a)}]
+    width = 1.0 + 0.4 * a   # doubled
+    return [{**base, "t0": fs, "t1": fe, "fi": 0.15, "fo": 0.15, "blur": 0.15, "alpha": 0.5,
+             "xmove": f"{sign}*{width:.3f}*CQW*(0.45+0.3*sin(2*PI*0.9*(t-{fs:.3f})+{phase}))"}
+            for sign, phase in ((1, 0), (-1, 3.1416))]
+
+
+def phrase_image(lay, rows, words, e, out):
+    """Just the words from index words[0] to words[1] of a wrapped line, where
+    they sit in it, in the ink (or a warm glow), blurred as asked. Returns
+    (path, margin)."""
+    from PIL import Image, ImageDraw, ImageFilter
+    k = lay["w"] / 1080
+    m = round(80 * k)
+    lead, font = lay["lead"], lay["font"]
+    ascent, descent = font.getmetrics()
+    color = (PAPER_INK if lay["bg"] == "paper" else FX_GLOW) if e["glow"] else lay["ink"]
+    im = Image.new("RGBA", (round(lay["text_w"]) + 2 * m, round(lead * len(rows)) + 2 * m), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    n = 0
+    for r, row in enumerate(rows):
+        ws = row.split()
+        x0 = m + (0 if lay["style"] == "page" else (lay["text_w"] - d.textlength(row, font=font)) / 2)
+        y = m + r * lead + (lead - ascent - descent) / 2
+        for i, word in enumerate(ws):
+            if words[0] <= n <= words[1]:
+                before = " ".join(ws[:i]) + (" " if i else "")
+                d.text((x0 + d.textlength(before, font=font), y), word, font=font, fill=(*color, 255))
+            n += 1
+    mask = im.getchannel("A")
+    if e["blur"]:   # a CSS shadow's blur radius is two standard deviations; blur only
+        # the coverage, so the glow keeps its colour instead of fading to black
+        mask = mask.filter(ImageFilter.GaussianBlur(e["blur"] * lay["w"] / 100 / 2))
+    im = Image.new("RGBA", im.size, (*color, 0))
+    im.putalpha(mask.point(lambda v: v * e["alpha"]))
+    im.save(out)
+    return out, m
+
+
 def caption_layers(lines, cap, cfg, base_dir, workdir, total):
     """Everything to lay over the picture for the captions, in order:
     {kind: png | color | blur, t0, t1, fi, fo, x, y, ...}."""
@@ -1359,7 +1432,22 @@ def caption_layers(lines, cap, cfg, base_dir, workdir, total):
             png = caption_title_image(lay, workdir / "cap-title.png")
             layers.append({"kind": "png", "path": png, "x": round(lay["text_x"]), "y": round(geo["title_y"]), **span})
         drift = lay["style"] == "breath"
-        for (y, rows), segs in zip(geo["lines"], caption_segments(g, lay["style"])):
+        for l, (y, rows), segs in zip(g["lines"], geo["lines"], caption_segments(g, lay["style"])):
+            for f in l.get("fx") or []:   # the words an effect lifts out, under the line itself
+                for e in emphasis_specs(f):
+                    t0, t1 = max(e["t0"], g["a"]), min(e["t1"], g["b"], total)
+                    if t1 - t0 < 0.08:
+                        continue
+                    n += 1
+                    png, m = phrase_image(lay, rows, f["words"], e, workdir / f"cap-fx-{n:03d}.png")
+                    layer = {"kind": "png", "path": png, "x": round(lay["text_x"] + e["dx"] * w / 100) - m,
+                             "y": round(y + e["dy"] * w / 100) - m, "t0": t0, "t1": t1,
+                             "fi": min(e["fi"], (t1 - t0) / 2), "fo": min(e["fo"], (t1 - t0) / 2),
+                             "xmove": e.get("xmove", "").replace("CQW", f"{w / 100:.3f}"),
+                             "ymove": e.get("ymove", "").replace("CQW", f"{w / 100:.3f}"), "pulse": e.get("pulse")}
+                    if drift:
+                        layer["drift"] = (2.2 * w / 100, 1.2 * w / 100, g["a"], g["b"], g["fi"], g["fo"])
+                    layers.append(layer)
             for alpha, t0, t1, fi, fo in segs:
                 if t0 >= total:
                     continue
@@ -1408,13 +1496,22 @@ def add_captions(assembled, lines, cap, cfg, base_dir, total, workdir):
                            f"color=c={l['color']}:s={cw}x{ch}:r={fps},format=rgba"]
             else:
                 inputs += ["-loop", "1", "-framerate", str(fps), "-t", f"{dur:.3f}", "-i", str(l["path"])]
-            graph.append(f"[{idx}:v]format=rgba,{fades}[L{i}]")
-        y = str(l["y"])
+            throb = ""
+            if l.get("pulse"):   # the glow's strength rises and falls
+                hz, t0 = l["pulse"]
+                throb = (f",geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)'"
+                         f":a='alpha(X,Y)*(0.6+0.4*sin(2*PI*{hz}*(T-{t0:.3f})))'")
+            graph.append(f"[{idx}:v]format=rgba,{fades}{throb}[L{i}]")
+        x, y = str(l["x"]), str(l["y"])
         if l.get("drift"):
             up, away, a, b, fi, fo = l["drift"]
-            y = (f"'{l['y']}+{up:.1f}*max(0,1-(t-{a:.3f})/{max(fi, 0.01):.3f})"
-                 f"-{away:.1f}*max(0,1-({b:.3f}-t)/{max(fo, 0.01):.3f})'")
-        graph.append(f"{cur}[L{i}]overlay=x={l['x']}:y={y}:eof_action=pass[c{i}]")
+            y += (f"+{up:.1f}*max(0,1-(t-{a:.3f})/{max(fi, 0.01):.3f})"
+                  f"-{away:.1f}*max(0,1-({b:.3f}-t)/{max(fo, 0.01):.3f})")
+        if l.get("xmove"):
+            x += f"+{l['xmove']}"
+        if l.get("ymove"):
+            y += f"+{l['ymove']}"
+        graph.append(f"{cur}[L{i}]overlay=x='{x}':y='{y}':eof_action=pass[c{i}]")
         cur = f"[c{i}]"
     graph.append(f"{cur}format=yuv420p[v]")
     run(["ffmpeg", "-nostdin", "-y", "-v", "error", *inputs, "-filter_complex", ";".join(graph),
@@ -1428,7 +1525,11 @@ def load_captions(cfg):
     if not cap or not cap.get("lines"):
         return None, None
     lines = [{"start": parse_time(l["start"]), "end": parse_time(l["end"]),
-              "text": str(l.get("text", "")), "stanza": bool(l.get("stanza"))}
+              "text": str(l.get("text", "")), "stanza": bool(l.get("stanza")),
+              "fx": [{"effect": f["effect"], "amount": float(f.get("amount", 1) or 1),
+                      "start": parse_time(f["start"]), "end": parse_time(f["end"]),
+                      "words": [int(i) for i in f.get("words") or [0, 999]]}
+                     for f in l.get("fx") or [] if f.get("effect") in VOICE_FX]}
              for l in cap["lines"] if str(l.get("text", "")).strip()]
     if lines:
         try:
