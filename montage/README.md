@@ -60,7 +60,12 @@ A reading laid over the footage: pieces of one or more takes (audio files, or vi
 voice:
   pieces:
     - {file: "takes/reading take 2.m4a", start: 0.5, end: 11.0, at: 0.5}   # start/end in the take, at = on the piece
-    - {file: "takes/reading take 4.m4a", start: 12.1, end: 22.1, at: 11.6}
+    - file: "takes/reading take 4.m4a"
+      start: 12.1
+      end: 22.1
+      at: 11.6
+      fx:                # optional: phrases (in the take) through an effect
+        - {start: 14.4, end: 16.6, effect: echo, amount: 1}   # echo | hall | waver | pulse | doubled; 0.6 / 1 / 1.4
   fit: true          # the last part holds until the voice ends (+0.8s), then the end card
   clean: true        # highpass and denoise; every piece is loudness-normalised either way
   song_under: 0.15   # the song's volume while the voice speaks
@@ -76,6 +81,8 @@ captions:
     - {start: 0.6, end: 2.6, text: "We push the cloves in, point up,", stanza: true}
     - {start: 3.6, end: 5.6, text: "two knuckles deep in the cold bed."}
 ```
+
+An effect plays its words in place of the plain voice: *echo* repeats them three times, fading; *hall* puts them in a big room that rings on after; *waver* makes the pitch tremble; *pulse* makes the voice throb; *doubled* adds two drifting voices just behind. An echo or hall carries on past its words, and `fit` waits for it.
 
 *stanza* shows the whole stanza with the line being said bright and the rest dim; *unfold* fades lines in as they're said, keeping them until the stanza ends; *breath* shows one line at a time, centred, drifting up as it comes in; *page* sets the lines left on a cream panel under the title. The fonts are the files in `brand/fonts/` (Footage Studio's preview uses the same ones). The captions go over the picture before the title and end card.
 

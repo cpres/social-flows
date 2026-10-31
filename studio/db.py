@@ -138,7 +138,9 @@ DEFAULT_SETTINGS = {
     # A voice track: a reading laid over the footage, made of pieces of takes
     # (audio files or videos in the shoot folders), one after another. Each
     # piece: {id, folder, file, start, end (in the take), gap (the breath
-    # before it), lines: [{s, e, text, br (a stanza starts here), words}]}.
+    # before it), lines: [{s, e, text, br (a stanza starts here), words}],
+    # fx: [{id, s, e, effect, amount}]: a phrase (in the take) played through
+    # echo | hall | waver | pulse | doubled, amount 0.6 / 1 / 1.4}.
     "voice": [],
     "voiceFit": True,       # the last part holds until the voice has finished
     "voiceClean": True,     # cut low rumble and hiss

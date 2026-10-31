@@ -291,6 +291,10 @@
           v-for="p in voiceTl.pieces" :key="p.id" class="vpiece" :style="laneStyle(p.at, p.length)"
           :title="`${p.file} · ${fmtTime(p.at)} → ${fmtTime(p.at + p.length)}`"
         >🎙 {{ p.file }}</div>
+        <div
+          v-for="(f, i) in voiceTl.fx" :key="`fx${i}`" class="vfx" :style="laneStyle(f.start, f.end - f.start)"
+          :title="`${fxInfo(f.effect).label} at ${fmtTime(f.start)}`"
+        >{{ fxInfo(f.effect).icon }}</div>
         <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
       </div>
       <div v-if="voiceTl.lines.length && settings.captions" class="lane clane" @click="seekLane">
@@ -532,7 +536,7 @@ import { usePlayer } from '../player'
 import { fitRange, fmtBeats, fmtTime, folderTitle, parseTime, reelColor, snapBeats } from '../time'
 import { holdLengths, photoStyles, timeline } from '../hold'
 import { songTitle } from '../songs'
-import { songLevel, VOICE_TAIL, voiceTimeline } from '../captions'
+import { fxInfo, songLevel, VOICE_TAIL, voiceTimeline } from '../captions'
 import { useVoicePlayer } from '../voicePlayer'
 import CaptionLayer from '../components/CaptionLayer.vue'
 import VoicePanel from '../components/VoicePanel.vue'
@@ -1547,6 +1551,10 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
   position: absolute; top: 0; bottom: 0; border: 1.5px solid var(--warn); border-radius: 4px; font-size: 10px; font-weight: 600;
   padding: 0 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink); line-height: 17px;
   background: rgb(181 100 45 / 10%);
+}
+.vfx {
+  position: absolute; top: 2px; bottom: 2px; border-radius: 3px; background: rgb(181 100 45 / 45%); color: var(--paper);
+  font-size: 10px; line-height: 14px; text-align: center; overflow: hidden; pointer-events: none;
 }
 .clane { height: 18px; }
 .cline {

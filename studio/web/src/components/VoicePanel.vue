@@ -142,8 +142,37 @@
                     @keydown.enter.prevent="split(p, j, $event.target)" title="Enter splits the line at the cursor"
                   />
                   <button class="link" @click="playClip(p, l.s, l.e, `${p.id}-${j}`)">{{ auditioning === `${p.id}-${j}` ? '■' : '▶' }}</button>
+                  <button
+                    class="fxbtn" :class="{ on: fxOf(p, l), open: isFxOpen(p, j) }" @click="toggleFx(p, j)"
+                    :title="fxOf(p, l) ? `${fxInfo(fxOf(p, l).effect).label} on “${fxWords(p, l)}” (click to change)` : 'Put an effect on words in this line'"
+                  >{{ fxOf(p, l) ? `${fxInfo(fxOf(p, l).effect).icon} ${fxInfo(fxOf(p, l).effect).label}` : '✦' }}</button>
                   <button class="link" v-if="j < p.lines.length - 1" @click="join(p, j)" title="Join with the next line">join ↓</button>
                   <button class="link danger" @click="p.lines.splice(j, 1)" title="No caption for this line">✕</button>
+                </li>
+                <li v-if="isFxOpen(p, j)" class="fxedit">
+                  <p class="muted small">Click the first word to lift out, shift-click the last (all of them to start with).</p>
+                  <div class="words">
+                    <button
+                      v-for="(w, k) in lineWords(l)" :key="k" class="word" :class="{ on: k >= fxSel[0] && k <= fxSel[1] }"
+                      @click="pickWord(p, l, k, $event.shiftKey)"
+                    >{{ w[0] }}</button>
+                  </div>
+                  <div class="fxpick">
+                    <button
+                      v-for="f in VOICE_FX" :key="f.v" class="btn small" :class="{ active: fxOf(p, l)?.effect === f.v }"
+                      @click="setFx(p, l, { effect: f.v })" :title="f.hint"
+                    >{{ f.icon }} {{ f.label }}</button>
+                  </div>
+                  <div class="fxpick" v-if="fxOf(p, l)">
+                    <button
+                      v-for="a in FX_AMOUNTS" :key="a.v" class="btn small" :class="{ active: Math.abs((fxOf(p, l).amount || 1) - a.v) < 0.01 }"
+                      @click="setFx(p, l, { amount: a.v })"
+                    >{{ a.label }}</button>
+                    <span class="spacer"></span>
+                    <button class="btn small" @click="hearFx(p, fxOf(p, l))">▶ Hear it</button>
+                    <button class="link danger" @click="removeFx(p, l)">Remove effect</button>
+                  </div>
+                  <p class="muted small" v-if="fxOf(p, l)">{{ fxInfo(fxOf(p, l).effect).hint }}. Play reel gives a rough version; the render does the real thing.</p>
                 </li>
               </template>
             </ol>
@@ -260,8 +289,9 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from '../api'
 import { fmtTime, folderTitle, parseTime } from '../time'
 import {
-  CAPTION_BGS, CAPTION_FONTS, CAPTION_SIZES, CAPTION_STYLES, styleOf, voiceTimeline,
+  CAPTION_BGS, CAPTION_FONTS, CAPTION_SIZES, CAPTION_STYLES, FX_AMOUNTS, fxInfo, fxTail, styleOf, VOICE_FX, voiceTimeline,
 } from '../captions'
+import { useVoicePlayer } from '../voicePlayer'
 import CaptionLayer from './CaptionLayer.vue'
 
 const props = defineProps({
@@ -474,6 +504,67 @@ async function timeText(p) {
   }
 }
 
+// ---------------------------------------------------------------- effects
+
+// An effect lifts out a phrase: some or all of a line's words, played through
+// echo, hall, waver, pulse or doubled. Stored on the piece in take time.
+const fxOpen = ref(null)       // { id, j }: the line whose effect is being edited
+const fxSel = ref([0, 0])      // the words picked in it
+// (by a tenth of a second: an effect's soft edges may touch the next line)
+const overlaps = (f, l) => Math.min(f.e, l.e) - Math.max(f.s, l.s) > 0.1
+const fxOf = (p, l) => (p.fx || []).find((f) => overlaps(f, l)) || null
+const isFxOpen = (p, j) => fxOpen.value && fxOpen.value.id === p.id && fxOpen.value.j === j
+// A line's words with their times: the transcript's while the text still
+// matches them, else the whole line as one.
+function lineWords(l) {
+  const w = l.words || []
+  if (w.length && w.map((x) => x[0]).join(' ') === String(l.text).trim().replace(/\s+/g, ' ')) return w
+  return [[l.text, l.s, l.e]]
+}
+function fxWords(p, l) {
+  const f = fxOf(p, l)
+  const ws = lineWords(l).filter((w) => w[2] > f.s + 0.02 && w[1] < f.e - 0.02)
+  return (ws.length ? ws : lineWords(l)).map((w) => w[0]).join(' ')
+}
+function toggleFx(p, j) {
+  if (isFxOpen(p, j)) { fxOpen.value = null; return }
+  fxOpen.value = { id: p.id, j }
+  const l = p.lines[j]
+  const ws = lineWords(l)
+  const f = fxOf(p, l)
+  const inside = f ? ws.map((w, k) => (w[2] > f.s + 0.02 && w[1] < f.e - 0.02 ? k : -1)).filter((k) => k >= 0) : []
+  fxSel.value = inside.length ? [inside[0], inside[inside.length - 1]] : [0, ws.length - 1]
+}
+function pickWord(p, l, k, shift) {
+  fxSel.value = shift ? [Math.min(fxSel.value[0], k), Math.max(fxSel.value[1], k)] : [k, k]
+  if (fxOf(p, l)) setFx(p, l, {})
+}
+// Put (or change) the effect on the picked words; one effect per line.
+function setFx(p, l, patch) {
+  const ws = lineWords(l)
+  const [a, b] = fxSel.value
+  const old = fxOf(p, l)
+  const f = {
+    id: old?.id || newId(), effect: old?.effect || 'echo', amount: old?.amount || 1, ...patch,
+    s: Math.round(Math.max(l.s - 0.04, ws[a][1] - 0.04) * 1000) / 1000,
+    e: Math.round(Math.min(l.e + 0.05, ws[b][2] + 0.08) * 1000) / 1000,
+  }
+  p.fx = [...(p.fx || []).filter((x) => !overlaps(x, l)), f].sort((x, y) => x.s - y.s)
+}
+function removeFx(p, l) {
+  p.fx = (p.fx || []).filter((x) => !overlaps(x, l))
+}
+// Hear the phrase with its effect: from a moment before to the end of its echo.
+const fxPlayer = useVoicePlayer()
+function hearFx(p, f) {
+  ear.value?.pause()
+  auditioning.value = null
+  const start = Math.max(p.start, f.s - 0.8)
+  const end = Math.min(p.end, f.e + 0.6)
+  fxPlayer.play([{ ...p, start, at: 0, length: end - start, fx: [f] }], 0)
+}
+onBeforeUnmount(() => fxPlayer.stop())
+
 // ---------------------------------------------------------------- listening
 
 const ear = ref(null)
@@ -602,6 +693,18 @@ li.gap { height: 8px; padding: 0; }
 .br { border: 1px solid var(--line); background: var(--paper); border-radius: 6px; width: 24px; height: 24px; cursor: pointer; color: var(--muted); flex: none; }
 .br.on { background: var(--sage-soft); border-color: var(--sage); color: var(--forest); font-weight: 700; }
 .lineacts { display: flex; gap: 8px; flex-wrap: wrap; }
+.fxbtn {
+  flex: none; border: 1px dashed var(--line); background: transparent; border-radius: 999px; padding: 1px 9px;
+  font-size: 12px; color: var(--muted); cursor: pointer; white-space: nowrap;
+}
+.fxbtn:hover, .fxbtn.open { border-color: var(--warn); color: var(--warn); }
+.fxbtn.on { border-style: solid; border-color: var(--warn); background: rgb(181 100 45 / 12%); color: var(--ink); font-weight: 600; }
+.lines li.fxedit { display: grid; gap: 8px; margin: 2px 0 8px 62px; padding: 10px 12px; border: 1px solid var(--warn); border-radius: 10px; background: var(--paper); }
+.fxedit p { margin: 0; }
+.words { display: flex; flex-wrap: wrap; gap: 4px; }
+.word { border: 1px solid var(--line); background: var(--cream); border-radius: 6px; padding: 2px 7px; font: inherit; font-size: 15px; cursor: pointer; color: var(--ink); }
+.word.on { background: rgb(181 100 45 / 18%); border-color: var(--warn); }
+.fxpick { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
 .paste { display: grid; gap: 6px; justify-items: start; }
 .paste textarea { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--paper); color: var(--ink); font: inherit; font-size: 15px; resize: vertical; }
 .levels { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px 18px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }

@@ -43,6 +43,20 @@ const PAST = 0.82      // unfold: lines already said
 const X = 0.3          // crossfade as a line brightens or dims
 const APPEAR = 0.5     // unfold and page: a new line fading in
 
+// Effects on a phrase of the voice (montage.py VOICE_FX): the words play
+// through the effect in place of the plain voice; echo and hall ring on after.
+export const VOICE_FX = [
+  { v: 'echo', label: 'Echo', icon: '◎', hint: 'The phrase repeats three times, fading away' },
+  { v: 'hall', label: 'Hall', icon: '⌂', hint: 'Said in a huge stone room; it rings on after' },
+  { v: 'waver', label: 'Waver', icon: '∿', hint: 'The pitch trembles' },
+  { v: 'pulse', label: 'Pulse', icon: '≋', hint: 'The voice throbs' },
+  { v: 'doubled', label: 'Doubled', icon: '⫴', hint: 'Two more voices just behind, drifting' },
+]
+export const FX_AMOUNTS = [{ v: 0.6, label: 'Light' }, { v: 1, label: 'Medium' }, { v: 1.4, label: 'Strong' }]
+export const fxInfo = (v) => VOICE_FX.find((f) => f.v === v) || VOICE_FX[0]
+export const ECHO_GAP = 0.32
+export const fxTail = (effect, amount) => ({ echo: 3 * ECHO_GAP + 0.6, hall: 1.6 + amount }[effect] ?? 0.15)
+
 export const VOICE_TAIL = 0.8   // the last part holds this long after the voice
 const DUCK_RAMP = 0.4
 
@@ -65,14 +79,20 @@ export function addCaptionFonts() {
 // The pieces one after another, each after its breath, and their lines on the
 // reel's clock (as the server's voice_timeline).
 export function voiceTimeline(pieces) {
-  const out = { pieces: [], lines: [], end: 0 }
+  const out = { pieces: [], lines: [], fx: [], end: 0 }
   let t = 0
   for (const p of pieces || []) {
     const start = Number(p.start) || 0
     const end = Number(p.end) || 0
     if (end - start < 0.1) continue
     t += Math.max(0, Number(p.gap) || 0)
-    out.pieces.push({ ...p, at: t, length: end - start })
+    const fx = (p.fx || []).map((f) => ({ ...f, s: Math.max(f.s, start), e: Math.min(f.e, end) }))
+      .filter((f) => f.effect && f.e - f.s >= 0.1)
+    out.pieces.push({ ...p, fx, at: t, length: end - start })
+    for (const f of fx) {
+      out.fx.push({ start: t + f.s - start, end: t + f.e - start, effect: f.effect, pieceId: p.id })
+      out.end = Math.max(out.end, t + f.e - start + fxTail(f.effect, f.amount))
+    }
     for (const [i, l] of (p.lines || []).entries()) {
       const ls = Math.max(l.s, start)
       const le = Math.min(l.e, end)
@@ -82,7 +102,7 @@ export function voiceTimeline(pieces) {
     }
     t += end - start
   }
-  out.end = out.pieces.length ? t : 0
+  out.end = out.pieces.length ? Math.max(t, out.end) : 0   // or later, while an echo rings
   return out
 }
 

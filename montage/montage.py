@@ -704,22 +704,42 @@ def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output,
         mix.append("[m]")
     if voice:
         n0 = inputs.count("-i")
+        parts = []
         for i, p in enumerate(voice["pieces"]):
             inputs += ["-ss", f"{p['start']:.3f}", "-t", f"{p['length']:.3f}", "-i", str(p["path"])]
             clean = "highpass=f=80,afftdn=nf=-25," if voice["clean"] else ""
             delay = round(p["at"] * 1000)
-            graph.append(f"[{n0 + i}:a:0]aformat=channel_layouts=mono,{clean}"
-                         f"loudnorm=I=-16:TP=-1.5:LRA=11,"
-                         f"aformat=sample_rates=48000:channel_layouts=stereo,"
-                         f"afade=t=in:d={VOICE_EDGE},"
-                         f"afade=t=out:st={max(p['length'] - VOICE_EDGE * 2, 0):.3f}:d={VOICE_EDGE * 2},"
-                         f"volume={voice['volume']},adelay=delays={delay}:all=1[v{i}]")
-        k = len(voice["pieces"])
-        if k > 1:
-            graph.append("".join(f"[v{i}]" for i in range(k))
-                         + f"amix=inputs={k}:normalize=0:duration=longest[voice]")
+            chain = (f"[{n0 + i}:a:0]aformat=channel_layouts=mono,{clean}"
+                     f"loudnorm=I=-16:TP=-1.5:LRA=11,"
+                     f"aformat=sample_rates=48000:channel_layouts=stereo,"
+                     f"afade=t=in:d={VOICE_EDGE},"
+                     f"afade=t=out:st={max(p['length'] - VOICE_EDGE * 2, 0):.3f}:d={VOICE_EDGE * 2},"
+                     f"volume={voice['volume']}")
+            if not p["fx"]:
+                graph.append(f"{chain},adelay=delays={delay}:all=1[v{i}]")
+                parts.append(f"[v{i}]")
+                continue
+            # Phrases with an effect: the plain voice steps aside for them,
+            # and each plays through its effect at the same moment.
+            graph.append(f"{chain},asplit={len(p['fx']) + 1}[d{i}]" + "".join(f"[f{i}_{k}]" for k in range(len(p["fx"]))))
+            gate = "*".join(f"(1-clip((t-{f['start'] - p['start']:.3f})/{FX_EDGE},0,1)"
+                            f"*clip(({f['end'] - p['start']:.3f}-t)/{FX_EDGE},0,1))" for f in p["fx"])
+            graph.append(f"[d{i}]volume='{gate}':eval=frame,adelay=delays={delay}:all=1[v{i}]")
+            parts.append(f"[v{i}]")
+            for k, f in enumerate(p["fx"]):
+                r0, length = f["start"] - p["start"], f["end"] - f["start"]
+                key = f"x{i}_{k}"
+                graph.append(f"[f{i}_{k}]atrim=start={r0:.3f}:end={r0 + length:.3f},asetpts=PTS-STARTPTS,"
+                             f"afade=t=in:d={FX_EDGE},afade=t=out:st={max(length - FX_EDGE, 0):.3f}:d={FX_EDGE},"
+                             f"apad=pad_dur={f['tail']:.2f}[{key}in]")
+                graph += fx_graph(f, f"{key}in", f"{key}fx", key)
+                graph.append(f"[{key}fx]atrim=0:{length + f['tail']:.3f},"
+                             f"adelay=delays={round((p['at'] + r0) * 1000)}:all=1[{key}]")
+                parts.append(f"[{key}]")
+        if len(parts) > 1:
+            graph.append("".join(parts) + f"amix=inputs={len(parts)}:normalize=0:duration=longest[voice]")
         else:
-            graph.append("[v0]anull[voice]")
+            graph.append(f"{parts[0]}anull[voice]")
         mix.append("[voice]")
     graph.append("".join(mix) + f"amix=inputs={len(mix)}:duration=first:normalize=0,"
                  "alimiter=limit=0.95[a]")
@@ -750,14 +770,73 @@ def load_voice(cfg, base_dir):
         start, end = parse_time(p.get("start", 0)), parse_time(p["end"])
         if end - start < 0.1:
             continue
-        pieces.append({"path": path, "start": start, "length": end - start,
-                       "at": parse_time(p.get("at", 0))})
+        piece = {"path": path, "start": start, "length": end - start, "at": parse_time(p.get("at", 0)), "fx": []}
+        for f in sorted(p.get("fx") or [], key=lambda f: parse_time(f["start"])):
+            if f.get("effect") not in VOICE_FX:
+                continue
+            fs, fe = max(parse_time(f["start"]), start), min(parse_time(f["end"]), end)
+            if piece["fx"] and fs < piece["fx"][-1]["end"]:
+                fs = piece["fx"][-1]["end"]    # never two effects on the same words
+            if fe - fs < 0.1:
+                continue
+            amount = min(max(float(f.get("amount", 1) or 1), 0.3), 2.0)
+            piece["fx"].append({"effect": f["effect"], "amount": amount, "start": fs, "end": fe,
+                                "tail": fx_tail(f["effect"], amount)})
+        pieces.append(piece)
     if not pieces:
         return None
-    return {"pieces": pieces, "end": max(p["at"] + p["length"] for p in pieces),
+    # The voice ends when its last piece does, or a little later if an echo
+    # or hall is still ringing.
+    end = max(max([p["at"] + p["length"]] + [p["at"] + f["end"] - p["start"] + f["tail"] for f in p["fx"]])
+              for p in pieces)
+    return {"pieces": pieces, "end": end,
             "fit": bool(v.get("fit", True)), "clean": bool(v.get("clean", True)),
             "volume": float(v.get("volume", 1.0)),
             "under": float(v.get("song_under", 0.15)), "between": float(v.get("song_between", 0.3))}
+
+
+# Effects on a phrase of the voice, to lift it out: the words from `start` to
+# `end` (in the take) are played through the effect in place of the plain
+# voice; an echo or hall rings on after them. `amount` is 0.6 light, 1
+# medium, 1.4 strong. Footage Studio's Play reel does a rough version of each
+# (voicePlayer.js).
+VOICE_FX = ("echo", "hall", "waver", "pulse", "doubled")
+ECHO_GAP = 0.32      # seconds between the repeats
+FX_EDGE = 0.025      # crossfade between the plain voice and the effect
+
+
+def fx_tail(effect, amount):
+    """How long an effect rings on after its words."""
+    return {"echo": 3 * ECHO_GAP + 0.6, "hall": 1.6 + amount}.get(effect, 0.15)
+
+
+def fx_graph(f, src, out, key):
+    """Filter chains that run [src] (the phrase, padded with silence for the
+    tail) through the effect into [out]."""
+    a = f["amount"]
+    if f["effect"] == "echo":    # the phrase repeats three times, fading
+        gaps = "|".join(str(round(ECHO_GAP * 1000 * n)) for n in (1, 2, 3))
+        decays = "|".join(f"{min(0.95, d * a):.2f}" for d in (0.5, 0.3, 0.18))
+        return [f"[{src}]aecho=0.9:0.9:{gaps}:{decays}[{out}]"]
+    if f["effect"] == "hall":    # a big space: convolved with a decaying burst of noise
+        length = f["tail"]
+        return [f"anoisesrc=d={length:.2f}:c=pink:r=48000:a=0.5:seed=7,"
+                f"aformat=sample_rates=48000:channel_layouts=stereo,"
+                f"afade=t=out:st=0:d={length:.2f}:curve=exp[{key}ir]",
+                f"[{src}]asplit[{key}d][{key}w]",
+                f"[{key}w]volume=0.06[{key}wv]",
+                f"[{key}wv][{key}ir]afir=gtype=none[{key}r]",
+                f"[{key}d][{key}r]amix=inputs=2:normalize=0:weights=1 {0.45 * a:.2f}[{out}]"]
+    if f["effect"] == "waver":   # the pitch wavers
+        # ffmpeg's vibrato puts out a burst of garbage in its first samples
+        # (after loudnorm), so it gets a moment of silence first, cut off after.
+        return [f"[{src}]adelay=delays=50:all=1,vibrato=f=5:d={min(1.0, 0.1 + 0.25 * a):.2f},"
+                f"atrim=start=0.05,asetpts=PTS-STARTPTS[{out}]"]
+    if f["effect"] == "pulse":   # the loudness throbs
+        return [f"[{src}]tremolo=f=6:d={min(0.95, 0.35 + 0.3 * a):.2f},volume=1.2[{out}]"]
+    # doubled: a second and third voice just behind, drifting (chorus)
+    decays = "|".join(f"{min(0.9, d * a):.2f}" for d in (0.5, 0.45, 0.4))
+    return [f"[{src}]chorus=0.7:0.9:40|60|80:{decays}:0.3|0.4|0.3:1.5|2|1.2,volume=0.75[{out}]"]
 
 
 def song_level(voice):
@@ -1428,6 +1507,8 @@ def main():
               + (f" · song at {round(voice['under'] * 100)}% under it" if cfg.get("music") else ""))
         for p in voice["pieces"]:
             print(f"  {fmt(p['at']):>7}  {p['path'].name:<24} {fmt(p['start'])} -> {fmt(p['start'] + p['length'])}")
+            for f in p["fx"]:
+                print(f"  {fmt(p['at'] + f['start'] - p['start']):>7}    ~ {f['effect']} on {f['end'] - f['start']:.1f}s")
         if plan[-1]["hold_extra"]:
             print(f"  {'':>7}  last part holds {plan[-1]['hold_extra']:.1f}s longer for the voice")
         if voice["end"] > length + 0.05:

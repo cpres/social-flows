@@ -181,6 +181,16 @@ footage, a poem or an idea, with its words on screen as they're said.
   stanza, ✕ leaves a line uncaptioned. *Paste the written text* times your own
   text (a line per caption line, a blank line between stanzas) to what's said,
   keeping your exact words and breaks.
+- **Effects on a phrase:** ✦ beside a caption line lifts some of its words
+  out with an effect. Click the first word and shift-click the last (all of
+  the line to start with), then pick *Echo* (the phrase repeats three times,
+  fading), *Hall* (a huge stone room that rings on after), *Waver* (the pitch
+  trembles), *Pulse* (the voice throbs) or *Doubled* (two more voices just
+  behind, drifting), and *Light*, *Medium* or *Strong*. The plain voice steps
+  aside for those words; an echo or hall rings on over what follows, and *Fit
+  to the voice* waits for it. *Hear it* plays the phrase with its effect;
+  the line shows the effect's name, and the voice lane marks where it is.
+  *Play reel* plays a rough version; the render does the real thing.
 - **Sound:** the song sits at *Song under the voice* (15%) while it speaks and
   rises to *Song in the breaths* (30%) around it; *Clean up the voice* cuts low
   rumble and hiss, and each piece is evened out to the same loudness. Adding the

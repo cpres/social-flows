@@ -984,7 +984,8 @@ def build_config(reel, rows):
             if not (ROOT / p["folder"] / p["file"]).exists():
                 raise HTTPException(400, f"A voice take is missing: {p['folder']}/{p['file']}")
         cfg["voice"] = {"pieces": [{"file": str(ROOT / p["folder"] / p["file"]), "start": p["start"],
-                                    "end": p["end"], "at": p["at"]} for p in pieces],
+                                    "end": p["end"], "at": p["at"], **({"fx": p["fx"]} if p["fx"] else {})}
+                                   for p in pieces],
                         "fit": bool(s.get("voiceFit", True)), "clean": bool(s.get("voiceClean", True)),
                         "song_under": float(s.get("voiceSongUnder", 0.15)),
                         "song_between": float(s.get("voiceSongBetween", 0.3))}
@@ -1035,8 +1036,11 @@ def voice_timeline(s):
         if end - start < 0.1:
             continue
         t += max(0.0, float(p.get("gap") or 0))
+        fx = [{"start": round(max(float(f["s"]), start), 3), "end": round(min(float(f["e"]), end), 3),
+               "effect": f["effect"], "amount": float(f.get("amount") or 1)}
+              for f in p.get("fx") or [] if f.get("effect") and min(float(f["e"]), end) - max(float(f["s"]), start) >= 0.1]
         pieces.append({"folder": p["folder"], "file": p["file"], "start": round(start, 3),
-                       "end": round(end, 3), "at": round(t, 3)})
+                       "end": round(end, 3), "at": round(t, 3), "fx": fx})
         for l in p.get("lines") or []:
             ls, le = max(float(l["s"]), start), min(float(l["e"]), end)
             if le - ls < 0.05 or not str(l.get("text", "")).strip():
