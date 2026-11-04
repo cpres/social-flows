@@ -55,6 +55,7 @@ sys.path.insert(0, str(ENGINE.parent))
 sys.path.insert(0, str(HERE))
 import looks  # noqa: E402
 from db import DEFAULT_SETTINGS, Library, default_start, now, settings_of  # noqa: E402
+import audio  # noqa: E402
 import compose  # noqa: E402
 import scenes as scenes_mod  # noqa: E402
 from music import AUDIO_EXTS, Shelf, beat_detection_available  # noqa: E402
@@ -833,6 +834,14 @@ def music_file(name: str):
     return FileResponse(path)
 
 
+@app.get("/api/music/{name}/envelope")
+def music_envelope(name: str):
+    path = shelf.path_of(name)
+    if not path or not path.exists() or path.parent != shelf.folder:
+        raise HTTPException(404, "No such track")
+    return audio.envelope(path, CACHE)
+
+
 @app.get("/api/music/{name}/beats")
 def music_beats(name: str):
     path = shelf.path_of(name)
@@ -902,6 +911,14 @@ def voice_audio(folder: str, file: str):
 def voice_peaks(folder: str, file: str):
     try:
         return voice.peaks(take_path(folder, file))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/voice/envelope/{folder}/{file}")
+def voice_envelope(folder: str, file: str):
+    try:
+        return audio.envelope(voice.audio(take_path(folder, file)), CACHE)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -1627,6 +1644,29 @@ def activity_of(path):
         tmp.write_text(json.dumps({"points": movement(path)}))
         tmp.replace(out)
     return json.loads(out.read_text())
+
+
+@app.post("/api/envelopes")
+def envelopes(body: dict = Body(...)):
+    """How loud each file is along its length (see audio.py), for the audio
+    rows under a reel's timeline: {mediaId: {step, db, duration, hasAudio}}.
+    Measured once per file and cached; photos have no sound."""
+    ids = [int(i) for i in body.get("mediaIds") or []][:500]
+    if not ids:
+        return {}
+    with lib.connect() as db:
+        rows = db.execute(f"SELECT id, path FROM media WHERE kind = 'video' AND missing = 0 "
+                          f"AND id IN ({', '.join('?' * len(ids))})", ids).fetchall()
+
+    def one(r):
+        path = ROOT / r["path"]
+        try:
+            return audio.envelope(path, CACHE) if path.exists() else None
+        except (OSError, subprocess.SubprocessError):
+            return None   # unreadable: drawn as silence
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        return {r["id"]: e for r, e in zip(rows, pool.map(one, rows)) if e}
 
 
 @app.post("/api/looks")
