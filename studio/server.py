@@ -15,6 +15,8 @@ DOWNLOADS_DIR is where AirDrop drops things, for Import (default ~/Downloads).
 """
 
 import argparse
+import asyncio
+import logging
 import hashlib
 import json
 import math
@@ -1999,7 +2001,26 @@ def main():
     if args.open:
         import webbrowser
         webbrowser.open(f"http://localhost:{args.port}")
-    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
+    # Ctrl-C stops it at once: an open page keeps videos streaming, and
+    # uvicorn would otherwise wait for those downloads to finish first. The
+    # downloads it cuts off aren't errors, so they aren't reported.
+    config = uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning", timeout_graceful_shutdown=1)
+    logging.getLogger("uvicorn.error").addFilter(QuietShutdown())
+    uvicorn.Server(config).run()
+    print("  Stopped.")
+
+
+class QuietShutdown(logging.Filter):
+    """Drop uvicorn's reports of the downloads it cancels on shutdown."""
+    def filter(self, record):
+        if "graceful shutdown" in record.getMessage():
+            return False
+        err = record.exc_info[1] if record.exc_info else None
+        while err is not None:
+            if isinstance(err, asyncio.CancelledError):
+                return False
+            err = err.__context__
+        return True
 
 
 if __name__ == "__main__":
