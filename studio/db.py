@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS reels (
     name       TEXT UNIQUE NOT NULL,
     settings   TEXT NOT NULL DEFAULT '{}',
     created_at REAL NOT NULL,
-    updated_at REAL NOT NULL
+    updated_at REAL NOT NULL,
+    archived_at REAL            -- set: put away, off the home page (kept, not deleted)
 );
 
 CREATE TABLE IF NOT EXISTS reel_items (
@@ -291,7 +292,7 @@ class Library:
 def migrate(db):
     """Add columns introduced after a library was first created."""
     have = {t: {r["name"] for r in db.execute(f"PRAGMA table_info({t})")}
-            for t in ("media", "reel_items")}
+            for t in ("media", "reel_items", "reels")}
     for table, col, decl in [("media", "width", "INTEGER NOT NULL DEFAULT 0"),
                              ("media", "height", "INTEGER NOT NULL DEFAULT 0"),
                              ("reel_items", "focus_x", "REAL NOT NULL DEFAULT 0.5"),
@@ -303,7 +304,8 @@ def migrate(db):
                              ("reel_items", "layout", "TEXT NOT NULL DEFAULT ''"),
                              ("reel_items", "pane", "TEXT NOT NULL DEFAULT ''"),
                              ("reel_items", "top_after", "REAL NOT NULL DEFAULT 0"),
-                             ("reel_items", "frames", "TEXT")]:
+                             ("reel_items", "frames", "TEXT"),
+                             ("reels", "archived_at", "REAL")]:
         if col not in have[table]:
             db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
     # v1: photo sizes now honour EXIF rotation; re-measure photos once.

@@ -27,8 +27,12 @@
             </p>
           </div>
         </RouterLink>
-        <RouterLink v-for="r in reels" :key="r.id" :to="`/reel/${r.id}`" class="card">
+        <RouterLink v-for="r in shownReels" :key="r.id" :to="`/reel/${r.id}`" class="card" :class="{ archived: r.archivedAt }">
           <div class="cover">
+            <button
+              class="archive" @click.prevent.stop="setArchived(r, !r.archivedAt)"
+              :title="r.archivedAt ? 'Bring this reel back' : 'Archive: off this page, kept (Archived shows it again)'"
+            >{{ r.archivedAt ? 'Unarchive' : 'Archive' }}</button>
             <img v-if="r.cover" :src="api.thumb(r.cover.folder, r.cover.name, r.cover.start, 640)" loading="lazy" alt="" />
             <div v-else class="empty">empty</div>
             <span class="badge">{{ fmtTime(r.totalLength) }}</span>
@@ -43,11 +47,14 @@
             </p>
           </div>
         </RouterLink>
-        <button class="card new" @click="newReel">
+        <button class="card new" @click="newReel" v-if="!showArchived">
           <span class="plus">+</span>
           <span>New reel</span>
         </button>
       </div>
+      <button v-if="archivedCount" class="link archivedtoggle" @click="showArchived = !showArchived">
+        {{ showArchived ? 'Hide archived reels' : `Archived reels (${archivedCount})` }}
+      </button>
 
       <div class="head shoots">
         <h1>Shoots</h1>
@@ -111,6 +118,10 @@ const emit = defineEmits(['root'])
 const router = useRouter()
 const folders = ref([])
 const reels = ref([])
+// Archived reels are off the page until asked for; then they're all that's shown.
+const showArchived = ref(false)
+const archivedCount = computed(() => reels.value.filter((r) => r.archivedAt).length)
+const shownReels = computed(() => reels.value.filter((r) => !r.archivedAt === !showArchived.value))
 const drafts = ref([])   // Weave wizards left part way
 const newDrafts = computed(() => drafts.value.filter((d) => !d.reelId))
 const editing = (r) => drafts.value.find((d) => d.reelId === r.id)
@@ -159,6 +170,16 @@ async function checkDownloads() {
 function imported(r) {
   importing.value = false
   router.push({ path: `/shoot/${encodeURIComponent(r.folder)}`, state: { imported: r.imported } })
+}
+
+async function setArchived(r, archived) {
+  try {
+    await api.updateReel(r.id, { archived })
+    r.archivedAt = archived ? Date.now() / 1000 : null
+    if (!archivedCount.value) showArchived.value = false
+  } catch (e) {
+    window.alert(e.message)
+  }
 }
 
 async function newReel() {
@@ -213,6 +234,15 @@ h1 { margin: 0; font-size: 26px; color: var(--forest); }
 .badge.used { right: auto; left: 8px; background: var(--sage); color: var(--on-sage); }
 .card.draft { outline: 2px dashed var(--sage); outline-offset: -2px; }
 .badge.draftbadge { top: 8px; bottom: auto; right: auto; left: 8px; background: var(--sage); color: var(--on-sage); }
+.archive {
+  position: absolute; top: 8px; right: 8px; z-index: 1; border: 0; cursor: pointer;
+  font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px;
+  background: rgb(31 42 31 / 75%); color: var(--on-media); opacity: 0; transition: opacity 0.15s;
+}
+.card:hover .archive, .archive:focus-visible { opacity: 1; }
+.card.archived { opacity: 0.7; }
+.card.archived .archive { opacity: 1; }
+.archivedtoggle { margin-top: 14px; }
 .swatch { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; }
 .meta { padding: 12px 14px 14px; }
 h2 { margin: 0 0 4px; font-size: 17px; }

@@ -20,6 +20,9 @@
           {{ kept.length + aParts.length }} of {{ items.length }} parts · {{ sceneList.length }} scene{{ sceneList.length === 1 ? '' : 's' }} ·
           reel <b class="mono total">{{ fmtTime(reelLength) }}</b>
           <span class="save">{{ saveState }}</span>
+          <template v-if="reel.archivedAt">
+            · <b>archived</b> <button class="btn small" @click="setArchived(false)" title="Back on the home page">Unarchive</button>
+          </template>
         </p>
       </div>
       <button class="btn" @click="sortByShotTime" :disabled="items.length < 2">Sort by shot time</button>
@@ -242,6 +245,10 @@
 
       <div class="sgroup reelactions">
         <button class="btn small" @click="duplicateReel" title="Make a copy of this reel to experiment on">Duplicate this reel</button>
+        <button
+          class="btn small" @click="setArchived(!reel.archivedAt)"
+          :title="reel.archivedAt ? 'Back on the home page' : 'Off the home page and the shoot tags; kept as it is'"
+        >{{ reel.archivedAt ? 'Unarchive this reel' : 'Archive this reel' }}</button>
         <button class="btn small danger" @click="removeReel">Delete this reel</button>
       </div>
     </section>
@@ -881,7 +888,7 @@ let ready = false
 onMounted(async () => {
   try {
     const data = await api.reel(id)
-    reel.value = { name: data.name }
+    reel.value = { name: data.name, archivedAt: data.archivedAt || null }
     items.value = data.items
     otherItems.value = data.otherItems
     draftAt.value = data.draftAt || null
@@ -1098,6 +1105,18 @@ async function reweave() {
   stopReel()
   await saver.flushAll()
   router.push({ path: `/weave/${encodeURIComponent(settings.weave.folder)}`, query: { reel: id } })
+}
+
+// Archive: off the home page (and back there); unarchiving stays here.
+async function setArchived(archived) {
+  try {
+    await saver.flushAll()
+    await api.updateReel(id, { archived })
+    if (archived) router.push('/')
+    else reel.value.archivedAt = null
+  } catch (e) {
+    window.alert(e.message)
+  }
 }
 
 async function removeReel() {

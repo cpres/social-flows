@@ -228,7 +228,7 @@ def reel_summaries(db):
         SELECT r.*, COUNT(i.id) AS items,
                COALESCE(SUM(CASE WHEN i.keep THEN i.length ELSE 0 END), 0) AS total
         FROM reels r LEFT JOIN reel_items i ON i.reel_id = r.id
-        GROUP BY r.id ORDER BY r.updated_at DESC""").fetchall()
+        GROUP BY r.id ORDER BY r.archived_at IS NOT NULL, r.updated_at DESC""").fetchall()
     out = []
     for r in rows:
         cover = db.execute("""
@@ -238,6 +238,7 @@ def reel_summaries(db):
                            (r["id"],)).fetchone()
         out.append({"id": r["id"], "name": r["name"], "itemCount": r["items"],
                     "totalLength": round(r["total"], 2), "updatedAt": r["updated_at"],
+                    "archivedAt": r["archived_at"],
                     "cover": dict(cover) if cover else None})
     return out
 
@@ -456,13 +457,20 @@ def get_reel(reel_id: int):
         settings["laneA"] = [i for i in scenes_mod.lane_a(settings) if any(it["id"] == i for it in items)]
         draft_at = draft_time(db, draft_key(reel=reel_id))
     return {"id": r["id"], "name": r["name"], "settings": settings, "items": items,
-            "otherItems": others, "reels": reels, "draftAt": draft_at, "updatedAt": r["updated_at"]}
+            "otherItems": others, "reels": reels, "draftAt": draft_at, "updatedAt": r["updated_at"],
+            "archivedAt": r["archived_at"]}
 
 
 @app.patch("/api/reels/{reel_id}")
 def update_reel(reel_id: int, body: dict = Body(...)):
     with lib.connect() as db:
         r = reel_row(db, reel_id)
+        if "archived" in body:
+            # Put away or bring back; not an edit, so it doesn't count as a change.
+            db.execute("UPDATE reels SET archived_at = ? WHERE id = ?",
+                       (now() if body["archived"] else None, reel_id))
+            if set(body) == {"archived"}:
+                return {"ok": True}
         if "name" in body:
             name = body["name"].strip()
             if not name:

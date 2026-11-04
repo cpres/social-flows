@@ -218,7 +218,8 @@ const player = usePlayer(() => range.value)
 
 const partsOf = (mediaId) => items.value.filter((p) => p.mediaId === mediaId).sort((a, b) => a.start - b.start)
 const countIn = (reelId) => partsOf(current.value.id).filter((p) => p.reelId === reelId).length
-const reelName = (id) => reels.value.find((r) => r.id === id)?.name ?? 'reel'
+const allReels = ref([])   // archived too, for names of parts already in them
+const reelName = (id) => (reels.value.find((r) => r.id === id) || allReels.value.find((r) => r.id === id))?.name ?? 'reel'
 const segments = computed(() =>
   partsOf(current.value.id)
     .filter((p) => p.id !== activeId.value)
@@ -253,7 +254,9 @@ function apply(data) {
   data.media.forEach((m) => { if (!drafts[m.id]) initDraft(m) })
   media.value = data.media
   items.value = data.items
-  reels.value = [...data.reels].sort((a, b) => a.id - b.id)   // stable, so 1–9 keys don't move
+  // Archived reels aren't offered; stable order, so 1–9 keys don't move.
+  allReels.value = data.reels
+  reels.value = data.reels.filter((r) => !r.archivedAt).sort((a, b) => a.id - b.id)
   hasSidecar.value = data.hasSidecar
   draftAt.value = data.draftAt || null
 }

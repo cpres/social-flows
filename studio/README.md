@@ -101,6 +101,10 @@ python3 studio/server.py --open
 - **Duplicate this reel** (under *Settings*) makes a full copy of a reel (parts, trims,
   framing, transitions, music) so you can try a different cut without losing
   the one you have.
+- **Archive** a reel you're done with: hover its card on the home page and
+  click *Archive* (or *Archive this reel* under *Settings*). It leaves the
+  home page and the shoot page's tag chips but is kept as it is;
+  *Archived reels (n)* under the reels shows them, with *Unarchive*.
 - **Music:** drop songs (MP3, M4A, WAV…) into `~/Music/Reels/` (or set
   `MUSIC_DIR`), then pick one under the reel's *Settings → Music*. Set where the
   song starts, and *Listen* to check it. Play reel plays the song and moves
