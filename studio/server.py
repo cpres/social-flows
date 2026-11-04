@@ -1001,7 +1001,8 @@ def build_config(reel, rows, grid_bpm=None):
     kept_ids = [r["id"] for r in kept]
     for k, sc in enumerate(scenes):
         entry_sc = {"layout": sc["layout"], "split": sc.get("split", 0.5),
-                    "into": sc.get("into", "cut") if k else "cut", **({"fill": sc["fill"]} if sc.get("fill") else {})}
+                    "into": sc.get("into", "cut") if k else "cut", **({"fill": sc["fill"]} if sc.get("fill") else {}),
+                    **({"handoff": sc.get("handoff", scenes_mod.HANDOFF_DEFAULT)} if sc.get("into") == "handoff" else {})}
         if sc["layout"] != "soloB":
             a, row = sc["a"], lane_rows[sc["a"]["item"]]
             fx, fy, zoom = scenes_mod.frame_for(row, scenes_mod.slot_shape(sc, "A"), "A")

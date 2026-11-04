@@ -19,7 +19,15 @@ export const INTOS = [
   { v: 'slide', label: 'Slide', hint: 'The new layout slides in from the bottom (the right, in 16:9) over the last frame. 0.4s.' },
   { v: 'push', label: 'Push', hint: 'The new layout pushes the old one out of the frame. 0.4s.' },
   { v: 'dissolve', label: 'Dissolve', hint: 'A soft crossfade between the layouts. 0.4s.' },
+  { v: 'handoff', label: 'Hand off', hint: 'The full-frame shot before moves into A\'s slot as B comes in, stays there a few seconds, then dissolves into A (which starts then).', after: 'soloB' },
 ]
+export const HANDOFF_DEFAULT = 3
+// Seconds scene k is handed off from the Solo B scene before it (0: none).
+export function handoffSecs(scenes, k, secs) {
+  const sc = scenes[k]
+  if (!k || sc.into !== 'handoff' || scenes[k - 1].layout !== 'soloB' || !['stack', 'swap'].includes(sc.layout)) return 0
+  return Math.max(0, Math.min(sc.handoff ?? HANDOFF_DEFAULT, secs[k] - 0.5))
+}
 // How A plays in a scene. Real speed unless a speed is asked for.
 export const TIMINGS = [
   { v: 'real', label: 'Real speed', hint: 'A plays 1× for as long as the scene lasts, carrying on from the scene before' },

@@ -10,7 +10,10 @@ visible, one after another (the reel's `scenes`):
      len: seconds (soloA: how long A plays alone),
      split: 0.5 | 0.58 | ... | "square" (the primary slot's share; square:
             the other slot is square),
-     into: cut | slide | push | dissolve (how it comes in),
+     into: cut | slide | push | dissolve | handoff (how it comes in;
+           handoff, after a Solo B scene: its last frame moves into A's
+           slot as B comes in, stays `handoff` seconds, then dissolves
+           into A, which starts then),
      fill: "" | fill | blur (a lane alone in a wide frame),
      a: {item, in, out (null: carry on / share what's left),
          timing: real | quiet | hold | fit, speed}}
@@ -29,7 +32,8 @@ import json
 import uuid
 
 LAYOUTS = ("soloA", "stack", "soloB", "swap")
-INTOS = ("cut", "slide", "push", "dissolve")
+INTOS = ("cut", "slide", "push", "dissolve", "handoff")
+HANDOFF_DEFAULT = 3.0   # seconds a Solo B scene's last frame stays in A's slot, handing off
 TIMINGS = ("real", "quiet", "hold", "fit", "range")   # range: real, from before
 SOLO_A_DEFAULT = 4.0   # seconds a new Solo A scene runs
 SOLO_A_MIN = 1.0
@@ -165,6 +169,8 @@ def clean(scenes, s):
             c["len"] = round(max(float(sc.get("len") or SOLO_A_DEFAULT), SOLO_A_MIN), 3)
         split = sc.get("split", s.get("stackSplit") or 0.5)
         c["split"] = "square" if split == "square" else round(min(max(float(split or 0.5), 0.3), 0.7), 3)
+        if c["into"] == "handoff":
+            c["handoff"] = round(min(max(float(sc.get("handoff") or HANDOFF_DEFAULT), 0.5), 10.0), 2)
         if sc.get("fill") in ("fill", "blur"):
             c["fill"] = sc["fill"]
         a = sc.get("a")

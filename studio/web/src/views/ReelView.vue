@@ -438,10 +438,11 @@
           <SceneFrame
             v-else-if="aIds.length && slots" :frame-w="frameW" :frame-h="frameH" :slots="slots"
             :divider-color="settings.dividerColor" :editing="isA(current) ? 'A' : 'B'" :into="intoNow"
-            :a-t="aNow?.t ?? 0" :a-rate="aNow?.rate ?? 1" :a-playing="reelOn" :guides="tall && guides"
+            :a-t="aNow?.t ?? 0" :a-rate="aNow?.rate ?? 1" :a-playing="reelOn && aNow?.playing !== false" :guides="tall && guides"
             @split="(v) => setSplit(shownScene, v)"
           >
             <template #A="{ maxH, out, bindA }">
+              <img v-if="handoffShot" class="handoffshot" :src="handoffShot.url" alt="" :style="{ opacity: 1 - handoffShot.fade }" />
               <ReelFrame
                 v-if="isA(current) && aNow?.part === current" :key="`edit-${current.id}`" v-bind="frameProps" v-on="frameOn"
                 :out="out" :max-h="maxH" muted
@@ -548,7 +549,7 @@
                 <button v-if="selSc.a.in != null" class="link" @click="editA(selK, { in: null })">carry on from the last scene</button>
               </span>
               <small class="muted">Plays {{ fmtTime(aRanges[selK][0]) }} → {{ fmtTime(aRanges[selK][1]) }} of {{ byId.get(selSc.a.item)?.media.file }}{{ aPlans[selK].pieces.length > 1 ? `, in ${aPlans[selK].pieces.length} pieces` : '' }}{{ aPlans[selK].rate !== 1 ? ` at ${rateText(selK)}` : ' at real speed' }}.
-                <b v-if="aShort(aPlans[selK], sceneSecs[selK]) > 0.05" class="warn">The clip runs out: its last frame holds {{ aShort(aPlans[selK], sceneSecs[selK]).toFixed(1) }}s.</b>
+                <b v-if="aShort(aPlans[selK], aSecs[selK]) > 0.05" class="warn">The clip runs out: its last frame holds {{ aShort(aPlans[selK], aSecs[selK]).toFixed(1) }}s.</b>
                 <b v-if="aPlans[selK].rate > 4.001" class="warn">Over 4×: think about a shorter stretch of A, or Cut quiet moments.</b></small>
             </label>
           </template>
@@ -563,11 +564,19 @@
             <span class="muted">Into this scene</span>
             <div class="tbtns">
               <button
-                v-for="t in INTOS" :key="t.v" class="btn small" :class="{ active: (selSc.into || 'cut') === t.v }"
-                @click="editScene(selK, { into: t.v })"
+                v-for="t in INTOS.filter((x) => !x.after || (sceneList[selK - 1]?.layout === x.after && ['stack', 'swap'].includes(selSc.layout)))"
+                :key="t.v" class="btn small" :class="{ active: (selSc.into || 'cut') === t.v }"
+                @click="editScene(selK, { into: t.v, ...(t.v === 'handoff' && selSc.handoff == null ? { handoff: HANDOFF_DEFAULT } : {}) })"
               >{{ t.v === 'slide' ? (wide ? 'Slide in' : 'Slide up') : t.label }}</button>
             </div>
-            <small class="muted">{{ INTOS.find((t) => t.v === (selSc.into || 'cut')).hint }}</small>
+            <small class="muted">{{ INTOS.find((t) => t.v === (selSc.into || 'cut'))?.hint }}</small>
+            <div class="tbtns" v-if="handoffs[selK]">
+              <span class="muted">The shot stays in A's slot for</span>
+              <button
+                v-for="x in [1, 2, 3, 5]" :key="x" class="btn small" :class="{ active: (selSc.handoff ?? HANDOFF_DEFAULT) === x }"
+                @click="editScene(selK, { handoff: x })"
+              >{{ x }}s</button>
+            </div>
           </template>
           <div class="ilinks">
             <button v-if="['stack', 'swap'].includes(selSc.layout)" class="link" @click="splitEverywhere(selK)">Use this split on every stacked scene</button>
@@ -738,7 +747,7 @@ import ComposePanel from '../components/ComposePanel.vue'
 import ReelFrame from '../components/ReelFrame.vue'
 import { SHAPES, shapeOf, shapeRatio } from '../shapes'
 import { quietCut, topSource } from '../stack'
-import { INTOS, LAYOUTS as SCENE_LAYOUTS, SCENE_IN, SOLO_A_MIN, TIMINGS, aShort, aTiming, fitted, frameFor, layoutLabel, newId, normalize,
+import { HANDOFF_DEFAULT, INTOS, LAYOUTS as SCENE_LAYOUTS, SCENE_IN, SOLO_A_MIN, TIMINGS, aShort, aTiming, fitted, handoffSecs, frameFor, layoutLabel, newId, normalize,
   resolveA, sceneAPlan, sceneSlots, showsA, showsB, slotShape, soloSeconds } from '../scenes'
 import SceneFrame from '../components/SceneFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
@@ -1466,16 +1475,19 @@ watch(() => sceneList.value.filter((sc) => showsA(sc) && aTiming(sc) === 'quiet'
     try { aPoints.value = { ...aPoints.value, [i]: (await api.activity(p.media.folder, p.media.file)).points } } catch { /* measured at render */ }
   }
 }, { immediate: true })
-const aRanges = computed(() => resolveA(sceneList.value, sceneSecs.value, byId.value, (i) => aPoints.value[i]))
+// A hand off (a Solo B shot held in A's slot) comes off the front of A's time in its scene.
+const handoffs = computed(() => sceneList.value.map((sc, k) => handoffSecs(sceneList.value, k, sceneSecs.value)))
+const aSecs = computed(() => sceneSecs.value.map((x, k) => Math.max(x - handoffs.value[k], 0.04)))
+const aRanges = computed(() => resolveA(sceneList.value, aSecs.value, byId.value, (i) => aPoints.value[i]))
 const aPlans = computed(() => sceneList.value.map((sc, k) => (aRanges.value[k]
-  ? sceneAPlan(sc, aRanges.value[k], sceneSecs.value[k], aPoints.value[sc.a.item], byId.value.get(sc.a.item)?.media.duration) : null)))
+  ? sceneAPlan(sc, aRanges.value[k], aSecs.value[k], aPoints.value[sc.a.item], byId.value.get(sc.a.item)?.media.duration) : null)))
 // How much footage lane A needs, clip by clip: from where it starts to where the last scene on it stops.
 const aNeeds = computed(() => aParts.value.map((p) => {
   const used = sceneList.value.map((sc, k) => (sc.a?.item === p.id ? aRanges.value[k] : null)).filter(Boolean)
   if (!used.length) return { part: p, used: false }
   const from = Math.min(...used.map((r) => r[0]))
   const to = Math.max(...used.map((r) => r[1]))
-  const short = sceneList.value.reduce((t, sc, k) => t + (sc.a?.item === p.id && aPlans.value[k] ? aShort(aPlans.value[k], sceneSecs.value[k]) : 0), 0)
+  const short = sceneList.value.reduce((t, sc, k) => t + (sc.a?.item === p.id && aPlans.value[k] ? aShort(aPlans.value[k], aSecs.value[k]) : 0), 0)
   return { part: p, used: true, from, to, short }
 }))
 // What the A slot shows now: which clip, where in it and how fast.
@@ -1484,7 +1496,21 @@ const aNow = computed(() => {
   const plan = aPlans.value[k]
   if (!plan) return null
   const within = reelOn.value && reelTime.value !== null ? reelTime.value - sceneTimes.value[k].start : 0
-  return { part: byId.value.get(sceneList.value[k].a.item), t: topSource(plan, within), rate: plan.rate }
+  const hand = handoffs.value[k]
+  return { part: byId.value.get(sceneList.value[k].a.item), t: topSource(plan, Math.max(0, within - hand)), rate: plan.rate,
+           playing: within >= hand }
+})
+// While a scene is handed off: the Solo B shot before it, held in A's slot.
+const handoffShot = computed(() => {
+  const k = shownScene.value
+  if (!handoffs.value[k]) return null
+  const within = reelOn.value && reelTime.value !== null ? reelTime.value - sceneTimes.value[k].start : 0
+  if (within > handoffs.value[k] + 0.4) return null
+  const prev = sceneList.value[k - 1]
+  const p = byId.value.get(prev.parts[prev.parts.length - 1])
+  if (!p) return null
+  const t = p.media.kind === 'video' ? p.start + p.length : 0
+  return { url: api.thumb(p.media.folder, p.media.file, t, 640), fade: Math.min(1, Math.max(0, (within - handoffs.value[k]) / 0.4)) }
 })
 // The scene coming in, while it does: {type, p}.
 const intoNow = computed(() => {
@@ -1493,7 +1519,7 @@ const intoNow = computed(() => {
   const sc = sceneList.value[k]
   if (!k || !sc || (sc.into || 'cut') === 'cut') return null
   const p = (reelTime.value - sceneTimes.value[k].start) / SCENE_IN
-  return p < 1 ? { type: sc.into, p } : null
+  return p < 1 ? { type: sc.into === 'handoff' ? 'slide' : sc.into, p } : null
 })
 const rateText = (k) => (aPlans.value[k] ? `${aPlans.value[k].rate.toFixed(2)}×` : '')
 // Trimming parts moves scene edges and A re-fits: say so.
@@ -1686,12 +1712,13 @@ function soloThis(p) {
   const at = sc.parts.indexOf(p.id)
   const next = sc.parts[at + 1]
   const solo = { id: newId(), layout: 'soloB', from: p.id, split: sc.split, into: at > 0 ? 'slide' : (sc.into || 'cut') }
-  const rest = next && { ...sc, id: newId(), from: next, into: sc.layout === 'soloB' ? 'cut' : 'slide',
-                         a: sc.a ? { ...sc.a, in: null, out: null } : sc.a }
+  const split = ['stack', 'swap'].includes(sc.layout)
+  const rest = next && { ...sc, id: newId(), from: next, into: split ? 'handoff' : sc.layout === 'soloB' ? 'cut' : 'slide',
+                         ...(split ? { handoff: HANDOFF_DEFAULT } : {}), a: sc.a ? { ...sc.a, in: null, out: null } : sc.a }
   list.splice(k, 1, ...(at > 0 ? [sc] : []), solo, ...(rest ? [rest] : []))
   commit(list)
   selScene.value = null
-  say(rest ? `On its own, then ${layoutLabel(rest.layout, wide.value)} slides in` : 'On its own')
+  say(rest ? (split ? `On its own, then it hands off to ${layoutLabel(rest.layout, wide.value)} (${HANDOFF_DEFAULT}s)` : `On its own, then ${layoutLabel(rest.layout, wide.value)}`) : 'On its own')
 }
 function showAAbove(p) {
   if (!aIds.value.length) return say('Put a clip in lane A first: ⤒ on a part')
@@ -2357,5 +2384,6 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .link.danger { color: #c0583f; }
 .warn { color: #b3412f; }
 .overruled .btn { opacity: 0.45; }
+.handoffshot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 3; pointer-events: none; }
 .timing.speedy b::after { content: ' · changes speed'; font-weight: 400; font-size: 11px; color: var(--muted); }
 </style>

@@ -1000,6 +1000,19 @@ def compose_layout(top, assembled, cfg, keys, total, workdir):
 # a lane on its own fills the frame (fill | blur).
 
 SCENE_IN = 0.4       # seconds a scene's transition in takes
+HANDOFF_MOVE = 0.6   # hand off: the solo frame moving into A's slot as B comes in
+HANDOFF_FADE = 0.4   # ... and, its overlap over, dissolving into A
+
+
+def handoff(scenes, k, secs):
+    """Seconds scene k is handed off from the Solo B scene before it: that
+    scene's last frame moves into A's slot while B comes in, stays there for
+    this long, then dissolves into A (which starts then). 0: no hand off."""
+    sc = scenes[k]
+    if (k == 0 or sc.get("into") != "handoff" or scenes[k - 1].get("layout") != "soloB"
+            or sc.get("layout") not in ("stack", "swap")):
+        return 0.0
+    return max(0.0, min(float(sc.get("handoff", 3) or 0), secs[k] - 0.5))
 LAYOUTS = ("soloA", "stack", "soloB", "swap")
 
 
@@ -1186,7 +1199,7 @@ def compose_scene(scene, slots, div, files, frames, tail, cfg, workdir, k):
     return out
 
 
-def join_scenes(files, scenes, frames, tails, cfg, workdir):
+def join_scenes(files, scenes, frames, tails, cfg, workdir, slots=None, hand_f=None):
     """The scenes one after another. A scene comes in over the last frame of
     the one before: cut, slide (it slides in from the bottom, or the right
     in a wide frame), push (it pushes the last one out) or dissolve."""
@@ -1211,7 +1224,31 @@ def join_scenes(files, scenes, frames, tails, cfg, workdir):
             graph.append(f"{labels[k]['head']}trim=end_frame={head},setpts=PTS-STARTPTS[nh{k}]")
             ease = f"(0.5-0.5*cos(PI*t/{d:.4f}))"
             into = scenes[k].get("into", "cut")
-            if into == "dissolve":
+            if into == "handoff" and not (hand_f and hand_f[k]):
+                into = "slide"
+            if into == "handoff":
+                # The solo frame moves so its middle band lands on A's slot,
+                # while B (and the divider) come in from their side.
+                aw, ah, ax, ay = slots[k]["A"]
+                ox, oy = band_offset(slots[k]["A"], w, h)
+                bw, bh, bx, by = slots[k]["B"]
+                if axis == "x":
+                    bx0, bx1 = min(bx, ax + aw), max(bx + bw, ax)   # B and the divider beside it
+                    block = (bx1 - bx0, h, bx0, 0)
+                    start = w if bx0 > 0 else -block[0]
+                    old_move = f"x='{ax - ox}*{ease}':y=0"
+                    new_move = f"x='{start}+({bx0}-({start}))*{ease}':y=0"
+                else:
+                    by0, by1 = min(by, ay + ah), max(by + bh, ay)
+                    block = (w, by1 - by0, 0, by0)
+                    start = h if by0 > 0 else -block[1]
+                    old_move = f"x=0:y='{ay - oy}*{ease}'"
+                    new_move = f"x=0:y='{start}+({by0}-({start}))*{ease}'"
+                graph.append(f"color=c=black:s={w}x{h}:r={fps},format=yuv420p,trim=end_frame={head}[cv{k}]")
+                graph.append(f"[cv{k}][pt{k}]overlay={old_move}[pm{k}]")
+                graph.append(f"[nh{k}]crop={block[0]}:{block[1]}:{block[2]}:{block[3]}[nb{k}]")
+                graph.append(f"[pm{k}][nb{k}]overlay={new_move}[tr{k}]")
+            elif into == "dissolve":
                 graph.append(f"[pt{k}][nh{k}]xfade=transition=fade:duration={d:.4f}:offset=0[tr{k}]")
             elif into == "push":
                 move = (f"x='-{w}*{ease}':y=0", f"x='{w}*(1-{ease})':y=0") if axis == "x" else \
@@ -1246,29 +1283,33 @@ def scene_report(cfg, plan, base_dir):
     scenes, fps = cfg["scenes"], cfg["fps"]
     frames = scene_frames(plan, len(scenes), fps)
     secs = [f / fps for f in frames]
-    ranges = resolve_a(scenes, secs)
+    hands = [handoff(scenes, k, secs) for k in range(len(scenes))]
+    a_secs = [secs[k] - hands[k] for k in range(len(scenes))]
+    ranges = resolve_a(scenes, a_secs)
     names = {"soloA": "Solo A", "stack": "A over B", "soloB": "Solo B", "swap": "B over A"}
     if cfg["width"] > cfg["height"]:
         names.update(stack="A | B", swap="B | A")
     lines, t = [], 0.0
     for k, sc in enumerate(scenes):
         line = f"  {fmt(t):>7}  scene {k + 1}  {names.get(sc.get('layout'), sc.get('layout')):<9} {secs[k]:.2f}s"
-        if k and sc.get("into", "cut") != "cut":
+        if hands[k]:
+            line += f"  (hand off: the last frame in A's slot {hands[k]:.1f}s)"
+        elif k and sc.get("into", "cut") != "cut":
             line += f"  (in: {sc['into']})"
         if ranges[k]:
             a = sc["a"]
-            pieces, rate = scene_a_plan(a, *ranges[k], max(secs[k], 0.04), sc)
+            pieces, rate = scene_a_plan(a, *ranges[k], max(a_secs[k], 0.04), sc)
             line += f"  · A {Path(a['file']).name} {fmt(ranges[k][0])} -> {fmt(ranges[k][1])} at {rate:.2f}x"
             if len(pieces) > 1:
                 line += f", {len(pieces)} pieces"
-            short = secs[k] - sum(l for _, l in pieces) / rate
+            short = a_secs[k] - sum(l for _, l in pieces) / rate
             if short > 0.05:
                 line += f", runs out: holds its last frame {short:.1f}s"
             if rate > 4.001:
                 line += "  ! over 4x"
         lines.append(line)
         t += secs[k]
-    return lines, ranges, frames
+    return lines, ranges, frames, hands
 
 
 def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
@@ -1278,10 +1319,11 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
     scenes, fps = cfg["scenes"], cfg["fps"]
     w, h = cfg["width"], cfg["height"]
     divider = int((cfg.get("stack") or {}).get("divider", 4))
-    _, ranges, frames = scene_report(cfg, plan, base_dir)
-    tails = [min(round(SCENE_IN * fps), frames[k], frames[k + 1]) if k + 1 < len(scenes)
-             and scenes[k + 1].get("into", "cut") != "cut" else 0 for k in range(len(scenes))]
-    files = []
+    _, ranges, frames, hands = scene_report(cfg, plan, base_dir)
+    hand_f = [round(x * fps) for x in hands]
+    tails = [min(round((HANDOFF_MOVE if hand_f[k + 1] else SCENE_IN) * fps), frames[k], frames[k + 1])
+             if k + 1 < len(scenes) and scenes[k + 1].get("into", "cut") != "cut" else 0 for k in range(len(scenes))]
+    files, all_slots = [], []
     for k, sc in enumerate(scenes):
         print(f"  scene {k + 1}/{len(scenes)}...                     ", end="\r")
         slots, div = scene_slots(sc, w, h, divider)
@@ -1296,14 +1338,51 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
                 a["_solo"] = True
                 a.setdefault("fit", solo_fill)
             ain, aout = ranges[k]
-            pieces, rate = scene_a_plan(a, ain, aout, max(frames[k] / fps, 0.04), sc)
+            a_frames = frames[k] - hand_f[k]
+            pieces, rate = scene_a_plan(a, ain, aout, max(a_frames / fps, 0.04), sc)
             path = (base_dir / a["file"]).expanduser()
-            lane_files["A"] = render_scene_a(a, path, pieces, rate, slots["A"][:2], frames[k], cfg,
+            lane_files["A"] = render_scene_a(a, path, pieces, rate, slots["A"][:2], a_frames, cfg,
                                              keep_audio, workdir, k)
+            if hand_f[k]:
+                lane_files["A"] = hand_off_a(files[k - 1], slots["A"], lane_files["A"], hand_f[k], frames[k],
+                                             cfg, workdir, k)
+        all_slots.append(slots)
         files.append(compose_scene(sc, slots, div, lane_files, frames[k], tails[k], cfg, workdir, k))
     if len(files) == 1:
         return files[0]
-    return join_scenes(files, scenes, frames, tails, cfg, workdir)
+    return join_scenes(files, scenes, frames, tails, cfg, workdir, all_slots, hand_f)
+
+
+def band_offset(slot, w, h):
+    """Where A's slot sits in the full frame when the solo frame moves into
+    it: the middle band of that frame, of the slot's size."""
+    sw, sh = slot[:2]
+    return ((w - sw) // 2 // 2 * 2, 0) if w > h else (0, (h - sh) // 2 // 2 * 2)
+
+
+def hand_off_a(prev_file, slot, a_file, hold, frames, cfg, workdir, k):
+    """Lane A for a scene handed off from a Solo B scene: the middle band of
+    that scene's last frame fills A's slot for `hold` frames, then dissolves
+    into A (whose sound starts with it)."""
+    fps, w, h = cfg["fps"], cfg["width"], cfg["height"]
+    sw, sh = slot[:2]
+    ox, oy = band_offset(slot, w, h)
+    last = workdir / f"scene{k:02d}_from.png"
+    run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-sseof", "-0.2", "-i", str(prev_file),
+         "-update", "1", "-vf", f"crop={sw}:{sh}:{ox}:{oy}", str(last)])
+    fade = min(round(HANDOFF_FADE * fps), frames - hold)
+    out = workdir / f"scene{k:02d}_a_handoff.mkv"
+    graph = (f"[0:v]fps={fps},setsar=1,format=yuv420p,trim=end_frame={hold + fade},setpts=PTS-STARTPTS,settb=1/{fps}[h];"
+             f"[1:v]fps={fps},setsar=1,format=yuv420p,setpts=PTS-STARTPTS,settb=1/{fps}[a];")
+    graph += (f"[h][a]xfade=transition=fade:duration={fade / fps:.4f}:offset={hold / fps:.4f},"
+              f"trim=end_frame={frames}[v];" if fade > 0 else f"[h][a]concat=n=2:v=1:a=0,trim=end_frame={frames}[v];")
+    ms = round(hold / fps * 1000)
+    graph += f"[1:a]adelay={ms}|{ms},apad,atrim=0:{frames / fps:.4f},asetpts=PTS-STARTPTS[aa]"
+    run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-loop", "1", "-framerate", str(fps),
+         "-t", f"{(hold + fade) / fps + 0.1:.3f}", "-i", str(last), "-i", str(a_file),
+         "-filter_complex", graph, "-map", "[v]", "-map", "[aa]",
+         *video_codec(cfg), "-r", str(fps), "-c:a", "pcm_s16le", str(out)])
+    return out
 
 
 def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output, voice=None):
