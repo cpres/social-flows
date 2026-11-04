@@ -1449,18 +1449,24 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
         files.append(compose_scene(sc, slots, div, lane_files, frames[k], tails[k], cfg, workdir, k))
         # Where its sound comes from: lane A's clip from where to where (and how fast), or the B parts.
         lane = scene_sound(sc, [x for x in ("A", "B") if x in slots], mode)
-        if lane == "A":
+        if lane == "A" and relay:
+            sources.append(("carry",))   # the Solo B shot before, carrying on in A's slot
+        elif lane == "A":
             sources.append(("A", sc["a"]["file"], ranges[k][0], ranges[k][1], round(rate, 3), hand_f[k]))
         else:
             sources.append((lane,))
     if len(files) == 1:
         return files[0]
     # A short switch where the sound comes from somewhere else; none where
-    # the same A clip carries straight on at real speed.
-    switches = [k > 0 and not (sources[k][0] == "A" and sources[k - 1][0] == "A"
-                               and sources[k][1] == sources[k - 1][1] and not sources[k][5]
-                               and abs(sources[k][2] - sources[k - 1][3]) < 0.05)
-                for k in range(len(files))]
+    # the same A clip carries straight on at real speed, or a relay carries
+    # on the shot the Solo B before it was playing.
+    def carries_on(k):
+        now, before = sources[k], sources[k - 1]
+        if now[0] == "carry":
+            return before[0] == "B"
+        return (now[0] == "A" and before[0] == "A" and now[1] == before[1] and not now[5]
+                and abs(now[2] - before[3]) < 0.05)
+    switches = [k > 0 and not carries_on(k) for k in range(len(files))]
     return join_scenes(files, scenes, frames, tails, cfg, workdir, all_slots, hand_f, switches)
 
 

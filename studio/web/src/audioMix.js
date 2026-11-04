@@ -57,6 +57,15 @@ export function audioSegments(r) {
   const glasses = mode !== 'off' ? (withSong ? Number(settings.originalVolume ?? 0.35) : 1) : 0
 
   sceneList.forEach((sc, k) => {
+    // A relay: A's slot is the Solo B shot before, carrying on from where its part ended.
+    const carry = r.carryOf?.(k)
+    if (carry) {
+      if (!isVideo(carry)) return
+      const audible = glasses > 0 && (mode === 'A' || primaryLane(sc) === 'A')
+      out.A.push({ key: carry.media.id, at: sceneTimes[k].start, len: sceneTimes[k].end - sceneTimes[k].start,
+                   from: carry.start + carry.length, rate: 1, gain: glasses, audible, scene: k })
+      return
+    }
     const plan = aPlans[k]
     if (!plan) return
     const item = byId.get(sc.a.item)
@@ -79,7 +88,7 @@ export function audioSegments(r) {
     const sc = sceneList[st.scene]
     // The last part plays on to the end of the reel (held for the voice or the end card).
     const end = i === parts.length - 1 && st.scene === sceneList.length - 1 ? Math.max(st.end, reelLength) : st.end
-    const audible = glasses > 0 && mode === 'primary' && (primaryLane(sc) === 'B' || !aPlans[st.scene])
+    const audible = glasses > 0 && mode === 'primary' && (primaryLane(sc) === 'B' || (!aPlans[st.scene] && !r.carryOf?.(st.scene)))
     out.B.push({ key: st.part.media.id, at: st.start, len: end - st.start, from: st.part.start, rate: 1,
                  gain: glasses, audible, scene: st.scene })
   })

@@ -1661,7 +1661,7 @@ const envsForMix = computed(() => ({ ...envs.value, music: envs.value[`music:${s
 const audioSegs = computed(() => withDucking(audioSegments({
   sceneList: sceneList.value, sceneTimes: sceneTimes.value, stretches: stretches.value, aPlans: aPlans.value,
   aSecs: aSecs.value, handoffs: handoffs.value, byId: byId.value, reelLength: reelLength.value, settings,
-  voicePieces: voiceTl.value.pieces, songVolume,
+  voicePieces: voiceTl.value.pieces, songVolume, carryOf,
 }), envsForMix.value, reelLength.value, settings))
 // The rows per source (Show tracks): each at its own level, dim where it isn't heard.
 const TRACKS_KEY = 'footage-studio-audio-tracks'
