@@ -266,6 +266,11 @@
       <button class="btn small" @click="swapScene()" :disabled="!['stack', 'swap'].includes(shownSc?.layout)" title="Swap which lane has the primary slot">Swap A ⇄ B <kbd>W</kbd></button>
       <RouterLink class="btn small" to="/" title="Open a shoot and add parts to this reel: they join lane B">Add clip to B lane…</RouterLink>
       <div class="tracks">
+      <!-- dragging a B video: the whole timeline is a drop zone for lane A -->
+      <div
+        v-if="draggingB" class="tozone" :class="{ hot: dragOver === 'zone' }"
+        @dragover.prevent="dragOver = 'zone'" @dragleave.self="dragOver = null" @drop.prevent="dropA(); endDrag()"
+      ><span>⤒ Move to A lane</span><small>the main, continuous footage</small></div>
       <div class="ruler">
         <span v-for="t in rulerTicks" :key="t" class="rt mono" :style="{ left: `${(t / (reelLength || 1)) * 100}%` }">{{ fmtTime(t).replace(/\.\d$/, '') }}</span>
       </div>
@@ -322,7 +327,7 @@
           >B off-screen</div>
           <button
             v-else class="seg abs" draggable="true"
-            @dragstart="dragFrom = items.indexOf(st.part)" @dragend="dragOver = null"
+            @dragstart="startDragB(items.indexOf(st.part))" @dragend="endDrag"
             @dragover.prevent.stop="dragOver = items.indexOf(st.part)" @drop.stop="drop(items.indexOf(st.part))"
             :class="{ current: st.part === current, playing: reelOn && st.part === current, photo: st.part.media.kind === 'photo', over: dragOver === items.indexOf(st.part) }"
             :style="laneStyle(st.start, st.end - st.start)" :title="`${st.part.media.file} · ${len(st.part).toFixed(1)}s`"
@@ -391,7 +396,7 @@
         <div
           v-if="!isA(p)" class="row" :data-i="i"
           :class="{ over: dragOver === i, playing: reelOn && i === selected }"
-          draggable="true" @dragstart="dragFrom = i" @dragover.prevent="dragOver = i"
+          draggable="true" @dragstart="startDragB(i)" @dragover.prevent="dragOver = i"
           @dragleave="dragOver = null" @drop="drop(i)" @dragend="dragOver = null"
         >
           <span class="num">{{ reelOn && i === selected ? '▶' : rowNumber(p) }}</span>
@@ -1689,6 +1694,20 @@ function dropB() {
   dragOver.value = null
   if (typeof from === 'string' && from.startsWith('A')) toB(byId.value.get(Number(from.slice(1))), items.value.length)
 }
+// While a B video is dragged, the timeline turns into a "Move to A lane"
+// drop zone (shown a moment later: changing the page as a drag starts can
+// cancel it).
+const draggingB = ref(false)
+function startDragB(i) {
+  dragFrom.value = i
+  if (items.value[i]?.media.kind === 'video') setTimeout(() => { draggingB.value = true })
+}
+function endDrag() {
+  draggingB.value = false
+  dragOver.value = null
+}
+onMounted(() => { window.addEventListener('dragend', endDrag); window.addEventListener('drop', endDrag) })
+onBeforeUnmount(() => { window.removeEventListener('dragend', endDrag); window.removeEventListener('drop', endDrag) })
 function dropA() {
   const from = dragFrom.value
   dragOver.value = null
@@ -2164,7 +2183,15 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .formats { display: inline-flex; gap: 2px; margin-left: 6px; padding: 2px; border-radius: 999px; background: rgb(128 128 128 / 16%); }
 .formats .btn { border-radius: 999px; border-color: transparent; background: transparent; }
 .formats .btn.active { background: var(--sage); color: var(--on-sage); }
-.tracks { flex: 1 1 100%; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.tracks { flex: 1 1 100%; display: flex; flex-direction: column; gap: 3px; min-width: 0; position: relative; }
+.tozone {
+  position: absolute; inset: -6px; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; border-radius: var(--radius); border: 2px dashed var(--sage); background: var(--paper); color: var(--ink);
+  box-shadow: var(--shadow);
+}
+.tozone span { font-size: 20px; font-weight: 700; color: var(--forest); pointer-events: none; }
+.tozone small { color: var(--muted); pointer-events: none; }
+.tozone.hot { background: var(--sage-soft); border-style: solid; }
 .tracks .strip { flex: none; }
 .toptrack { height: 22px; }
 .toptrack .topseg { flex: 1; text-align: left; padding-left: 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
