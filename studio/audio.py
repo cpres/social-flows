@@ -19,20 +19,27 @@ from array import array
 RATE = 8000          # samples a second to measure at: loudness, not fidelity
 STEP = 0.04          # seconds per window (spec: 20-50ms)
 FLOOR = -70          # dBFS: quieter than this is silence
-VERSION = 1          # bump to re-measure everything
+VERSION = 2          # bump to re-measure everything
 
 
-def has_audio(path):
-    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries",
-                          "stream=index", "-of", "csv=p=0", str(path)],
-                         capture_output=True, text=True, timeout=60).stdout
-    return bool(out.strip())
+def channels(path):
+    """How many channels the first audio stream has (0: no sound)."""
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+                          "stream=channels", "-of", "csv=p=0", str(path)],
+                         capture_output=True, text=True, timeout=60).stdout.strip()
+    try:
+        return int(out.splitlines()[0]) if out else 0
+    except ValueError:
+        return 1
 
 
 def measure(path):
-    """{step, db: [dBFS per window], duration, hasAudio} for one file."""
-    if not has_audio(path):
-        return {"step": STEP, "db": [], "duration": 0.0, "hasAudio": False}
+    """{step, db: [dBFS per window], duration, hasAudio, channels} for one
+    file. channels matters for the mix: the render makes everything stereo,
+    and ffmpeg spreads a mono source over both channels 3dB down."""
+    n_ch = channels(path)
+    if not n_ch:
+        return {"step": STEP, "db": [], "duration": 0.0, "hasAudio": False, "channels": 0}
     raw = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-vn",
                           "-ac", "1", "-ar", str(RATE), "-f", "s16le", "-"],
                          capture_output=True, timeout=600).stdout
@@ -46,7 +53,7 @@ def measure(path):
             break   # a sliver at the very end: not worth a window of its own
         power = sum(s * s for s in win) / (len(win) * 32768.0 * 32768.0)
         db.append(max(FLOOR, round(10 * math.log10(power), 1)) if power > 0 else FLOOR)
-    return {"step": STEP, "db": db, "duration": round(len(samples) / RATE, 3), "hasAudio": True}
+    return {"step": STEP, "db": db, "duration": round(len(samples) / RATE, 3), "hasAudio": True, "channels": n_ch}
 
 
 def envelope(path, cache_dir):

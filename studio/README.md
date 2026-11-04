@@ -240,6 +240,16 @@ over them. Lanes say what's playing; scenes say what's on screen.
 - **Sound:** *Keep glasses audio* follows the primary slot (the full frame
   when a lane is alone), so a swap moves the sound with it. A sped-up A is
   silent. Music and voice sit over both lanes, as before.
+- **Audio strip:** under the lanes, *Audio* shows what you'll actually
+  hear, on the same clock: the glasses audio that's kept, the song at its
+  level (lower under the voice, fading at the end) and the voice, added up
+  in bars about 0.4s apart, each coloured by where most of it comes from
+  (A green, B orange, song blue, voice cream). Orange bands mark where a
+  scene comes in (or, in a reel of one scene, where a part leads into the
+  next with anything but a cut). Each file's loudness is measured once
+  (`audio.py`, cached in `~/.cache/footage-studio`); the first look at a
+  reel says *measuring…* while that happens. The strip follows the
+  render's own levels, to within about half a dB.
 - **Reels from before:** a Standard reel becomes one Solo B scene. A Stack
   reel's top clip becomes lane A, with one *A over B* scene at real speed.
   The top-alone and on-its-own parts from the first moving-stack version

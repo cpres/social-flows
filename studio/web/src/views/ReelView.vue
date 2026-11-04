@@ -342,6 +342,21 @@
         <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
       </div>
       </div>
+      <!-- what will be heard: the mix of glasses audio, song and voice (audioMix.js) -->
+      <div class="lanerow audiorow">
+        <div class="lanename"><b>Audio</b><small>{{ envWaiting ? 'measuring…' : 'what you hear' }}</small></div>
+        <div class="lanebody mixstrip" :title="mixHeard ? '' : 'Nothing is heard yet: glasses audio is off and there\'s no song or voice'">
+          <div v-for="(b, i) in bands" :key="`band${i}`" class="band" :style="laneStyle(b.start, b.end - b.start)"></div>
+          <svg class="bars" :viewBox="`0 0 ${mix.length || 1} 1`" preserveAspectRatio="none" aria-hidden="true">
+            <rect
+              v-for="(b, i) in mix" :key="i" :class="`s-${b.src}`" :x="i + 0.14" :width="0.72"
+              :y="(1 - Math.max(b.h, 0.02)) / 2" :height="Math.max(b.h, 0.02)"
+            ><title>{{ barTitle(b) }}</title></rect>
+          </svg>
+          <span v-if="!mixHeard && !envWaiting" class="muted laneempty">Silent: glasses audio is off, and no song or voice</span>
+          <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
+        </div>
+      </div>
       <!-- the voice track and its captions, on the same clock -->
       <div v-if="voiceTl.pieces.length" class="lane vlane" @click="seekLane" title="The voice: click to play from there">
         <div
@@ -362,7 +377,7 @@
       </div>
       </div>
     </section>
-    <p class="readout muted small">Hatched = that lane isn't on screen in the scene. Click a scene to edit its layout; drag a scene edge to move where it changes.</p>
+    <p class="readout muted small">Hatched = that lane isn't on screen in the scene. Click a scene to edit its layout; drag a scene edge to move where it changes. Orange bands = scene transitions. The audio strip shows what you'll actually hear, coloured by where it comes from.</p>
 
     <p v-if="!items.length" class="panel empty">
       This reel is empty. Open a shoot from the <RouterLink to="/">home page</RouterLink>,
@@ -750,6 +765,7 @@ import { quietCut, topSource } from '../stack'
 import { HANDOFF_DEFAULT, INTOS, LAYOUTS as SCENE_LAYOUTS, SCENE_IN, SOLO_A_MIN, TIMINGS, aShort, aTiming, fitted, handoffSecs, frameFor, layoutLabel, newId, normalize,
   resolveA, sceneAPlan, sceneSlots, showsA, showsB, slotShape, soloSeconds } from '../scenes'
 import SceneFrame from '../components/SceneFrame.vue'
+import { audioSegments, mixBars, transitionBands } from '../audioMix'
 import TimingFields from '../components/TimingFields.vue'
 import TrimBar from '../components/TrimBar.vue'
 
@@ -1521,6 +1537,63 @@ const intoNow = computed(() => {
   const p = (reelTime.value - sceneTimes.value[k].start) / SCENE_IN
   return p < 1 ? { type: sc.into === 'handoff' ? 'slide' : sc.into, p } : null
 })
+// ---------------------------------------------------------------- audio rows
+
+// How loud each file is along its length (audio.py), fetched once a file
+// and kept: { mediaId | 'music' | 'folder/file': { step, db, hasAudio } }.
+const envs = ref({})
+const envWaiting = ref(0)   // files still being measured
+const envAsked = new Set()
+async function fetchEnvs(want) {
+  const fresh = want.filter((k) => !envAsked.has(k.key))
+  if (!fresh.length) return
+  fresh.forEach((k) => envAsked.add(k.key))
+  envWaiting.value += fresh.length
+  const media = fresh.filter((k) => k.mediaId)
+  const others = fresh.filter((k) => !k.mediaId)
+  const jobs = others.map(async (k) => {
+    try { envs.value = { ...envs.value, [k.key]: await k.load() } } catch { envAsked.delete(k.key) } finally { envWaiting.value-- }
+  })
+  // Videos in batches, so the strip fills in as they're measured.
+  for (let i = 0; i < media.length; i += 6) {
+    const batch = media.slice(i, i + 6)
+    jobs.push(api.envelopes(batch.map((k) => k.mediaId)).then((got) => {
+      envs.value = { ...envs.value, ...got }
+    }).catch(() => batch.forEach((k) => envAsked.delete(k.key))).finally(() => { envWaiting.value -= batch.length }))
+  }
+  await Promise.all(jobs)
+}
+const envWanted = computed(() => {
+  const want = []
+  const seen = new Set()
+  for (const p of [...kept.value, ...aParts.value]) {
+    if (p?.media?.kind !== 'video' || seen.has(p.media.id)) continue
+    seen.add(p.media.id)
+    want.push({ key: p.media.id, mediaId: p.media.id })
+  }
+  if (settings.music) want.push({ key: `music:${settings.music}`, load: () => api.musicEnvelope(settings.music) })
+  for (const v of voiceTl.value.pieces) {
+    want.push({ key: `${v.folder}/${v.file}`, load: () => api.voiceEnvelope(v.folder, v.file) })
+  }
+  return want
+})
+watch(() => envWanted.value.map((k) => k.key).join('|'), () => fetchEnvs(envWanted.value), { immediate: true })
+// The song's envelope is kept under its name; the mix reads it as 'music'.
+const envsForMix = computed(() => ({ ...envs.value, music: envs.value[`music:${settings.music}`] }))
+const audioSegs = computed(() => audioSegments({
+  sceneList: sceneList.value, sceneTimes: sceneTimes.value, stretches: stretches.value, aPlans: aPlans.value,
+  aSecs: aSecs.value, handoffs: handoffs.value, byId: byId.value, reelLength: reelLength.value, settings,
+  voicePieces: voiceTl.value.pieces, songVolume,
+}))
+const mix = computed(() => mixBars(audioSegs.value, envsForMix.value, reelLength.value))
+const mixHeard = computed(() => mix.value.some((b) => b.h > 0))
+const bands = computed(() => transitionBands({
+  sceneList: sceneList.value, sceneTimes: sceneTimes.value, stretches: stretches.value, handoffs: handoffs.value,
+  settings, sceneIn: SCENE_IN,
+}))
+const SRC_LABEL = { A: 'A glasses', B: 'B glasses', music: 'music', voice: 'voice' }
+const barTitle = (b) => `${fmtTime(b.t)}${b.src ? ` · mostly ${SRC_LABEL[b.src]}` : ' · silent'}`
+
 const rateText = (k) => (aPlans.value[k] ? `${aPlans.value[k].rate.toFixed(2)}×` : '')
 // Trimming parts moves scene edges and A re-fits: say so.
 const toast = ref('')
@@ -2315,6 +2388,18 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .lg { display: inline-flex; align-items: center; gap: 4px; }
 .lg .sw { width: 10px; height: 10px; border-radius: 50%; }
 .shapes { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* the audio rows: the mix strip, coloured by where the sound comes from */
+.audiorow { --au-a: #8fae7c; --au-b: #d9954f; --au-music: #6f93c4; --au-voice: #b59a62; }
+:root[data-theme='dark'] .audiorow { --au-a: #b8cfa8; --au-b: #e9b27a; --au-music: #8fb0dc; --au-voice: #efe6cf; }
+.mixstrip { min-height: 44px; border-radius: 6px; background: rgb(128 128 128 / 7%); }
+.mixstrip .bars { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.bars rect { fill: rgb(128 128 128 / 35%); }
+.bars rect.s-A { fill: var(--au-a); }
+.bars rect.s-B { fill: var(--au-b); }
+.bars rect.s-music { fill: var(--au-music); }
+.bars rect.s-voice { fill: var(--au-voice); }
+.band { position: absolute; top: 0; bottom: 0; min-width: 3px; background: rgb(224 128 56 / 28%); border-left: 1px solid rgb(224 128 56 / 55%); border-right: 1px solid rgb(224 128 56 / 55%); pointer-events: none; }
 
 /* lanes & scenes */
 .strip.lanebody { display: block; flex: 1; height: 30px; }
