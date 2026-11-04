@@ -58,6 +58,7 @@ from db import DEFAULT_SETTINGS, Library, default_start, now, settings_of  # noq
 import audio  # noqa: E402
 import compose  # noqa: E402
 import scenes as scenes_mod  # noqa: E402
+import montage  # noqa: E402
 from music import AUDIO_EXTS, Shelf, beat_detection_available  # noqa: E402
 from share import Shares  # noqa: E402
 from voice import MODEL as VOICE_MODEL, Voice, align, lines_from_words, transcription_available  # noqa: E402
@@ -383,7 +384,30 @@ def apply_style(db, reel_id, style, body):
     else:
         overlap = min(max(float(body.get("overlap") or 3), 0.5), 10)
         solo = min(max(float(body.get("solo") or 4), 0.5), 30)
-        parts, make = scenes_mod.relay_plan(rows, overlap, solo)
+        cap = float(body["cap"]) if body.get("cap") else None
+        clips = []
+        for r in rows:
+            long = r["kind"] == "video" and r["duration"] >= scenes_mod.LONG_CLIP
+            if long:
+                # A long clip plays in full: from the start, or the long stretch picked in its shoot.
+                pick = pick_of(db, r["media_id"])
+                if pick and pick["length"] >= scenes_mod.LONG_CLIP:
+                    start, avail = pick["start"], pick["length"]
+                else:
+                    start, avail = 0.0, r["duration"]
+            else:
+                start, avail = r["start"], r["length"]
+            clips.append({"row": r, "start": start, "avail": avail, "long": long})
+
+        def quiet(r, start, length):   # a long clip's time alone, its lulls taken out
+            path = ROOT / db.execute("SELECT path FROM media WHERE id = ?", (r["media_id"],)).fetchone()["path"]
+            try:
+                points = activity_of(path)["points"]
+            except Exception:
+                return [(start, length)]
+            return montage.quiet_cut([(float(t), float(v)) for t, v in points], start, length)
+
+        parts, make = scenes_mod.relay_plan(clips, overlap, solo, cap, quiet if body.get("quiet") else None)
         db.execute("DELETE FROM reel_items WHERE reel_id = ?", (reel_id,))
         ids = []
         for pos, (r, start, length, _) in enumerate(parts):
@@ -394,7 +418,7 @@ def apply_style(db, reel_id, style, body):
             ids.append(cur.lastrowid)
         s["laneA"] = []
         s["scenes"] = make(ids)
-        s["relay"] = {"overlap": overlap, "solo": solo}
+        s["relay"] = {"overlap": overlap, "solo": solo, "cap": cap, "quiet": bool(body.get("quiet"))}
     db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), reel_id))
 
 

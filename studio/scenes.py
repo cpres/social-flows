@@ -191,26 +191,50 @@ def clean(scenes, s):
     return out
 
 
-def relay_plan(rows, overlap=3.0, solo=4.0):
-    """A relay reel from parts in order: each clip plays alone, then moves
-    into A's slot and carries on while the next comes in underneath, which
-    then takes over the full frame. Returns ([(row, start, length, kind)]:
-    the parts, two per clip after the first: its stretch underneath, then
-    alone), and a function making the scenes from their new ids."""
+LONG_CLIP = 10.0   # a relay plays videos this long or longer in full (or up to its cap)
+
+
+def relay_plan(clips, overlap=3.0, solo=4.0, cap=None, quiet=None):
+    """A relay reel from clips in order: each plays alone, then moves into
+    A's slot and carries on while the next comes in underneath, which then
+    takes over the full frame.
+
+    clips: [{row, start, avail, long}]: where each starts and how much of it
+    there is to play from there. A long clip (a video of LONG_CLIP seconds or
+    more) gets its own length: all of `avail` (up to `cap`), less what it
+    plays underneath the clip before and carries on over the next. Photos
+    and short clips play `solo` seconds alone. quiet(row, start, length),
+    when given, splits a long clip's time alone into pieces with its lulls
+    taken out.
+
+    Returns ([(row, start, length, kind)]: the parts: under (beneath the
+    clip before), alone, and more (the rest of a quiet-cut stretch alone)),
+    and a function making the scenes from their new ids."""
     parts = []
-    for i, r in enumerate(rows):
-        video = r["kind"] == "video"
-        dur = r["duration"] if video else 0
-        need = (overlap if i else 0) + solo + (overlap if i + 1 < len(rows) else 0)
-        start = min(r["start"], max(0.0, dur - need)) if video else 0.0
+    n = len(clips)
+    for i, c in enumerate(clips):
+        r, start = c["row"], float(c["start"])
+        under = overlap if i else 0.0
+        after = overlap if i + 1 < n else 0.0
+        if c["long"]:
+            room = c["avail"] if cap is None else min(c["avail"], cap)
+            alone = max(solo, room - under - after)
+        else:
+            alone = solo
+            if r["kind"] == "video":   # room for all of it before the clip ends, if it can
+                start = min(start, max(0.0, r["duration"] - under - alone - after))
         if i:
-            parts.append((r, round(start, 3), overlap, "under"))
-            start += overlap
-        parts.append((r, round(start, 3), solo, "alone"))
+            parts.append((r, round(start, 3), under, "under"))
+            start += under
+        pieces = quiet(r, start, alone) if quiet and c["long"] else [(start, alone)]
+        for j, (ps, pl) in enumerate(pieces):
+            parts.append((r, round(ps, 3), round(pl, 3), "alone" if j == 0 else "more"))
 
     def scenes(ids):
         out = []
         for (r, _, _, kind), pid in zip(parts, ids):
+            if kind == "more":
+                continue   # more of the same clip alone, in the same scene
             if kind == "alone":
                 out.append({"id": new_id(), "layout": "soloB", "from": pid,
                             "into": "takeover" if out else "cut"})

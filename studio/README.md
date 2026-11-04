@@ -187,16 +187,21 @@ folder* (a shoot) ask for a name and a style:
 - **Weave:** opens the Weave wizard (below).
 - **Stack:** the longest clip goes in lane A, on top the whole way at real
   speed, with the others underneath.
-- **Relay:** single, split, single, split… Each clip plays alone (4s by
-  default). Then it moves up into A's slot and carries on (3s by default)
-  while the next clip comes in underneath. Then the next clip takes over the
+- **Relay:** single, split, single, split… for long-form reels. Each clip
+  plays alone, then moves up into A's slot and carries on (3s by default)
+  while the next clip comes in underneath. The next clip then takes over the
   full frame as the first one finishes, and so on, in the order the clips
-  were shot. Every move is seamless: the shot moving up is exactly what was
-  on screen, and B grows from its slot to the full frame. In the reel it's
-  ordinary scenes (Solo B, then a split with *Relay* ticked that comes in
-  with *Hand off*, then Solo B coming in with *Take over*), so you can trim,
-  reorder and change any of it. Ticking *Relay* on any split after a Solo B
-  scene does the same by hand.
+  were shot. **Long clips** (10s or more) get their own length: all of the
+  clip, or the long stretch you picked on the shoot page, or up to 20, 30 or
+  60s if you cap them. *Skip quiet moments in long clips* cuts out where
+  nothing much happens, at real speed. **Photos and short clips** play alone
+  for a set few seconds (3s by default), like clips between the long pieces.
+  The dialog shows about how long the reel will run. Every move is seamless:
+  the shot moving up is exactly what was on screen, and B grows from its
+  slot to the full frame. In the reel it's ordinary scenes (Solo B, then a
+  split with *Relay* ticked that comes in with *Hand off*, then Solo B coming
+  in with *Take over*), so you can trim, reorder and change any of it.
+  Ticking *Relay* on any split after a Solo B scene does the same by hand.
 
 **Lanes and scenes.** A reel has two lanes of footage and a row of scenes
 over them. Lanes say what's playing; scenes say what's on screen.
