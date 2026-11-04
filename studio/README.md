@@ -180,8 +180,10 @@ can override the reel's framing, chosen under *Layout* on the shoot page
 over them. Lanes say what's playing; scenes say what's on screen.
 
 - **Lane A** is the main, continuous footage: usually one long glasses POV
-  clip, or a few. ⤒ on a part (or dragging it onto the *A lane* slot in the
-  list) puts it there; *Move to lane B* puts it back. Its start and length
+  clip, or a few. ⤒ on a part, or dragging it onto the *A lane* slot in the
+  list or the *A lane* row of the timeline, puts it there. *Move to lane B*,
+  or dragging its block down onto the *B lane* row, puts it back. Dragging a
+  B block onto another reorders the cut list. Its start and length
   pick the stretch the scenes can use.
 - **Lane B** is the cut list: every other kept part, one after another, as
   before.

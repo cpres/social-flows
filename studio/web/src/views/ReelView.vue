@@ -291,10 +291,14 @@
       </div>
       <div class="lanerow">
         <div class="lanename"><b>A lane</b><small>{{ wide ? 'left' : 'top' }} / main</small></div>
-        <div class="lanebody">
+        <div
+          class="lanebody" :class="{ over: dragOver === 'A' }"
+          @dragover.prevent="dragOver = 'A'" @dragleave="dragOver = null" @drop="dropA"
+          title="Drop a B part here to put it in lane A"
+        >
           <template v-for="(sc, k) in sceneList" :key="sc.id">
             <button
-              v-if="aPlans[k]" class="aseg" :class="{ current: isA(current) && current.id === sc.a.item, warn: aPlans[k].rate > 4.001 }"
+              v-if="aPlans[k]" draggable="true" @dragstart="dragFrom = `A${sc.a.item}`" @dragend="dragOver = null" class="aseg" :class="{ current: isA(current) && current.id === sc.a.item, warn: aPlans[k].rate > 4.001 }"
               :style="laneStyle(sceneTimes[k].start, sceneTimes[k].end - sceneTimes[k].start)"
               @click="select(items.indexOf(byId.get(sc.a.item)))"
               :title="`${byId.get(sc.a.item)?.media.file}: ${fmtTime(aRanges[k][0])} → ${fmtTime(aRanges[k][1])} of the clip`"
@@ -307,15 +311,20 @@
       </div>
       <div class="lanerow">
         <div class="lanename"><b>B lane</b><small>{{ wide ? 'right' : 'bottom' }} / cut list</small></div>
-      <div class="strip lanebody">
+      <div
+        class="strip lanebody" :class="{ over: dragOver === 'B' }"
+        @dragover.prevent="dragOver = typeof dragFrom === 'string' ? 'B' : dragOver" @dragleave.self="dragOver = null" @drop="dropB"
+      >
         <template v-for="st in stretches" :key="st.key">
           <div
             v-if="st.kind === 'gap'" class="seg gap abs" :style="laneStyle(st.start, st.end - st.start)"
             title="B isn't on screen in this scene"
           >B off-screen</div>
           <button
-            v-else class="seg abs"
-            :class="{ current: st.part === current, playing: reelOn && st.part === current, photo: st.part.media.kind === 'photo' }"
+            v-else class="seg abs" draggable="true"
+            @dragstart="dragFrom = items.indexOf(st.part)" @dragend="dragOver = null"
+            @dragover.prevent.stop="dragOver = items.indexOf(st.part)" @drop.stop="drop(items.indexOf(st.part))"
+            :class="{ current: st.part === current, playing: reelOn && st.part === current, photo: st.part.media.kind === 'photo', over: dragOver === items.indexOf(st.part) }"
             :style="laneStyle(st.start, st.end - st.start)" :title="`${st.part.media.file} · ${len(st.part).toFixed(1)}s`"
             @click="jumpTo(st.part)"
           >{{ synced ? `${fmtBeats(beatsOf(st.part))}♩` : len(st.part).toFixed(1) }}</button>
@@ -1674,6 +1683,12 @@ async function moveItem(p, to) {
   selected.value = items.value.indexOf(cur)
   await saveOrder()
 }
+// An A clip dropped on the B lane row (not on a part): back into lane B, at the end.
+function dropB() {
+  const from = dragFrom.value
+  dragOver.value = null
+  if (typeof from === 'string' && from.startsWith('A')) toB(byId.value.get(Number(from.slice(1))), items.value.length)
+}
 function dropA() {
   const from = dragFrom.value
   dragOver.value = null
@@ -2202,6 +2217,9 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 
 /* lanes & scenes */
 .strip.lanebody { display: block; flex: 1; height: 30px; }
+.lanebody.over { outline: 2px dashed var(--sage); outline-offset: 2px; border-radius: 8px; }
+.seg.abs.over { box-shadow: inset 3px 0 0 var(--sage); }
+.seg.abs[draggable='true'], .aseg[draggable='true'] { cursor: grab; }
 .seg.abs { position: absolute; top: 0; bottom: 0; margin-right: 2px; box-sizing: border-box; border-right: 2px solid var(--bg, transparent); }
 .toast { font-size: 12px; padding: 3px 10px; border-radius: 12px; background: var(--sage); color: #1d2a1d; }
 .ruler { position: relative; height: 16px; margin-left: 110px; }
