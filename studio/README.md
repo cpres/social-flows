@@ -219,7 +219,10 @@ over them. Lanes say what's playing; scenes say what's on screen.
   sets where A begins in any scene.
 - **Starting a split:** `S` (*Split scene at playhead*) starts a new scene at
   the nearest cut with the last split you used, and A carries on from the
-  same point. *Show A above this* in a part's editor starts one at that part.
+  same point. In a part's editor, *On its own (full frame)* gives that part a
+  Solo B scene of its own, and what comes after it slides back in, in the
+  layout it had. That's how a reel opens on a single photo before the split.
+  *Split from here* starts a split scene at that part.
   `W` swaps A and B. Drag the edge between two scenes to move where it
   changes (it snaps to a cut). Under 1s, the two scenes merge.
 - **Framing per slot:** a part keeps a framing for each slot shape: full

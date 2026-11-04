@@ -648,9 +648,16 @@
             </div>
           </div>
           <div class="tpick" v-if="!isA(current) && current.keep && aIds.length">
-            <span class="muted">Scene {{ sceneOfPart(current) + 1 }}: {{ layoutLabel(sceneList[sceneOfPart(current)]?.layout, wide) }}</span>
+            <span class="muted">This part is in scene {{ sceneOfPart(current) + 1 }} ({{ layoutLabel(sceneList[sceneOfPart(current)]?.layout, wide) }})</span>
             <div>
-              <button class="btn small" @click="showAAbove(current)" :title="`Start a split scene at this part`">Show A {{ wide ? 'beside' : 'above' }} this</button>
+              <button
+                class="btn small" :class="{ active: aloneInScene(current) }" @click="soloThis(current)"
+                title="Give this part a scene of its own, full frame (Solo B); what comes after it carries on in the layout it had"
+              >On its own (full frame)</button>
+              <button
+                class="btn small" @click="showAAbove(current)"
+                :title="`Start a new scene at this part with A ${wide ? 'beside' : 'above'} it`"
+              >Split from here (A {{ wide ? 'beside' : 'above' }})</button>
               <button class="btn small" @click="selectScene(sceneOfPart(current))">Edit the scene</button>
             </div>
           </div>
@@ -1663,6 +1670,29 @@ function edgeUp() {
   commit(list)
 }
 // "Show A above this": a split scene starting at this part.
+// "On its own": this part gets a scene of its own, full frame (Solo B). The
+// parts before it stay in their scene; the ones after it start a new scene
+// in the layout they had, sliding in. A opening photo before a split, say.
+const aloneInScene = (p) => {
+  const sc = sceneList.value[sceneOfPart(p)]
+  return !!sc && sc.layout === 'soloB' && sc.parts.length === 1
+}
+function soloThis(p) {
+  const k = sceneOfPart(p)
+  if (k < 0) return
+  const list = sceneCopy()
+  const sc = list[k]
+  if (sc.layout === 'soloB' && sc.parts.length === 1) return say('This part is already on its own')
+  const at = sc.parts.indexOf(p.id)
+  const next = sc.parts[at + 1]
+  const solo = { id: newId(), layout: 'soloB', from: p.id, split: sc.split, into: at > 0 ? 'slide' : (sc.into || 'cut') }
+  const rest = next && { ...sc, id: newId(), from: next, into: sc.layout === 'soloB' ? 'cut' : 'slide',
+                         a: sc.a ? { ...sc.a, in: null, out: null } : sc.a }
+  list.splice(k, 1, ...(at > 0 ? [sc] : []), solo, ...(rest ? [rest] : []))
+  commit(list)
+  selScene.value = null
+  say(rest ? `On its own, then ${layoutLabel(rest.layout, wide.value)} slides in` : 'On its own')
+}
 function showAAbove(p) {
   if (!aIds.value.length) return say('Put a clip in lane A first: ⤒ on a part')
   const k = sceneOfPart(p)
