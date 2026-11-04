@@ -1617,7 +1617,14 @@ const intoNow = computed(() => {
   const sc = sceneList.value[k]
   if (!k || !sc || (sc.into || 'cut') === 'cut') return null
   const p = (reelTime.value - sceneTimes.value[k].start) / SCENE_IN
-  return p < 1 ? { type: sc.into === 'handoff' ? 'slide' : sc.into, p } : null
+  if (p >= 1) return null
+  // Into or out of Solo A with a slide, A moves between full frame and its slot (as the render).
+  const prev = sceneList.value[k - 1]
+  if (sc.into === 'slide' && [prev.layout, sc.layout].includes('soloA') && prev.layout !== sc.layout
+      && showsA(prev) && showsA(sc) && prev.a?.item === sc.a?.item) {
+    return { type: 'morph', p, from: sceneSlots(prev, frameW.value, frameH.value, Number(settings.dividerPx) || 0) }
+  }
+  return { type: sc.into === 'handoff' ? 'slide' : sc.into, p }
 })
 // ---------------------------------------------------------------- audio rows
 

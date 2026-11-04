@@ -1254,7 +1254,7 @@ def compose_scene(scene, slots, div, files, frames, tail, cfg, workdir, k):
     return out
 
 
-def join_scenes(files, scenes, frames, tails, cfg, workdir, slots=None, hand_f=None, switches=None):
+def join_scenes(files, scenes, frames, tails, cfg, workdir, slots=None, hand_f=None, switches=None, morphs=None):
     """The scenes one after another. A scene comes in over the last frame of
     the one before: cut, slide (it slides in from the bottom, or the right
     in a wide frame), push (it pushes the last one out) or dissolve."""
@@ -1264,6 +1264,11 @@ def join_scenes(files, scenes, frames, tails, cfg, workdir, slots=None, hand_f=N
     for f in files:
         cmd += ["-i", str(f)]
     n = len(files)
+    morph_in = {}
+    for k, f in (morphs or {}).items():
+        if f:
+            morph_in[k] = len(files) + len(morph_in)
+            cmd += ["-i", str(f)]
     graph, pieces, labels = [], [], {}
     for k in range(n):   # each scene is used for its body, its head and the tail the next comes in over
         uses = ["body"] + (["head"] if k > 0 and tails[k - 1] else []) + (["tail"] if k + 1 < n and tails[k] else [])
@@ -1279,9 +1284,15 @@ def join_scenes(files, scenes, frames, tails, cfg, workdir, slots=None, hand_f=N
             graph.append(f"{labels[k]['head']}trim=end_frame={head},setpts=PTS-STARTPTS[nh{k}]")
             ease = f"(0.5-0.5*cos(PI*t/{d:.4f}))"
             into = scenes[k].get("into", "cut")
+            if k in morph_in:   # A moving between full frame and its slot, drawn frame by frame
+                into = "morph"
+                graph.append(f"[pt{k}]nullsink;[nh{k}]nullsink")
+                graph.append(f"[{morph_in[k]}:v]setsar=1,format=yuv420p,trim=end_frame={head},setpts=PTS-STARTPTS[tr{k}]")
             if into in ("handoff", "takeover") and moves_in(scenes, k) != into:
                 into = "slide"
-            if into == "takeover":
+            if into == "morph":
+                pass
+            elif into == "takeover":
                 # B grows from its slot to the full frame (the next scene is its
                 # shot alone, full frame) while A and the divider slide out.
                 aw, ah, ax, ay = slots[k - 1]["A"]
@@ -1415,6 +1426,7 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
     tails = [min(round((HANDOFF_MOVE if moves_in(scenes, k + 1) else SCENE_IN) * fps), frames[k], frames[k + 1])
              if k + 1 < len(scenes) and scenes[k + 1].get("into", "cut") != "cut" else 0 for k in range(len(scenes))]
     files, all_slots, sources = [], [], []
+    a_play = {}   # scene -> (path, a, first source second, rate): for A moving between scenes
     mode = glasses_mode(cfg)
     for k, sc in enumerate(scenes):
         print(f"  scene {k + 1}/{len(scenes)}...                     ", end="\r")
@@ -1442,6 +1454,7 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
             path = (base_dir / a["file"]).expanduser()
             lane_files["A"] = render_scene_a(a, path, pieces, rate, slots["A"][:2], a_frames, cfg,
                                              keep_audio, workdir, k)
+            a_play[k] = (path, a, pieces[0][0], rate, solo_fill if sc.get("layout") == "soloA" else "fill")
             if hand_f[k]:
                 lane_files["A"] = hand_off_a(files[k - 1], slots["A"], lane_files["A"], hand_f[k], frames[k],
                                              cfg, workdir, k)
@@ -1467,7 +1480,106 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
         return (now[0] == "A" and before[0] == "A" and now[1] == before[1] and not now[5]
                 and abs(now[2] - before[3]) < 0.05)
     switches = [k > 0 and not carries_on(k) for k in range(len(files))]
-    return join_scenes(files, scenes, frames, tails, cfg, workdir, all_slots, hand_f, switches)
+    # Into and out of Solo A with a slide, A doesn't leave: it shrinks from the
+    # full frame into its slot (or grows back), playing on, as B comes or goes.
+    morphs = {}
+    for k in range(1, len(files)):
+        if (tails[k - 1] and scenes[k].get("into") == "slide" and k in a_play and k - 1 in a_play
+                and "soloA" in (scenes[k - 1].get("layout"), scenes[k].get("layout"))
+                and scenes[k - 1].get("layout") != scenes[k].get("layout")
+                and a_play[k][0] == a_play[k - 1][0] and not hand_f[k]):
+            print(f"  moving A into scene {k + 1}...            ", end="\r")
+            morphs[k] = morph_a(k, files, all_slots, a_play, frames, tails[k - 1], cfg, workdir)
+    return join_scenes(files, scenes, frames, tails, cfg, workdir, all_slots, hand_f, switches, morphs)
+
+
+def cover_window(sw, sh, tw, th, focus=(0.5, 0.5), zoom=1.0):
+    """The part of a sw x sh picture that fills a tw x th box (as fit_filter's
+    fill): (x, y, width, height) in the picture."""
+    fx, fy = (min(max(float(v), 0.0), 1.0) for v in focus)
+    sc = max(tw / sw, th / sh) * min(max(float(zoom or 1), 1.0), 3.0)
+    ww, wh = tw / sc, th / sc
+    return ((sw - ww) * fx, (sh - wh) * fy, ww, wh)
+
+
+def morph_a(k, files, slots, a_play, frames, n, cfg, workdir):
+    """The frames of A moving between the full frame (Solo A) and its slot
+    (scene k or k-1 split), drawn one by one so it keeps playing and its
+    picture eases from one framing to the other: Solo A -> split, A shrinks
+    into its slot while B comes in from its side; split -> Solo A, A grows
+    while B goes out. Returns the clip of n frames that opens scene k."""
+    from PIL import Image, ImageFilter
+    import math
+    fps, w, h = cfg["fps"], cfg["width"], cfg["height"]
+    shrink = "B" not in slots[k - 1]          # Solo A before: A shrinks
+    path, a, t0, rate, _ = a_play[k]
+    tmp = workdir / f"morph{k:02d}"
+    tmp.mkdir(exist_ok=True)
+    # A as it plays through the move (the scene coming in sets where it is).
+    run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", f"{t0:.3f}", "-i", str(path),
+         "-vf", f"setpts=(PTS-STARTPTS)/{rate:.6f},fps={fps},{lighten_eq(a.get('lighten', 0))}null",
+         "-frames:v", str(n), str(tmp / "a%03d.png")])
+    # B's frames: the scene coming in (B arriving) or the last frame of the one going.
+    if shrink:
+        run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(files[k]), "-frames:v", str(n), str(tmp / "s%03d.png")])
+        split_slots, solo = slots[k], a_play[k - 1]
+    else:
+        run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(files[k - 1]),
+             "-vf", f"select='gte(n,{max(frames[k - 1] - 1, 0)})'", "-frames:v", "1", str(tmp / "s001.png")])
+        split_slots, solo = slots[k - 1], a_play[k]
+    split_a = (a_play[k] if shrink else a_play[k - 1])[1]
+    aw, ah, ax, ay = split_slots["A"]
+    bw, bh, bx, by = split_slots["B"]
+    axis = "x" if w > h else "y"
+    if axis == "y":
+        b0, b1 = min(by, ay + ah), max(by + bh, ay)
+        block = (0, b0, w, b1)
+        off = (0, h - b0) if b0 > 0 else (0, -b1)          # where B goes to be out of frame
+    else:
+        b0, b1 = min(bx, ax + aw), max(bx + bw, ax)
+        block = (b0, 0, b1, h)
+        off = (w - b0, 0) if b0 > 0 else (-b1, 0)
+    frames_a = sorted(tmp.glob("a*.png"))
+    if not frames_a:
+        return None
+    sw, sh = Image.open(frames_a[0]).size
+    # The two framings of A: full (fill, or the whole picture over a blur) and its slot.
+    full_fit = solo[4]
+    if full_fit == "blur":
+        sc_ = min(w / sw, h / sh)
+        full_dest = ((w - sw * sc_) / 2, (h - sh * sc_) / 2, sw * sc_, sh * sc_)
+        full_win = (0, 0, sw, sh)
+    else:
+        full_dest = (0, 0, w, h)
+        full_win = cover_window(sw, sh, w, h, solo[1].get("focus", (0.5, 0.5)), solo[1].get("zoom", 1))
+    slot_dest = (ax, ay, aw, ah)
+    slot_win = cover_window(sw, sh, aw, ah, split_a.get("focus", (0.5, 0.5)), split_a.get("zoom", 1))
+    lerp = lambda p, q, e: tuple(x + (y - x) * e for x, y in zip(p, q))   # noqa: E731
+    backdrop = Image.open(tmp / "s001.png").convert("RGB") if not shrink else None
+    for i in range(n):
+        u = (i + 1) / n
+        e = 0.5 - 0.5 * math.cos(math.pi * u)
+        to_slot = e if shrink else 1 - e          # 0: A full, 1: A in its slot
+        canvas = Image.new("RGB", (w, h), (0, 0, 0))
+        img = Image.open(frames_a[min(i, len(frames_a) - 1)]).convert("RGB")
+        if full_fit == "blur" and to_slot < 1:    # the blurred backdrop of A alone, fading as it goes
+            bg = img.resize((w, h), Image.BILINEAR).filter(ImageFilter.GaussianBlur(30))
+            canvas = Image.blend(canvas, bg, 1 - to_slot)
+        dx, dy, dw, dh = lerp(full_dest, slot_dest, to_slot)
+        wx, wy, ww, wh = lerp(full_win, slot_win, to_slot)
+        piece = img.crop((round(wx), round(wy), round(wx + ww), round(wy + wh))).resize(
+            (max(1, round(dw)), max(1, round(dh))), Image.BILINEAR)
+        canvas.paste(piece, (round(dx), round(dy)))
+        # B (and the divider) come in from their side, or go out.
+        src = Image.open(tmp / f"s{(i + 1 if shrink else 1):03d}.png").convert("RGB") if shrink else backdrop
+        part = src.crop(block)
+        away = 1 - e if shrink else e
+        canvas.paste(part, (round(block[0] + off[0] * away), round(block[1] + off[1] * away)))
+        canvas.save(tmp / f"m{i + 1:03d}.png")
+    out = workdir / f"morph{k:02d}.mkv"
+    run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-framerate", str(fps), "-i", str(tmp / "m%03d.png"),
+         "-frames:v", str(n), *video_codec(cfg), "-r", str(fps), str(out)])
+    return out
 
 
 def render_carry(carry, frames, cfg, base_dir, keep_audio, workdir, k, fill):

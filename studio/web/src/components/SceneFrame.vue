@@ -4,13 +4,13 @@
       <div class="content" :style="moveStyle">
         <div
           v-for="lane in lanes" :key="lane" class="slot" :class="{ editing: editing === lane }"
-          :style="rectStyle(slots[lane])"
+          :style="rectStyle(rectOf(lane))"
         >
-          <slot :name="lane" :max-h="px(slots[lane]).h" :out="slots[lane].w / slots[lane].h" :bind-a="bindA" />
+          <slot :name="lane" :max-h="px(rectOf(lane)).h" :out="rectOf(lane).w / rectOf(lane).h" :bind-a="bindA" />
           <span class="chip" :class="`lane-${lane}`">{{ lane }} · {{ where(lane) }}</span>
         </div>
         <div
-          v-if="slots.divider" class="divider" :class="slots.axis" :style="{ ...rectStyle(slots.divider), background: dividerColor }"
+          v-if="slots.divider" class="divider" :class="slots.axis" :style="{ ...rectStyle(rectOf('divider')), background: dividerColor }"
           @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="up"
           title="Drag to change the split · [ and ] nudge it"
         ><span class="ratio mono">{{ ratio }}</span></div>
@@ -83,10 +83,24 @@ function rectStyle(r) {
   return { left: `${Math.round(r.x * k.value)}px`, top: `${Math.round(r.y * k.value)}px`, width: `${p.w}px`, height: `${p.h}px` }
 }
 
-// A scene coming in: eased like the render's.
+// A scene coming in: eased like the render's. A morph (into or out of Solo A)
+// moves each lane's slot: A from where it was, B in from its side.
+const ease = computed(() => 0.5 - 0.5 * Math.cos(Math.PI * clamp(props.into?.p ?? 1, 0, 1)))
+function rectOf(lane) {
+  const r = props.slots[lane]
+  const t = props.into
+  if (!t || t.type !== 'morph' || t.p >= 1 || !r) return r
+  const e = ease.value
+  const from = t.from?.[lane]
+  if (from) return { w: from.w + (r.w - from.w) * e, h: from.h + (r.h - from.h) * e, x: from.x + (r.x - from.x) * e, y: from.y + (r.y - from.y) * e }
+  // arriving from its side: below (or right) if it sits after the other lane, else above (or left)
+  const wideFrame = props.frameW > props.frameH
+  const out = wideFrame ? (r.x > 0 ? props.frameW - r.x : -(r.x + r.w)) : (r.y > 0 ? props.frameH - r.y : -(r.y + r.h))
+  return wideFrame ? { ...r, x: r.x + out * (1 - e) } : { ...r, y: r.y + out * (1 - e) }
+}
 const moveStyle = computed(() => {
   const t = props.into
-  if (!t || t.type === 'cut' || t.p >= 1) return {}
+  if (!t || t.type === 'cut' || t.type === 'morph' || t.p >= 1) return {}
   const e = 0.5 - 0.5 * Math.cos(Math.PI * clamp(t.p, 0, 1))
   if (t.type === 'dissolve') return { opacity: e }
   const off = `${(1 - e) * 100}%`

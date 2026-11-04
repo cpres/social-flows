@@ -229,7 +229,9 @@ over them. Lanes say what's playing; scenes say what's on screen.
 - **Click a scene** to edit it on the right: its layout (or `1`–`4`), the
   split (50/50, 58/42, a square second slot, or drag the divider in the
   preview; `[` `]` nudge it 2%), how A plays in it, how it comes in (Cut,
-  Slide, Push or Dissolve, 0.4s), and how a lane alone fills the frame (16:9
+  Slide, Push or Dissolve, 0.4s; into or out of Solo A, Slide keeps A on
+  screen: it shrinks from the full frame into its slot as B comes in, or grows
+  back as B goes out, playing on all the while), and how a lane alone fills the frame (16:9
   defaults to a blurred fill). *Use this split on every stacked scene* and
   *Merge into previous scene* are at the bottom.
 - **How A plays in a scene:** at **real speed**, always, unless you pick a
