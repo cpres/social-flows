@@ -21,7 +21,7 @@
           reel <b class="mono total">{{ fmtTime(reelLength) }}</b>
           <span class="save">{{ saveState }}</span>
           <template v-if="reel.archivedAt">
-            · <b>archived</b> <button class="btn small" @click="setArchived(false)" title="Back on the home page">Unarchive</button>
+            · <b>archived</b>
           </template>
         </p>
       </div>
@@ -33,6 +33,10 @@
       <button class="btn" :class="{ active: showVoice }" @click="showVoice = !showVoice" title="A reading over the footage, and its captions">
         🎙 Voice{{ voiceTl.pieces.length ? ` · ${voiceTl.pieces.length}` : '' }}
       </button>
+      <button
+        class="btn" @click="setArchived(!reel.archivedAt)"
+        :title="reel.archivedAt ? 'Back on the home page' : 'Off the home page and the shoot tags; kept as it is'"
+      >{{ reel.archivedAt ? 'Unarchive' : 'Archive' }}</button>
       <button class="btn" :class="{ active: showSettings }" @click="showSettings = !showSettings">Settings</button>
       <button class="btn" @click="doExport" :disabled="exporting || !kept.length">
         {{ exporting ? 'Checking…' : 'Preview cut list' }}
