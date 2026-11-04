@@ -105,6 +105,24 @@ python3 studio/server.py --open
   `MUSIC_DIR`), then pick one under the reel's *Settings → Music*. Set where the
   song starts, and *Listen* to check it. Play reel plays the song and moves
   through the parts in time with it.
+- **Make a track for this reel** (✨ under *Settings → Music*) has AI music
+  made to fit the reel: Google's Lyria 3 through OpenRouter, as long as the
+  reel runs, building up and breaking down across it (intro, build, drop,
+  breakdown, outro, scaled to the length, on whole bars). Pick songs from the
+  shelf to take the feel from. Lyria only takes words, so the songs are
+  measured here (tempo, key, tone, how beat-driven) and described; nothing
+  is uploaded. The reel's length comes from the engine's own plan at that
+  tempo (beats when cutting on the beat, else your lengths, plus the end
+  card), so pick your parts first. *Show the plan* shows the length, the arc
+  and the prompt, which you can edit before *Make it*. The track lands on
+  the shelf (category *AI*, its prompt in the file's comment tag) and
+  becomes the reel's song. *Pro* (about $0.08 a song) follows the reel's
+  length; *Clip* is always 30s (about $0.04), for trying prompts. Needs
+  `OPENROUTER_API_KEY` set in the shell that runs `run.sh` (or the key in
+  `~/.config/openrouter/key`), and `--beat` for measuring the songs.
+  OpenRouter's replies are kept in `~/Footage/.studio/music/ai/`. To try
+  prompts without the studio: `python3 studio/compose.py --seconds 30 --ref
+  song.mp3 --dry-run`.
 - **Song names and categories:** songs show by name and artist, read from the
   file's tags or, for Pixabay downloads (`artist-title-words-123456.mp3`), from
   the file name. ✎ next to the song gives it your own name and categories (a

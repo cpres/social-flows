@@ -53,6 +53,7 @@ sys.path.insert(0, str(ENGINE.parent))
 sys.path.insert(0, str(HERE))
 import looks  # noqa: E402
 from db import DEFAULT_SETTINGS, Library, default_start, now, settings_of  # noqa: E402
+import compose  # noqa: E402
 from music import AUDIO_EXTS, Shelf, beat_detection_available  # noqa: E402
 from share import Shares  # noqa: E402
 from voice import MODEL as VOICE_MODEL, Voice, align, lines_from_words, transcription_available  # noqa: E402
@@ -908,7 +909,10 @@ def font_file(name: str):
 
 # ---------------------------------------------------------------- export
 
-def build_config(reel, rows):
+def build_config(reel, rows, grid_bpm=None):
+    """The engine's config for a reel. With grid_bpm, it's laid out for a
+    song not made yet: on a steady grid at that tempo when cutting on the
+    beat, and without music."""
     s = settings_of(reel)
     # A Stack reel: the top clip plays in the top pane for the whole reel;
     # the kept parts play one after another underneath.
@@ -921,8 +925,8 @@ def build_config(reel, rows):
     kept = [r for r in rows if r["keep"] and not r["missing"] and r is not top]
     if top and not kept:
         raise HTTPException(400, "Add parts to play underneath the top clip.")
-    track = shelf.path_of(s.get("music"))
-    synced = bool(track and s.get("beatSync"))
+    track = shelf.path_of(s.get("music")) if grid_bpm is None else None
+    synced = bool((track or grid_bpm) and s.get("beatSync"))
     sources, seen = [], {}
     for n, row in enumerate(kept):
         stem = Path(row["name"]).stem[:14]
@@ -1210,6 +1214,105 @@ def export(reel_id: int):
             "dryRun": (result.stdout + result.stderr).strip(),
             "output": cfg["output"],
             "command": f'python3 "{ENGINE}" "{out}"'}
+
+
+# ---------------------------------------------------------------- AI music
+# A track made for the reel (see compose.py): as long as the reel runs at the
+# tempo asked for, styled on songs from the shelf, building up and breaking
+# down across it. It lands on the shelf like any other song.
+
+measured = {}   # shelf cache file name -> compose.measure() of that song
+
+
+def reel_length(reel_id, bpm):
+    """How long the reel runs, in seconds, with a song at this tempo: the
+    engine's own plan, so it matches the render."""
+    import montage as engine
+    reel, rows = reel_and_rows(reel_id)
+    cfg = build_config(reel, rows, grid_bpm=bpm)
+    if not cfg["sources"]:
+        raise HTTPException(400, "Nothing is kept in this reel yet.")
+    cfg.update({"width": 1080, "height": 1920, "fps": 30})
+    try:
+        top = engine.load_top(cfg, ROOT)
+        voice = engine.load_voice(cfg, ROOT)
+        beats = [i * 60.0 / bpm for i in range(4000)] if settings_of(reel).get("beatSync") else None
+        plan, _ = engine.build_plan(cfg, ROOT, beats, voice)
+    except SystemExit as e:
+        raise HTTPException(400, str(e))
+    under = sum(seg["length"] for seg in plan)
+    return round(engine.top_length(top, under) if top else under, 2), bool(beats)
+
+
+def reference(names):
+    """The shelf songs to take the style from, measured, plus their categories."""
+    shelf_now = {t["name"]: t for t in music_shelf()["tracks"]}
+    refs, cats = [], []
+    for name in names or []:
+        path = shelf.path_of(name)
+        if name not in shelf_now or not path.exists():
+            raise HTTPException(404, f"No song called {name} on the shelf")
+        try:
+            k = shelf.cache_file(path).name
+            if k not in measured:
+                measured[k] = {**compose.measure(path, shelf.analyze(path)), "name": name,
+                               "title": shelf_now[name]["title"]}
+            refs.append(measured[k])
+        except ImportError:
+            raise HTTPException(400, "Taking the style from a song needs beat detection: "
+                                     "start the studio with ./studio/run.sh --beat")
+        cats += [c for c in shelf_now[name]["categories"] if c.lower() != "ai" and c not in cats]
+    return refs, cats
+
+
+def compose_plan(reel_id, body):
+    refs, cats = reference(body.get("refs"))
+    style = compose.blend(refs)
+    bpm = float(body.get("bpm") or style.get("bpm") or 100)
+    if not 50 <= bpm <= 200:
+        raise HTTPException(400, "Pick a tempo between 50 and 200 bpm.")
+    key = (body.get("key") or "").strip() or style.get("key")
+    words = style.get("words", [])
+    genre = (body.get("style") or "").strip() or ", ".join(cats)
+    seconds, synced = reel_length(reel_id, bpm)
+    model = "clip" if body.get("model") == "clip" else "pro"
+    asked = min(seconds, compose.CLIP_SECONDS) if model == "clip" else seconds
+    sections = compose.arc(asked, bpm)
+    return {"seconds": seconds, "asked": asked, "synced": synced, "bpm": bpm, "key": key, "style": genre,
+            "words": words, "model": model, "sections": sections,
+            "refs": [{k: r[k] for k in ("name", "title", "bpm", "key", "words")} for r in refs],
+            "prompt": compose.prompt(asked, bpm, key, genre, words, body.get("notes") or "", sections)}
+
+
+@app.post("/api/reels/{reel_id}/compose/plan")
+def compose_preview(reel_id: int, body: dict = Body(default={})):
+    """What would be asked for: the reel's length at the tempo, the arc, the
+    prompt. {refs: [shelf names], bpm, key, style, notes, model: pro|clip}"""
+    return compose_plan(reel_id, body)
+
+
+@app.post("/api/reels/{reel_id}/compose")
+def compose_track(reel_id: int, body: dict = Body(default={})):
+    """Make the track (the same as /compose/plan, or body.prompt as edited)
+    and put it on the shelf. Takes a minute or so."""
+    plan = compose_plan(reel_id, body)
+    reel, _ = reel_and_rows(reel_id)
+    shelf.folder.mkdir(parents=True, exist_ok=True)
+    try:
+        done = compose.compose(plan["asked"], plan["bpm"], shelf.folder, reel["name"], plan["key"],
+                               plan["style"], plan["words"], model=plan["model"],
+                               text=(body.get("prompt") or "").strip() or plan["prompt"],
+                               log_dir=lib.home / "music" / "ai")
+    except compose.ComposeError as e:
+        raise HTTPException(502, str(e))
+    note = ""
+    if beat_detection_available():
+        got = shelf.analyze(Path(done["path"]))
+        if abs(got["bpm"] - plan["bpm"]) > 1.5 and abs(got["bpm"] - 2 * plan["bpm"]) > 3 \
+                and abs(got["bpm"] - plan["bpm"] / 2) > 1.5:
+            note = (f"Asked for {plan['bpm']:.0f} bpm, it came out at about {got['bpm']:.0f}, so the "
+                    f"build-ups may sit a little off the parts.")
+    return {**done, "note": note, "reelSeconds": plan["seconds"], "shelf": music_shelf()}
 
 
 # ---------------------------------------------------------------- render

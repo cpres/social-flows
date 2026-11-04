@@ -93,6 +93,7 @@
           <template v-else-if="beatData"> {{ Math.round(beatData.bpm) }} bpm · one beat = {{ (60 / beatData.bpm).toFixed(2) }}s.</template>
           <span v-if="musicError" class="warn"> {{ musicError }}</span>
         </p>
+        <ComposePanel :reel-id="id" :shelf="shelf" :before-ask="() => saver.flushAll()" @made="composed" />
         <div class="musicrow" v-if="settings.music">
           <label class="field check">
             <span><input type="checkbox" v-model="settings.beatSync" :disabled="!shelf.beatDetection" /> Cut on the beat</span>
@@ -543,6 +544,7 @@ import VoicePanel from '../components/VoicePanel.vue'
 import ClipCard from '../components/ClipCard.vue'
 import SendToPhone from '../components/SendToPhone.vue'
 import SongPicker from '../components/SongPicker.vue'
+import ComposePanel from '../components/ComposePanel.vue'
 import ReelFrame from '../components/ReelFrame.vue'
 import StackFrame from '../components/StackFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
@@ -975,6 +977,13 @@ function setMusicStart(e) {
   const t = parseTime(e.target.value)
   if (!isNaN(t) && t >= 0) settings.musicStart = Math.round(t * 100) / 100
   e.target.value = fmtTime(settings.musicStart || 0)
+}
+
+// A track made for this reel (ComposePanel): on the shelf now, and the reel's song.
+function composed(made) {
+  shelf.value = made.shelf
+  settings.music = made.file
+  settings.musicStart = 0
 }
 
 async function loadShelf() {

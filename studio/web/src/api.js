@@ -52,6 +52,9 @@ export const api = {
   musicFile: (name) => `/api/music/${enc(name)}/file`,
   // Name a song and put it in categories: { title, artist, categories }; returns the shelf.
   saveSong: (name, info) => send('PUT', `/api/music/${enc(name)}/info`, info),
+  // AI music for a reel (compose.py): the plan (length, arc, prompt), then the track.
+  composePlan: (id, body) => send('POST', `/api/reels/${id}/compose/plan`, body),
+  compose: (id, body) => send('POST', `/api/reels/${id}/compose`, body),
 
   // The part of a file picked in its shoot, kept until it's changed (see db.py).
   savePick: (mediaId, pick) => send('PUT', `/api/media/${mediaId}/pick`, pick),
