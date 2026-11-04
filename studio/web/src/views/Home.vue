@@ -47,7 +47,7 @@
             </p>
           </div>
         </RouterLink>
-        <button class="card new" @click="newReel" v-if="!showArchived">
+        <button class="card new" @click="makingReel = true" v-if="!showArchived">
           <span class="plus">+</span>
           <span>New reel</span>
         </button>
@@ -99,6 +99,7 @@
         ↻ {{ refreshing ? 'Checking for new footage…' : 'Check for new footage' }}
       </button>
     </template>
+    <NewReelDialog v-if="makingReel" :folders="folders" @close="makingReel = false" />
     <ImportDialog
       v-if="importing" :folders="folders" :root="root"
       @close="importing = false" @imported="imported"
@@ -111,6 +112,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
 import ImportDialog from '../components/ImportDialog.vue'
+import NewReelDialog from '../components/NewReelDialog.vue'
 import { useRefreshOnFocus } from '../refresh'
 import { fmtDuration, fmtTime, folderTitle, reelColor, savedAt } from '../time'
 
@@ -182,16 +184,8 @@ async function setArchived(r, archived) {
   }
 }
 
-async function newReel() {
-  const name = window.prompt('Name the new reel')
-  if (!name?.trim()) return
-  try {
-    const r = await api.createReel(name.trim())
-    router.push(`/reel/${r.id}`)
-  } catch (e) {
-    window.alert(e.message)
-  }
-}
+// A new reel: NewReelDialog asks its name, its footage (a shoot) and its style.
+const makingReel = ref(false)
 </script>
 
 <style scoped>

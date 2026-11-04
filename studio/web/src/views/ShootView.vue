@@ -16,9 +16,10 @@
       >
         {{ draftAt ? '⧉ Continue weave draft' : '⧉ Weave a reel' }}
       </button>
-      <button class="btn" @click="folderToReel" title="Make a reel from everything in this folder">
+      <button class="btn" @click="makingReel = true" title="Make a reel from everything in this folder, in a style you pick">
         {{ hasSidecar ? 'Turn earlier trims into a reel' : 'Make a reel from this folder' }}
       </button>
+      <NewReelDialog v-if="makingReel" :folder="name" :default-name="folderTitle(name)" @close="makingReel = false" />
       <button
         class="btn" :class="{ active: picking }" @click="picking ? stopPicking() : startPicking()" :disabled="!media.length"
         title="Move clips or photos into another shoot folder"
@@ -192,6 +193,7 @@ import ReelFrame from '../components/ReelFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
 import TrimBar from '../components/TrimBar.vue'
 import WeavePrompt from '../components/WeavePrompt.vue'
+import NewReelDialog from '../components/NewReelDialog.vue'
 
 const props = defineProps({ name: { type: String, required: true } })
 const emit = defineEmits(['root'])
@@ -449,16 +451,8 @@ function weave() {
                 state: { imported: imported.value ? [...imported.value] : null } })
 }
 
-async function folderToReel() {
-  const name = window.prompt('Name for the new reel', props.name)
-  if (!name?.trim()) return
-  try {
-    const r = await api.folderToReel(props.name, name.trim())
-    router.push(`/reel/${r.id}`)
-  } catch (e) {
-    window.alert(e.message)
-  }
-}
+// Making a reel from this folder: NewReelDialog asks its name and style.
+const makingReel = ref(false)
 
 // ---------------------------------------------------------------- moving
 

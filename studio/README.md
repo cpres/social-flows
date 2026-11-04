@@ -180,6 +180,24 @@ can override the reel's framing, chosen under *Layout* on the shoot page
 *Blur* shows the whole frame with a blurred copy filling the top and bottom
 (marked ◫ in the list).
 
+**Making a reel, in a style.** *New reel* (Home) and *Make a reel from this
+folder* (a shoot) ask for a name and a style:
+
+- **Standard:** one part after another, full frame.
+- **Weave:** opens the Weave wizard (below).
+- **Stack:** the longest clip goes in lane A, on top the whole way at real
+  speed, with the others underneath.
+- **Relay:** single, split, single, split… Each clip plays alone (4s by
+  default). Then it moves up into A's slot and carries on (3s by default)
+  while the next clip comes in underneath. Then the next clip takes over the
+  full frame as the first one finishes, and so on, in the order the clips
+  were shot. Every move is seamless: the shot moving up is exactly what was
+  on screen, and B grows from its slot to the full frame. In the reel it's
+  ordinary scenes (Solo B, then a split with *Relay* ticked that comes in
+  with *Hand off*, then Solo B coming in with *Take over*), so you can trim,
+  reorder and change any of it. Ticking *Relay* on any split after a Solo B
+  scene does the same by hand.
+
 **Lanes and scenes.** A reel has two lanes of footage and a row of scenes
 over them. Lanes say what's playing; scenes say what's on screen.
 

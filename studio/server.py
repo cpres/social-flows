@@ -303,6 +303,11 @@ def get_folder(name: str):
 def folder_to_reel(name: str, body: dict = Body(default={})):
     """Make a reel from a folder: its old studio trims if any, else every file.
 
+    {name, style}: standard (one part after another), stack (the longest
+    video is lane A, the rest play under it at real speed) or relay (each
+    clip plays alone, then carries on in A's slot while the next comes in
+    underneath and takes over; {overlap, solo} seconds).
+
     Files that are copies of originals in another shoot folder point at the
     original, so per-concept folders of copied files can be retired.
     """
@@ -342,7 +347,43 @@ def folder_to_reel(name: str, body: dict = Body(default={})):
                        (reel_id, lib.original_of(db, m["id"]), pos, start, length,
                         pick.get("focusX", 0.5), pick.get("focusY", 0.5), pick.get("zoom", 1),
                         pick.get("layout", "") if m["kind"] == "video" else ""))
+        style = body.get("style") or "standard"
+        if style in ("stack", "relay"):
+            apply_style(db, reel_id, style, body)
     return {"id": reel_id}
+
+
+def apply_style(db, reel_id, style, body):
+    """Lay a new reel out in a style (see folder_to_reel)."""
+    rows = db.execute("""SELECT i.*, m.kind, m.duration FROM reel_items i JOIN media m ON m.id = i.media_id
+                         WHERE i.reel_id = ? AND i.keep = 1 ORDER BY i.position, i.id""", (reel_id,)).fetchall()
+    s = settings_of(db.execute("SELECT settings FROM reels WHERE id = ?", (reel_id,)).fetchone())
+    if style == "stack":
+        videos = [r for r in rows if r["kind"] == "video"]
+        if len(rows) < 2 or not videos:
+            return
+        top = max(videos, key=lambda r: r["duration"])
+        rest = [r for r in rows if r["id"] != top["id"]]
+        s["laneA"] = [top["id"]]
+        db.execute("UPDATE reel_items SET start = 0, length = ? WHERE id = ?", (top["duration"], top["id"]))
+        s["scenes"] = [{"id": scenes_mod.new_id(), "layout": "stack", "from": rest[0]["id"], "split": 0.5, "into": "cut",
+                        "a": {"item": top["id"], "in": None, "out": None, "timing": "real", "speed": 1}}]
+    else:
+        overlap = min(max(float(body.get("overlap") or 3), 0.5), 10)
+        solo = min(max(float(body.get("solo") or 4), 0.5), 30)
+        parts, make = scenes_mod.relay_plan(rows, overlap, solo)
+        db.execute("DELETE FROM reel_items WHERE reel_id = ?", (reel_id,))
+        ids = []
+        for pos, (r, start, length, _) in enumerate(parts):
+            cols = [c for c in ITEM_COLUMNS if c not in ("position", "start", "length")]
+            cur = db.execute(f"INSERT INTO reel_items (reel_id, position, start, length, {', '.join(cols)}) "
+                             f"VALUES (?, ?, ?, ?, {', '.join('?' * len(cols))})",
+                             (reel_id, pos, start, length, *[r[c] for c in cols]))
+            ids.append(cur.lastrowid)
+        s["laneA"] = []
+        s["scenes"] = make(ids)
+        s["relay"] = {"overlap": overlap, "solo": solo}
+    db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), reel_id))
 
 
 @app.post("/api/folders/{name}/move")
@@ -1028,7 +1069,22 @@ def build_config(reel, rows, grid_bpm=None):
         entry_sc = {"layout": sc["layout"], "split": sc.get("split", 0.5),
                     "into": sc.get("into", "cut") if k else "cut", **({"fill": sc["fill"]} if sc.get("fill") else {}),
                     **({"handoff": sc.get("handoff", scenes_mod.HANDOFF_DEFAULT)} if sc.get("into") == "handoff" else {})}
-        if sc["layout"] != "soloB":
+        prev = scenes[k - 1] if k else None
+        relay = (sc.get("relay") and sc["layout"] in ("stack", "swap") and sc.get("into") == "handoff"
+                 and prev and prev["layout"] == "soloB" and prev["parts"])
+        if relay:   # A's slot: the shot before carries on
+            last = by_id[prev["parts"][-1]]
+            fx, fy, zoom = scenes_mod.frame_for(last, "full", "B")
+            entry_sc["relay"] = True
+            entry_sc["carry"] = {"file": str(ROOT / last["path"]), "kind": last["kind"],
+                                 "start": round(last["start"] + last["length"], 3) if last["kind"] == "video" else 0,
+                                 "focus": [round(fx, 3), round(fy, 3)], "zoom": round(zoom, 3),
+                                 **({"lighten": round(last["lighten"], 2)} if last["lighten"] else {}),
+                                 **({"fit": last["layout"]} if last["layout"] in ("fill", "blur") else {})}
+        elif sc["layout"] != "soloB" and not lane_rows:
+            sc = {**sc, "layout": "soloB"}   # a relay that lost the shot before it, and no lane A
+            entry_sc["layout"] = "soloB"
+        if sc["layout"] != "soloB" and not relay:
             a, row = sc["a"], lane_rows[sc["a"]["item"]]
             fx, fy, zoom = scenes_mod.frame_for(row, scenes_mod.slot_shape(sc, "A"), "A")
             entry_sc["a"] = {"item": row["id"], "file": str(ROOT / row["path"]), "start": round(row["start"], 3),
@@ -1055,7 +1111,7 @@ def build_config(reel, rows, grid_bpm=None):
             seen[stem] = seen.get(stem, 0) + 1
             entry = {"id": stem if seen[stem] == 1 else f"{stem}-{seen[stem]}",
                      "file": str(ROOT / row["path"]), "scene": k}
-            fx, fy, zoom = scenes_mod.frame_for(row, scenes_mod.slot_shape(sc, "B"), "B")
+            fx, fy, zoom = scenes_mod.frame_for(row, "full" if relay else scenes_mod.slot_shape(sc, "B"), "B")
             if (fx, fy) != (0.5, 0.5):
                 entry["focus"] = [round(fx, 3), round(fy, 3)]
             if row["lighten"]:

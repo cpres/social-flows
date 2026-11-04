@@ -1012,7 +1012,25 @@ def handoff(scenes, k, secs):
     if (k == 0 or sc.get("into") != "handoff" or scenes[k - 1].get("layout") != "soloB"
             or sc.get("layout") not in ("stack", "swap")):
         return 0.0
+    if sc.get("relay"):
+        return 0.0   # a relay carries the shot on instead of handing off to A
     return max(0.0, min(float(sc.get("handoff", 3) or 0), secs[k] - 0.5))
+
+
+def moves_in(scenes, k):
+    """Scene k comes in with a move rather than over a still frame: hand off
+    (after Solo B, the shot moves into A's slot as B comes in) or take over
+    (into Solo B after a split, B grows to the full frame as A slides out)."""
+    if k == 0:
+        return None
+    sc, prev = scenes[k], scenes[k - 1]
+    if sc.get("into") == "handoff" and prev.get("layout") == "soloB" and sc.get("layout") in ("stack", "swap"):
+        return "handoff"
+    if sc.get("into") == "takeover" and sc.get("layout") == "soloB" and prev.get("layout") in ("stack", "swap"):
+        return "takeover"
+    return None
+
+
 LAYOUTS = ("soloA", "stack", "soloB", "swap")
 
 
@@ -1079,7 +1097,7 @@ def resolve_a(scenes, secs):
     scenes.js resolveA."""
     out = [None] * len(scenes)
     cursor = {}
-    shows = [i for i, sc in enumerate(scenes) if sc.get("layout") != "soloB" and sc.get("a")]
+    shows = [i for i, sc in enumerate(scenes) if sc.get("layout") != "soloB" and sc.get("a") and not sc.get("relay")]
     for n, i in enumerate(shows):
         a = scenes[i]["a"]
         timing = a_timing(scenes[i])
@@ -1176,9 +1194,11 @@ def compose_scene(scene, slots, div, files, frames, tail, cfg, workdir, k):
     graph = [f"color=c=black:s={w}x{h}:r={fps},format=yuv420p,trim=end_frame={frames + tail}[base]"]
     cur = "[base]"
     for i, lane in enumerate(lanes):
-        cmd += ["-i", str(files[lane])]
+        file, crop = files[lane] if isinstance(files[lane], tuple) else (files[lane], None)
+        cmd += ["-i", str(file)]
         sw, sh, x, y = slots[lane]
-        graph.append(f"[{i}:v]scale={sw}:{sh},setsar=1,format=yuv420p,"
+        fit = f"crop={sw}:{sh}:{crop[0]}:{crop[1]}" if crop else f"scale={sw}:{sh}"
+        graph.append(f"[{i}:v]{fit},setsar=1,format=yuv420p,"
                      f"tpad=stop_mode=clone:stop_duration={(frames + tail) / fps + 1:.3f},"
                      f"trim=end_frame={frames + tail},setpts=PTS-STARTPTS[l{i}]")
         graph.append(f"{cur}[l{i}]overlay=x={x}:y={y}:eof_action=repeat[c{i}]")
@@ -1224,9 +1244,31 @@ def join_scenes(files, scenes, frames, tails, cfg, workdir, slots=None, hand_f=N
             graph.append(f"{labels[k]['head']}trim=end_frame={head},setpts=PTS-STARTPTS[nh{k}]")
             ease = f"(0.5-0.5*cos(PI*t/{d:.4f}))"
             into = scenes[k].get("into", "cut")
-            if into == "handoff" and not (hand_f and hand_f[k]):
+            if into in ("handoff", "takeover") and moves_in(scenes, k) != into:
                 into = "slide"
-            if into == "handoff":
+            if into == "takeover":
+                # B grows from its slot to the full frame (the next scene is its
+                # shot alone, full frame) while A and the divider slide out.
+                aw, ah, ax, ay = slots[k - 1]["A"]
+                bw, bh, bx, by = slots[k - 1]["B"]
+                ox, oy = band_offset(slots[k - 1]["B"], w, h)
+                if axis == "x":
+                    a0, a1 = min(ax, bx + bw), max(ax + aw, bx)      # A and the divider beside it
+                    block = (a1 - a0, h, a0, 0)
+                    away = -block[0] - a0 if a0 == 0 else w - a0
+                    new_move = f"x='({bx - ox})*(1-{ease})':y=0"
+                    old_move = f"x='{a0}+({away})*{ease}':y=0"
+                else:
+                    a0, a1 = min(ay, by + bh), max(ay + ah, by)
+                    block = (w, a1 - a0, 0, a0)
+                    away = -block[1] - a0 if a0 == 0 else h - a0
+                    new_move = f"x=0:y='({by - oy})*(1-{ease})'"
+                    old_move = f"x=0:y='{a0}+({away})*{ease}'"
+                graph.append(f"color=c=black:s={w}x{h}:r={fps},format=yuv420p,trim=end_frame={head}[cv{k}]")
+                graph.append(f"[cv{k}][nh{k}]overlay={new_move}[pm{k}]")
+                graph.append(f"[pt{k}]crop={block[0]}:{block[1]}:{block[2]}:{block[3]}[ab{k}]")
+                graph.append(f"[pm{k}][ab{k}]overlay={old_move}[tr{k}]")
+            elif into == "handoff":
                 # The solo frame moves so its middle band lands on A's slot,
                 # while B (and the divider) come in from their side.
                 aw, ah, ax, ay = slots[k]["A"]
@@ -1292,7 +1334,11 @@ def scene_report(cfg, plan, base_dir):
     lines, t = [], 0.0
     for k, sc in enumerate(scenes):
         line = f"  {fmt(t):>7}  scene {k + 1}  {names.get(sc.get('layout'), sc.get('layout')):<9} {secs[k]:.2f}s"
-        if hands[k]:
+        if sc.get("relay") and sc.get("carry") and moves_in(scenes, k) == "handoff":
+            line += f"  (relay: {Path(sc['carry']['file']).name} carries on in A's slot)"
+        elif moves_in(scenes, k) == "takeover":
+            line += "  (take over: B grows to the full frame)"
+        elif hands[k]:
             line += f"  (hand off: the last frame in A's slot {hands[k]:.1f}s)"
         elif k and sc.get("into", "cut") != "cut":
             line += f"  (in: {sc['into']})"
@@ -1321,7 +1367,7 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
     divider = int((cfg.get("stack") or {}).get("divider", 4))
     _, ranges, frames, hands = scene_report(cfg, plan, base_dir)
     hand_f = [round(x * fps) for x in hands]
-    tails = [min(round((HANDOFF_MOVE if hand_f[k + 1] else SCENE_IN) * fps), frames[k], frames[k + 1])
+    tails = [min(round((HANDOFF_MOVE if moves_in(scenes, k + 1) else SCENE_IN) * fps), frames[k], frames[k + 1])
              if k + 1 < len(scenes) and scenes[k + 1].get("into", "cut") != "cut" else 0 for k in range(len(scenes))]
     files, all_slots = [], []
     for k, sc in enumerate(scenes):
@@ -1329,10 +1375,17 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
         slots, div = scene_slots(sc, w, h, divider)
         solo_fill = sc.get("fill") or ("blur" if w > h else "fill")
         lane_files = {}
-        if "B" in slots:
+        relay = bool(sc.get("relay") and sc.get("carry") and moves_in(scenes, k) == "handoff")
+        if relay:
+            # A relay: the shot before carries on in A's slot and B plays in its own,
+            # each as the middle band of its full frame, so they move in and out seamlessly.
+            lane_files["B"] = (segs_of(k, w, h, solo_fill), band_offset(slots["B"], w, h))
+            lane_files["A"] = (render_carry(sc["carry"], frames[k], cfg, base_dir, keep_audio, workdir, k, solo_fill),
+                               band_offset(slots["A"], w, h))
+        elif "B" in slots:
             bw, bh = slots["B"][:2]
             lane_files["B"] = segs_of(k, bw, bh, solo_fill if sc.get("layout") == "soloB" else None)
-        if "A" in slots:
+        if "A" in slots and not relay:
             a = {**sc["a"]}
             if sc.get("layout") == "soloA":
                 a["_solo"] = True
@@ -1351,6 +1404,31 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
     if len(files) == 1:
         return files[0]
     return join_scenes(files, scenes, frames, tails, cfg, workdir, all_slots, hand_f)
+
+
+def render_carry(carry, frames, cfg, base_dir, keep_audio, workdir, k, fill):
+    """A relay's A lane: the shot from the scene before carrying on (a video
+    from where its part ended, a photo held), full frame."""
+    fps, w, h = cfg["fps"], cfg["width"], cfg["height"]
+    path = (base_dir / carry["file"]).expanduser()
+    out = workdir / f"scene{k:02d}_carry.mkv"
+    image = carry.get("kind") == "photo" or path.suffix.lower() in IMAGE_EXTS
+    cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error"]
+    cmd += ["-loop", "1", "-framerate", str(fps), "-i", str(path)] if image else \
+           ["-ss", f"{float(carry.get('start', 0)):.3f}", "-i", str(path)]
+    sound = keep_audio and not image and probe(path)[1]
+    fcfg = {**cfg, "width": w, "height": h}
+    graph = [fit_filter(fcfg, "0:v", "f", carry.get("focus", (0.5, 0.5)), carry.get("zoom", 1), carry.get("fit") or fill)
+             + f";[f]fps={fps},{lighten_eq(carry.get('lighten', 0))}setsar=1,format=yuv420p,"
+             f"tpad=stop_mode=clone:stop_duration={frames / fps + 1:.3f},trim=end_frame={frames},setpts=PTS-STARTPTS[v]"]
+    if sound:
+        graph.append(f"[0:a:0]aformat=sample_rates=48000:channel_layouts=stereo,apad,atrim=0:{frames / fps:.4f},asetpts=PTS-STARTPTS[a]")
+    else:
+        cmd += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
+        graph.append(f"[1:a]atrim=0:{frames / fps:.4f}[a]")
+    run(cmd + ["-filter_complex", ";".join(graph), "-map", "[v]", "-map", "[a]",
+               *video_codec(cfg), "-r", str(fps), "-c:a", "pcm_s16le", str(out)])
+    return out
 
 
 def band_offset(slot, w, h):

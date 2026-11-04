@@ -319,9 +319,13 @@
               @click="select(items.indexOf(byId.get(sc.a.item)))"
               :title="`${byId.get(sc.a.item)?.media.file}: ${fmtTime(aRanges[k][0])} → ${fmtTime(aRanges[k][1])} of the clip`"
             >{{ byId.get(sc.a.item)?.media.file }} · {{ aPlans[k].pieces.length > 1 ? `${aPlans[k].pieces.length} pieces · ` : '' }}{{ rateText(k) }}{{ aTiming(sc) === 'fit' ? ' sped to fit' : '' }}<span v-if="aPlans[k].rate > 4.001" class="warnchip">over 4×</span></button>
-            <div v-else class="off" :style="laneStyle(sceneTimes[k].start, sceneTimes[k].end - sceneTimes[k].start)">{{ aIds.length ? 'A off-screen' : '' }}</div>
+            <div
+              v-else-if="carryOf(k)" class="aseg relay" :style="laneStyle(sceneTimes[k].start, sceneTimes[k].end - sceneTimes[k].start)"
+              :title="`Relay: ${carryOf(k).media.file} carries on in A's slot`"
+            >↪ {{ carryOf(k).media.file }} carries on</div>
+            <div v-else class="off" :style="laneStyle(sceneTimes[k].start, sceneTimes[k].end - sceneTimes[k].start)">{{ aIds.length || sceneList.some((x, i) => carryOf(i)) ? 'A off-screen' : '' }}</div>
           </template>
-          <span v-if="!aIds.length" class="muted laneempty">No clip in lane A: ⤒ on a part puts it here</span>
+          <span v-if="!aIds.length && !sceneList.some((x, i) => carryOf(i))" class="muted laneempty">No clip in lane A: ⤒ on a part puts it here</span>
           <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
         </div>
       </div>
@@ -538,7 +542,15 @@
               <span v-if="typeof selSc.split === 'number' && ![0.5, 0.58].includes(selSc.split)" class="mono muted">{{ Math.round(selSc.split * 100) }} / {{ 100 - Math.round(selSc.split * 100) }}</span>
             </div>
           </template>
-          <template v-if="selSc.layout !== 'soloB' && aIds.length">
+          <template v-if="['stack', 'swap'].includes(selSc.layout) && sceneList[selK - 1]?.layout === 'soloB'">
+            <label class="field check">
+              <span><input type="checkbox" :checked="!!selSc.relay" @change="editScene(selK, $event.target.checked ? { relay: true, into: 'handoff' } : { relay: false })" />
+                Relay: the shot before carries on in A's slot</span>
+              <small class="muted">{{ selSc.relay ? `${carryOf(selK)?.media.file || 'The shot before'} moves into A's slot and keeps playing while B comes in. End the scene with a Solo B that comes in with Take over, and B grows to the full frame.`
+                : 'Off: A\'s slot plays lane A.' }}</small>
+            </label>
+          </template>
+          <template v-if="selSc.layout !== 'soloB' && aIds.length && !isRelay(sceneList, selK)">
             <span class="muted">A lane {{ selSc.layout === 'soloA' ? 'in this scene' : 'timing in this scene' }}</span>
             <div class="tbtns" v-if="aParts.length > 1">
               <button
@@ -590,7 +602,7 @@
             <span class="muted">Into this scene</span>
             <div class="tbtns">
               <button
-                v-for="t in INTOS.filter((x) => !x.after || (sceneList[selK - 1]?.layout === x.after && ['stack', 'swap'].includes(selSc.layout)))"
+                v-for="t in INTOS.filter((x) => !x.when || x.when(sceneList[selK - 1], selSc))"
                 :key="t.v" class="btn small" :class="{ active: (selSc.into || 'cut') === t.v }"
                 @click="editScene(selK, { into: t.v, ...(t.v === 'handoff' && selSc.handoff == null ? { handoff: HANDOFF_DEFAULT } : {}) })"
               >{{ t.v === 'slide' ? (wide ? 'Slide in' : 'Slide up') : t.label }}</button>
@@ -773,7 +785,7 @@ import ComposePanel from '../components/ComposePanel.vue'
 import ReelFrame from '../components/ReelFrame.vue'
 import { SHAPES, shapeOf, shapeRatio } from '../shapes'
 import { quietCut, topSource } from '../stack'
-import { HANDOFF_DEFAULT, INTOS, LAYOUTS as SCENE_LAYOUTS, SCENE_IN, SOLO_A_MIN, TIMINGS, aShort, aTiming, fitted, handoffSecs, frameFor, layoutLabel, newId, normalize,
+import { HANDOFF_DEFAULT, INTOS, isRelay, LAYOUTS as SCENE_LAYOUTS, SCENE_IN, SOLO_A_MIN, TIMINGS, aShort, aTiming, fitted, handoffSecs, frameFor, layoutLabel, newId, normalize,
   resolveA, sceneAPlan, sceneSlots, showsA, showsB, slotShape, soloSeconds } from '../scenes'
 import SceneFrame from '../components/SceneFrame.vue'
 import { audioSegments, mixBars, transitionBands } from '../audioMix'
@@ -1530,11 +1542,19 @@ const aNeeds = computed(() => aParts.value.map((p) => {
   return { part: p, used: true, from, to, short }
 }))
 // What the A slot shows now: which clip, where in it and how fast.
+// A relay's A slot: the shot from the scene before, carrying on from where its part ended.
+const carryOf = (k) => {
+  if (!isRelay(sceneList.value, k)) return null
+  const prev = sceneList.value[k - 1]
+  return byId.value.get(prev.parts[prev.parts.length - 1]) || null
+}
 const aNow = computed(() => {
   const k = shownScene.value
+  const within = reelOn.value && reelTime.value !== null ? reelTime.value - sceneTimes.value[k].start : 0
+  const carry = carryOf(k)
+  if (carry) return { part: carry, t: carry.media.kind === 'video' ? carry.start + carry.length + within : 0, rate: 1, playing: true, carry: true }
   const plan = aPlans.value[k]
   if (!plan) return null
-  const within = reelOn.value && reelTime.value !== null ? reelTime.value - sceneTimes.value[k].start : 0
   const hand = handoffs.value[k]
   return { part: byId.value.get(sceneList.value[k].a.item), t: topSource(plan, Math.max(0, within - hand)), rate: plan.rate,
            playing: within >= hand }
@@ -2492,6 +2512,7 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .link.danger { color: #c0583f; }
 .warn { color: #b3412f; }
 .overruled .btn { opacity: 0.45; }
+.aseg.relay { background: repeating-linear-gradient(45deg, #b8cfa8 0 8px, #a9c398 8px 16px); cursor: default; }
 .handoffshot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 3; pointer-events: none; }
 .timing.speedy b::after { content: ' · changes speed'; font-weight: 400; font-size: 11px; color: var(--muted); }
 </style>

@@ -19,13 +19,17 @@ export const INTOS = [
   { v: 'slide', label: 'Slide', hint: 'The new layout slides in from the bottom (the right, in 16:9) over the last frame. 0.4s.' },
   { v: 'push', label: 'Push', hint: 'The new layout pushes the old one out of the frame. 0.4s.' },
   { v: 'dissolve', label: 'Dissolve', hint: 'A soft crossfade between the layouts. 0.4s.' },
-  { v: 'handoff', label: 'Hand off', hint: 'The full-frame shot before moves into A\'s slot as B comes in, stays there a few seconds, then dissolves into A (which starts then).', after: 'soloB' },
+  { v: 'handoff', label: 'Hand off', hint: 'The full-frame shot before moves into A\'s slot as B comes in, stays there a few seconds, then dissolves into A (which starts then). In a relay it carries on there instead.', when: (prev, sc) => prev?.layout === 'soloB' && ['stack', 'swap'].includes(sc.layout) },
+  { v: 'takeover', label: 'Take over', hint: 'B grows from its slot to the full frame as A slides out. 0.6s.', when: (prev, sc) => ['stack', 'swap'].includes(prev?.layout) && sc.layout === 'soloB' },
 ]
 export const HANDOFF_DEFAULT = 3
+// A relay: a split after Solo B whose A slot is that shot carrying on.
+export const isRelay = (scenes, k) => !!(k && scenes[k].relay && scenes[k].into === 'handoff'
+  && scenes[k - 1].layout === 'soloB' && ['stack', 'swap'].includes(scenes[k].layout))
 // Seconds scene k is handed off from the Solo B scene before it (0: none).
 export function handoffSecs(scenes, k, secs) {
   const sc = scenes[k]
-  if (!k || sc.into !== 'handoff' || scenes[k - 1].layout !== 'soloB' || !['stack', 'swap'].includes(sc.layout)) return 0
+  if (!k || sc.into !== 'handoff' || scenes[k - 1].layout !== 'soloB' || !['stack', 'swap'].includes(sc.layout) || sc.relay) return 0
   return Math.max(0, Math.min(sc.handoff ?? HANDOFF_DEFAULT, secs[k] - 0.5))
 }
 // How A plays in a scene. Real speed unless a speed is asked for.
@@ -61,7 +65,7 @@ export function normalize(scenes, keptIds, aIds) {
     if (sc.layout !== 'soloB') {
       if (!aIds.length) {
         if (sc.layout === 'soloA') continue
-        sc.layout = 'soloB'
+        if (!sc.relay) sc.layout = 'soloB'   // a relay's A slot is the shot before, not lane A
       } else sc.a = { ...(sc.a || {}), item: aIds.includes(sc.a?.item) ? sc.a.item : aIds[0] }
     }
     if (sc.layout === 'soloA') { sc.parts = []; out.push(sc); continue }
@@ -155,7 +159,7 @@ export function quietFill(points, ain, end, seconds) {
 export function resolveA(scenes, secs, items, pointsOf = () => null) {
   const out = scenes.map(() => null)
   const cursor = new Map()
-  const shows = scenes.map((sc, i) => i).filter((i) => showsA(scenes[i]) && scenes[i].a && items.get(scenes[i].a.item))
+  const shows = scenes.map((sc, i) => i).filter((i) => showsA(scenes[i]) && scenes[i].a && !isRelay(scenes, i) && items.get(scenes[i].a.item))
   shows.forEach((i, n) => {
     const a = scenes[i].a
     const timing = aTiming(scenes[i])

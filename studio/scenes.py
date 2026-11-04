@@ -10,7 +10,11 @@ visible, one after another (the reel's `scenes`):
      len: seconds (soloA: how long A plays alone),
      split: 0.5 | 0.58 | ... | "square" (the primary slot's share; square:
             the other slot is square),
-     into: cut | slide | push | dissolve | handoff (how it comes in;
+     relay: true (a split after Solo B: A's slot is that shot carrying on,
+            instead of lane A),
+     into: cut | slide | push | dissolve | handoff | takeover (how it comes in;
+           takeover, into Solo B after a split: B grows to the full frame
+           as A slides out;
            handoff, after a Solo B scene: its last frame moves into A's
            slot as B comes in, stays `handoff` seconds, then dissolves
            into A, which starts then),
@@ -32,7 +36,7 @@ import json
 import uuid
 
 LAYOUTS = ("soloA", "stack", "soloB", "swap")
-INTOS = ("cut", "slide", "push", "dissolve", "handoff")
+INTOS = ("cut", "slide", "push", "dissolve", "handoff", "takeover")
 HANDOFF_DEFAULT = 3.0   # seconds a Solo B scene's last frame stays in A's slot, handing off
 TIMINGS = ("real", "quiet", "hold", "fit", "range")   # range: real, from before
 SOLO_A_DEFAULT = 4.0   # seconds a new Solo A scene runs
@@ -102,7 +106,8 @@ def normalized(scenes, kept_ids, a_ids):
             if not a_ids:
                 if sc["layout"] == "soloA":
                     continue
-                sc["layout"] = "soloB"
+                if not sc.get("relay"):   # a relay's A slot is the shot before, not lane A
+                    sc["layout"] = "soloB"
             else:
                 if a.get("item") not in a_ids:
                     a["item"] = a_ids[0]
@@ -171,6 +176,8 @@ def clean(scenes, s):
         c["split"] = "square" if split == "square" else round(min(max(float(split or 0.5), 0.3), 0.7), 3)
         if c["into"] == "handoff":
             c["handoff"] = round(min(max(float(sc.get("handoff") or HANDOFF_DEFAULT), 0.5), 10.0), 2)
+        if sc.get("relay") and sc["layout"] in ("stack", "swap"):
+            c["relay"] = True
         if sc.get("fill") in ("fill", "blur"):
             c["fill"] = sc["fill"]
         a = sc.get("a")
@@ -182,3 +189,33 @@ def clean(scenes, s):
                       "speed": round(min(max(float(a.get("speed") or 1), 0.25), 16.0), 3)}
         out.append(c)
     return out
+
+
+def relay_plan(rows, overlap=3.0, solo=4.0):
+    """A relay reel from parts in order: each clip plays alone, then moves
+    into A's slot and carries on while the next comes in underneath, which
+    then takes over the full frame. Returns ([(row, start, length, kind)]:
+    the parts, two per clip after the first: its stretch underneath, then
+    alone), and a function making the scenes from their new ids."""
+    parts = []
+    for i, r in enumerate(rows):
+        video = r["kind"] == "video"
+        dur = r["duration"] if video else 0
+        need = (overlap if i else 0) + solo + (overlap if i + 1 < len(rows) else 0)
+        start = min(r["start"], max(0.0, dur - need)) if video else 0.0
+        if i:
+            parts.append((r, round(start, 3), overlap, "under"))
+            start += overlap
+        parts.append((r, round(start, 3), solo, "alone"))
+
+    def scenes(ids):
+        out = []
+        for (r, _, _, kind), pid in zip(parts, ids):
+            if kind == "alone":
+                out.append({"id": new_id(), "layout": "soloB", "from": pid,
+                            "into": "takeover" if out else "cut"})
+            else:
+                out.append({"id": new_id(), "layout": "stack", "from": pid, "split": 0.5,
+                            "relay": True, "into": "handoff"})
+        return out
+    return parts, scenes

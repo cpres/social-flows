@@ -486,7 +486,7 @@ const notice = ref('')
 const step = ref(0)
 const clips = ref([])
 const existingName = ref('')
-const newName = ref(`${props.folder} weave`)
+const newName = ref(new URLSearchParams(window.location.hash.split('?')[1] || '').get('name') || `${props.folder} weave`)
 const PACE = { len: 2, splitOver: 15, between: 'dissolve', music: '', musicStart: 0, beatSync: false, beatsPerCut: 4,
                hold: 'smart', shape: 'tall' }   // hold: how photos hold, smart | even; shape: see shapes.js
 const pace = reactive({ ...PACE })
