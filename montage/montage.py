@@ -334,13 +334,20 @@ def build_plan(cfg, base_dir, beats, voice=None):
     for r in range(1, total_rounds + 1):
         for src in sources:
             if src.get("gap"):
+                seconds = float(src.get("length", 2.0))
+                if src.get("beats") is None and beats is not None:   # whole beats, nearest the seconds
+                    steps = sorted(b - a for a, b in zip(beats, beats[1:]))
+                    beat = steps[len(steps) // 2] if steps else 0.5
+                    n = max(1, round(seconds / beat))
+                else:
+                    n = beat_count(src.get("beats"), 4)
                 plan.append({"kind": "gap", "label": src.get("id", "top alone"), "round": r,
-                             "start": 0.0, "pane": "gap", "transition": "cut",
-                             "seconds": float(src.get("length", 2.0)),
-                             "beats": beat_count(src.get("beats"), 4)})
+                             "start": 0.0, "pane": "gap", "transition": "cut", "scene": src.get("scene"),
+                             "seconds": seconds, "beats": n})
                 continue
             label = src.get("id", src["_path"].stem)
             pane = "solo" if src.get("pane") == "solo" else "split"
+            scene = src.get("scene")
             if src["_is_image"]:
                 if r in rounds_for_image(src, total_rounds):
                     plan.append({"kind": "image", "path": src["_path"], "label": label,
@@ -348,7 +355,7 @@ def build_plan(cfg, base_dir, beats, voice=None):
                                  "transition": src.get("transition"),
                                  "lighten": float(src.get("lighten", 0) or 0),
                                  "zoom": float(src.get("zoom", 1) or 1),
-                                 "fit": src.get("fit"), "pane": pane,
+                                 "fit": src.get("fit"), "pane": pane, "scene": scene,
                                  "seconds": float(src.get("hold", default_hold)),
                                  "beats": beat_count(src.get("hold_beats"), beats_per_cut * 2)})
                 continue
@@ -368,7 +375,7 @@ def build_plan(cfg, base_dir, beats, voice=None):
                          "transition": src.get("transition"),
                          "lighten": float(src.get("lighten", 0) or 0),
                          "zoom": float(src.get("zoom", 1) or 1),
-                         "fit": src.get("fit"), "pane": pane,
+                         "fit": src.get("fit"), "pane": pane, "scene": scene,
                          "has_audio": src["_has_audio"],
                          "seconds": float(src.get("length", default_len)),
                          "beats": beat_count(src.get("beats"), beats_per_cut)})
@@ -430,8 +437,9 @@ def build_plan(cfg, base_dir, beats, voice=None):
         if i + 1 < len(plan):
             nxt = plan[i + 1]
             style = seg.get("transition")
-            if "gap" in (seg["kind"], nxt["kind"]) or seg.get("pane") != nxt.get("pane"):
-                pass   # the Stack's panes move here: their slide is the transition
+            if ("gap" in (seg["kind"], nxt["kind"]) or seg.get("pane") != nxt.get("pane")
+                    or seg.get("scene") != nxt.get("scene")):
+                pass   # the layout changes here: the scene's own transition is used
             elif style == "zoom":            # a hard cut; the next shot punches in
                 nxt["punch_in"] = min(PUNCH_D, nxt["length"])
                 seg["label_after"] = "zoom punch-in"
@@ -604,10 +612,10 @@ def render_segment(seg, idx, cfg, workdir, keep_audio):
     return out
 
 
-def assemble(segs, plan, cfg, workdir):
+def assemble(segs, plan, cfg, workdir, name="assembled"):
     """Join all cuts, applying hard cuts or crossfades between them."""
     fps = cfg["fps"]
-    out = workdir / "assembled.mkv"
+    out = workdir / f"{name}.mkv"
     cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error"]
     for p in segs:
         cmd += ["-i", str(p)]
@@ -972,6 +980,293 @@ def compose_layout(top, assembled, cfg, keys, total, workdir):
          "-filter_complex", ";".join(graph), "-map", "[v]", "-map", "[a]",
          *video_codec(cfg), "-r", str(fps), "-c:a", "pcm_s16le", str(out)])
     return out
+
+
+# ---------------------------------------------------------------- scenes
+
+# A reel in scenes: two lanes of footage (A, a long clip or a few; B, the
+# cuts) and a list of scenes saying what's on screen, one after another:
+#   soloA   A fills the frame (B waits)
+#   stack   A in the primary slot (top, or left in a wide frame), B in the other
+#   soloB   B fills the frame (A waits)
+#   swap    B in the primary slot, A in the other
+# Each source carries the scene it plays in (`scene:`); a soloA scene is a
+# `gap:` source. A scene with A on screen plays a stretch of an A clip:
+#   a: {item, file, start, end (the part of the clip it can use), in, out
+#       (null: carry on from the scene before / share what's left),
+#       timing: fit | quiet | hold, speed, focus, zoom, lighten, activity}
+# split is the primary slot's share, or "square" (the other slot square);
+# into is how the scene comes in: cut | slide | push | dissolve; fill is how
+# a lane on its own fills the frame (fill | blur).
+
+SCENE_IN = 0.4       # seconds a scene's transition in takes
+LAYOUTS = ("soloA", "stack", "soloB", "swap")
+
+
+def scene_slots(scene, w, h, divider):
+    """Where each lane sits: {lane: (width, height, x, y)}, and the divider's
+    rect (or None)."""
+    layout = scene.get("layout", "stack")
+    if layout == "soloA":
+        return {"A": (w, h, 0, 0)}, None
+    if layout == "soloB":
+        return {"B": (w, h, 0, 0)}, None
+    axis = "x" if w > h else "y"
+    full, cross = (w, h) if axis == "x" else (h, w)
+    d = min(max(int(divider) // 2 * 2, 0), 40)
+    split = scene.get("split", 0.5)
+    if split == "square" and full - d - cross >= full * 0.25:
+        second = cross
+        first = full - d - second
+    else:
+        split = 0.5 if split == "square" else min(max(float(split), 0.2), 0.8)
+        first = round((full - d) * split / 2) * 2
+        second = full - d - first
+    lanes = ("A", "B") if layout == "stack" else ("B", "A")
+    if axis == "y":
+        slots = {lanes[0]: (w, first, 0, 0), lanes[1]: (w, second, 0, first + d)}
+        div = (w, d, 0, first) if d else None
+    else:
+        slots = {lanes[0]: (first, h, 0, 0), lanes[1]: (second, h, first + d, 0)}
+        div = (d, h, first, 0) if d else None
+    return slots, div
+
+
+def resolve_a(scenes, secs):
+    """Each scene's stretch of its A clip: (in, out) in the clip. A scene
+    that doesn't say carries on where the last scene on that clip stopped;
+    fitted scenes share what's left of the clip by their lengths, after what
+    the scenes at their own speed need. As stack.js resolveA."""
+    out = [None] * len(scenes)
+    cursor = {}
+    shows = [i for i, sc in enumerate(scenes) if sc.get("layout") != "soloB" and sc.get("a")]
+    for n, i in enumerate(shows):
+        a = scenes[i]["a"]
+        item, start, end = a.get("item"), float(a["start"]), float(a["end"])
+        speed = float(a.get("speed") or 1)
+        ain = a.get("in")
+        ain = min(max(float(ain) if ain is not None else cursor.get(item, start), start), end - 0.2)
+        fitted = a.get("timing") in ("fit", "quiet") and scenes[i].get("layout") != "soloA"
+        if not fitted:
+            aout = min(end, ain + secs[i] * speed)
+        elif a.get("out") is not None:
+            aout = min(max(float(a["out"]), ain + 0.2), end)
+        else:
+            stop, need, share = end, 0.0, secs[i]
+            for j in shows[n + 1:]:
+                b = scenes[j]["a"]
+                if b.get("item") != item:
+                    continue
+                if b.get("in") is not None:
+                    stop = min(stop, float(b["in"]))
+                    break
+                if b.get("timing") in ("fit", "quiet") and scenes[j].get("layout") != "soloA":
+                    if b.get("out") is not None:
+                        stop = min(stop, float(b["out"]))   # (it starts where we stop)
+                        break
+                    share += secs[j]
+                else:
+                    need += secs[j] * float(b.get("speed") or 1)
+            room = max(stop - ain - need, 0.2)
+            aout = min(end, ain + room * secs[i] / max(share, 1e-6))
+        cursor[item] = aout
+        out[i] = (round(ain, 3), round(max(aout, ain + 0.2), 3))
+    return out
+
+
+def scene_a_plan(a, ain, aout, seconds):
+    """The pieces of the A clip a scene plays, and how fast."""
+    length = aout - ain
+    timing = a.get("timing", "fit")
+    if a.get("_solo") or timing in ("hold", "range"):   # range: real speed from a picked start
+        return [(ain, length)], float(a.get("speed") or 1)
+    if timing == "quiet":
+        pieces = quiet_cut([(float(t), float(v)) for t, v in a.get("activity") or []], ain, length, seconds)
+        return pieces, max(1.0, sum(l for _, l in pieces) / seconds)
+    return [(ain, length)], length / seconds
+
+
+def render_scene_a(a, path, pieces, rate, size, frames, cfg, keep_audio, workdir, k):
+    """A's stretch for scene k, framed to its slot and timed to the scene
+    (held on its last frame if it runs out), with its sound when asked for
+    and it plays at normal speed."""
+    fps = cfg["fps"]
+    w, h = size
+    out = workdir / f"scene{k:02d}_a.mkv"
+    tcfg = {**cfg, "width": w, "height": h}
+    _, has_audio = probe(path)
+    sound = keep_audio and has_audio and abs(rate - 1) < 0.01
+    cmd, graph = ["ffmpeg", "-nostdin", "-y", "-v", "error"], []
+    for i, (s, l) in enumerate(pieces):
+        cmd += ["-ss", f"{s:.3f}", "-t", f"{l:.3f}", "-i", str(path)]
+        graph.append(fit_filter(tcfg, f"{i}:v", f"f{i}", a.get("focus", (0.5, 0.5)), a.get("zoom", 1), a.get("fit"))
+                     + f";[f{i}]setpts=(PTS-STARTPTS)/{rate:.6f},fps={fps},setsar=1,format=yuv420p[p{i}]")
+        if sound:
+            graph.append(f"[{i}:a:0]aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS[q{i}]")
+    n = len(pieces)
+    joined = "".join(f"[p{i}]" + (f"[q{i}]" if sound else "") for i in range(n))
+    graph.append(f"{joined}concat=n={n}:v=1:a={1 if sound else 0}[vc]" + ("[ac]" if sound else ""))
+    graph.append(f"[vc]{lighten_eq(a.get('lighten', 0))}tpad=stop_mode=clone:stop_duration={frames / fps + 1:.3f},"
+                 f"trim=end_frame={frames},setpts=PTS-STARTPTS[v]")
+    if not sound:
+        cmd += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
+        graph.append(f"[{n}:a]atrim=0:{frames / fps:.4f}[a]")
+    else:
+        graph.append(f"[ac]apad,atrim=0:{frames / fps:.4f},asetpts=PTS-STARTPTS[a]")
+    run(cmd + ["-filter_complex", ";".join(graph), "-map", "[v]", "-map", "[a]",
+               *video_codec(cfg), "-r", str(fps), "-c:a", "pcm_s16le", str(out)])
+    return out
+
+
+def compose_scene(scene, slots, div, files, frames, tail, cfg, workdir, k):
+    """One scene's frame: each lane in its slot (and the divider), held on
+    its last frame for `tail` more frames so the next scene can come in over
+    it. The sound is the primary lane's: A in soloA and stack, B otherwise."""
+    fps, w, h = cfg["fps"], cfg["width"], cfg["height"]
+    color = str((cfg.get("stack") or {}).get("divider_color", "#f7f1e3")).replace("#", "0x")
+    lanes = [lane for lane in ("A", "B") if lane in slots]
+    cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error"]
+    graph = [f"color=c=black:s={w}x{h}:r={fps},format=yuv420p,trim=end_frame={frames + tail}[base]"]
+    cur = "[base]"
+    for i, lane in enumerate(lanes):
+        cmd += ["-i", str(files[lane])]
+        sw, sh, x, y = slots[lane]
+        graph.append(f"[{i}:v]scale={sw}:{sh},setsar=1,format=yuv420p,"
+                     f"tpad=stop_mode=clone:stop_duration={(frames + tail) / fps + 1:.3f},"
+                     f"trim=end_frame={frames + tail},setpts=PTS-STARTPTS[l{i}]")
+        graph.append(f"{cur}[l{i}]overlay=x={x}:y={y}:eof_action=repeat[c{i}]")
+        cur = f"[c{i}]"
+    if div:
+        dw, dh, x, y = div
+        graph.append(f"color=c={color}:s={dw}x{dh}:r={fps},format=yuv420p,trim=end_frame={frames + tail}[div]")
+        graph.append(f"{cur}[div]overlay=x={x}:y={y}[cd]")
+        cur = "[cd]"
+    primary = "A" if scene.get("layout") in ("soloA", "stack") else "B"
+    if primary not in lanes:
+        primary = lanes[0]
+    graph.append(f"{cur}format=yuv420p,trim=end_frame={frames + tail},setpts=PTS-STARTPTS[v]")
+    graph.append(f"[{lanes.index(primary)}:a]apad,atrim=0:{frames / fps:.4f},asetpts=PTS-STARTPTS[a]")
+    out = workdir / f"scene{k:02d}.mkv"
+    run(cmd + ["-filter_complex", ";".join(graph), "-map", "[v]", "-map", "[a]",
+               *video_codec(cfg), "-r", str(fps), "-c:a", "pcm_s16le", str(out)])
+    return out
+
+
+def join_scenes(files, scenes, frames, tails, cfg, workdir):
+    """The scenes one after another. A scene comes in over the last frame of
+    the one before: cut, slide (it slides in from the bottom, or the right
+    in a wide frame), push (it pushes the last one out) or dissolve."""
+    fps, w, h = cfg["fps"], cfg["width"], cfg["height"]
+    axis = "x" if w > h else "y"
+    cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error"]
+    for f in files:
+        cmd += ["-i", str(f)]
+    n = len(files)
+    graph, pieces, labels = [], [], {}
+    for k in range(n):   # each scene is used for its body, its head and the tail the next comes in over
+        uses = ["body"] + (["head"] if k > 0 and tails[k - 1] else []) + (["tail"] if k + 1 < n and tails[k] else [])
+        labels[k] = {u: f"[s{k}{u}]" for u in uses}
+        graph.append(f"[{k}:v]split={len(uses)}" + "".join(labels[k].values()) if len(uses) > 1
+                     else f"[{k}:v]null{labels[k]['body']}")
+    for k in range(n):
+        head = tails[k - 1] if k > 0 else 0
+        if head:
+            d = head / fps
+            graph.append(f"{labels[k - 1]['tail']}trim=start_frame={frames[k - 1]}:end_frame={frames[k - 1] + head},"
+                         f"setpts=PTS-STARTPTS[pt{k}]")
+            graph.append(f"{labels[k]['head']}trim=end_frame={head},setpts=PTS-STARTPTS[nh{k}]")
+            ease = f"(0.5-0.5*cos(PI*t/{d:.4f}))"
+            into = scenes[k].get("into", "cut")
+            if into == "dissolve":
+                graph.append(f"[pt{k}][nh{k}]xfade=transition=fade:duration={d:.4f}:offset=0[tr{k}]")
+            elif into == "push":
+                move = (f"x='-{w}*{ease}':y=0", f"x='{w}*(1-{ease})':y=0") if axis == "x" else \
+                       (f"x=0:y='-{h}*{ease}'", f"x=0:y='{h}*(1-{ease})'")
+                graph.append(f"color=c=black:s={w}x{h}:r={fps},format=yuv420p,trim=end_frame={head}[cv{k}]")
+                graph.append(f"[cv{k}][pt{k}]overlay={move[0]}[pp{k}]")
+                graph.append(f"[pp{k}][nh{k}]overlay={move[1]}[tr{k}]")
+            else:   # slide
+                move = f"x='{w}*(1-{ease})':y=0" if axis == "x" else f"x=0:y='{h}*(1-{ease})'"
+                graph.append(f"[pt{k}][nh{k}]overlay={move}[tr{k}]")
+            pieces.append(f"[tr{k}]")
+        graph.append(f"{labels[k]['body']}trim=start_frame={head}:end_frame={frames[k]},setpts=PTS-STARTPTS[b{k}]")
+        pieces.append(f"[b{k}]")
+    graph.append("".join(pieces) + f"concat=n={len(pieces)}:v=1:a=0,format=yuv420p[v]")
+    graph.append("".join(f"[{k}:a]" for k in range(n)) + f"concat=n={n}:v=0:a=1[a]")
+    out = workdir / "scenes.mkv"
+    run(cmd + ["-filter_complex", ";".join(graph), "-map", "[v]", "-map", "[a]",
+               *video_codec(cfg), "-r", str(fps), "-c:a", "pcm_s16le", str(out)])
+    return out
+
+
+def scene_frames(plan, n_scenes, fps):
+    """Each scene's length in frames, from the plan's cuts."""
+    frames = [0] * n_scenes
+    for seg in plan:
+        frames[seg.get("scene") or 0] += round(seg["length"] * fps)
+    return frames
+
+
+def scene_report(cfg, plan, base_dir):
+    """What each scene shows, for the dry run; and the resolved A stretches."""
+    scenes, fps = cfg["scenes"], cfg["fps"]
+    frames = scene_frames(plan, len(scenes), fps)
+    secs = [f / fps for f in frames]
+    ranges = resolve_a(scenes, secs)
+    names = {"soloA": "Solo A", "stack": "A over B", "soloB": "Solo B", "swap": "B over A"}
+    if cfg["width"] > cfg["height"]:
+        names.update(stack="A | B", swap="B | A")
+    lines, t = [], 0.0
+    for k, sc in enumerate(scenes):
+        line = f"  {fmt(t):>7}  scene {k + 1}  {names.get(sc.get('layout'), sc.get('layout')):<9} {secs[k]:.2f}s"
+        if k and sc.get("into", "cut") != "cut":
+            line += f"  (in: {sc['into']})"
+        if ranges[k]:
+            a = sc["a"]
+            pieces, rate = scene_a_plan({**a, "_solo": sc.get("layout") == "soloA"}, *ranges[k], max(secs[k], 0.04))
+            line += f"  · A {Path(a['file']).name} {fmt(ranges[k][0])} -> {fmt(ranges[k][1])} at {rate:.2f}x"
+            if len(pieces) > 1:
+                line += f", {len(pieces)} pieces"
+            if rate > 4.001:
+                line += "  ! over 4x"
+        lines.append(line)
+        t += secs[k]
+    return lines, ranges, frames
+
+
+def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
+    """Every scene rendered and joined: returns the picture and sound for
+    the whole piece. segs_of(k, w, h, fill) renders scene k's cuts at that
+    size and returns the assembled file (None when B isn't on screen)."""
+    scenes, fps = cfg["scenes"], cfg["fps"]
+    w, h = cfg["width"], cfg["height"]
+    divider = int((cfg.get("stack") or {}).get("divider", 4))
+    _, ranges, frames = scene_report(cfg, plan, base_dir)
+    tails = [min(round(SCENE_IN * fps), frames[k], frames[k + 1]) if k + 1 < len(scenes)
+             and scenes[k + 1].get("into", "cut") != "cut" else 0 for k in range(len(scenes))]
+    files = []
+    for k, sc in enumerate(scenes):
+        print(f"  scene {k + 1}/{len(scenes)}...                     ", end="\r")
+        slots, div = scene_slots(sc, w, h, divider)
+        solo_fill = sc.get("fill") or ("blur" if w > h else "fill")
+        lane_files = {}
+        if "B" in slots:
+            bw, bh = slots["B"][:2]
+            lane_files["B"] = segs_of(k, bw, bh, solo_fill if sc.get("layout") == "soloB" else None)
+        if "A" in slots:
+            a = {**sc["a"]}
+            if sc.get("layout") == "soloA":
+                a["_solo"] = True
+                a.setdefault("fit", solo_fill)
+            ain, aout = ranges[k]
+            pieces, rate = scene_a_plan(a, ain, aout, max(frames[k] / fps, 0.04))
+            path = (base_dir / a["file"]).expanduser()
+            lane_files["A"] = render_scene_a(a, path, pieces, rate, slots["A"][:2], frames[k], cfg,
+                                             keep_audio, workdir, k)
+        files.append(compose_scene(sc, slots, div, lane_files, frames[k], tails[k], cfg, workdir, k))
+    if len(files) == 1:
+        return files[0]
+    return join_scenes(files, scenes, frames, tails, cfg, workdir)
 
 
 def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output, voice=None):
@@ -1867,7 +2162,7 @@ def main():
     for note in expand_folders(cfg, base_dir):
         print(f"  {note}")
     beats, music_start = load_beats(cfg, base_dir)
-    top = load_top(cfg, base_dir)
+    top = None if cfg.get("scenes") else load_top(cfg, base_dir)
     cards = load_cards(cfg, base_dir)
     voice = load_voice(cfg, base_dir)
     cap_lines, cap = load_captions(cfg)
@@ -1892,6 +2187,10 @@ def main():
             print(f"  {'':>7}      ~ {seg['label_after']}")
         t += seg["length"]
     keys = layout_keys(plan, cfg["fps"])[0] if top else None
+    if cfg.get("scenes"):
+        print(f"\n  {len(cfg['scenes'])} scene{'s' if len(cfg['scenes']) != 1 else ''}:")
+        for line in scene_report(cfg, plan, base_dir)[0]:
+            print(line)
     if top:
         line = (f"\n  top: {top['path'].name} {fmt(top['start'])} -> "
                 f"{fmt(top['start'] + top['length'])} · Top {fmt(top['length'])} · Underneath {fmt(total)}")
@@ -1958,15 +2257,31 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmp:
         workdir = Path(tmp)
+        if cfg.get("scenes"):
+            def segs_of(k, w, h, fill):
+                idx = [i for i, seg in enumerate(plan) if (seg.get("scene") or 0) == k and seg["kind"] != "gap"]
+                if not idx:
+                    return None
+                kcfg = {**cfg, "width": w, "height": h, **({"fit": fill} if fill else {})}
+                files = []
+                for i in idx:
+                    print(f"  cutting {i + 1}/{len(plan)}: {plan[i]['label']}          ", end="\r")
+                    files.append(render_segment(plan[i], i, kcfg, workdir, keep_audio))
+                return assemble(files, [plan[i] for i in idx], kcfg, workdir, f"scene{k:02d}_b")
+            assembled = render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir)
+            plan_done = True
+        else:
+            plan_done = False
         segs = []
-        for i, seg in enumerate(plan):
+        for i, seg in enumerate(plan if not plan_done else []):
             print(f"  cutting {i + 1}/{len(plan)}: {seg['label']}          ", end="\r")
             if seg["kind"] == "gap":
                 seg = gap_footage(plan, i)
                 plan[i]["_from"] = seg.get("_from")
             segs.append(render_segment(seg, i, cfg, workdir, keep_audio))
-        print("  joining cuts...                         ", end="\r")
-        assembled = assemble(segs, plan, cfg, workdir)
+        if not plan_done:
+            print("  joining cuts...                         ", end="\r")
+            assembled = assemble(segs, plan, cfg, workdir)
         if top:
             print("  stacking under the top clip...          ", end="\r")
             assembled = compose_top(top, assembled, cfg, total, workdir, plan)

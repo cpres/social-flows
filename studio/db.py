@@ -71,7 +71,9 @@ CREATE TABLE IF NOT EXISTS reel_items (
     zoom     REAL NOT NULL DEFAULT 1,       -- >1 crops tighter than the full 9:16 window
     layout   TEXT NOT NULL DEFAULT '',      -- fill | blur; '' = the reel's framing
     pane     TEXT NOT NULL DEFAULT '',      -- Stack: solo = fills the frame on its own; '' = split
-    top_after REAL NOT NULL DEFAULT 0       -- Stack: then the top clip alone for this many beats
+    top_after REAL NOT NULL DEFAULT 0,      -- (before scenes) then the top clip alone for this many beats
+    frames   TEXT                           -- framing per slot shape, JSON {half: {x, y, zoom}, square: ...};
+                                            -- NULL: parts from before slots, one framing everywhere
 );
 CREATE INDEX IF NOT EXISTS items_reel ON reel_items(reel_id, position);
 CREATE INDEX IF NOT EXISTS items_media ON reel_items(media_id);
@@ -117,8 +119,13 @@ DEFAULT_SETTINGS = {
     "transition": "cut",    # between parts, unless a part picks its own
     "originalAudio": False,  # glasses audio off unless a reel turns it on
     "originalVolume": 0.35,
-    # Stack format: one clip (a timelapse, say) plays in the top pane for the
-    # whole reel while the parts play one after another underneath.
+    # Lanes and scenes (see scenes.py): laneA lists the parts that are lane A,
+    # scenes what's on screen when. None: worked out from the settings below
+    # (from before scenes) when the reel is opened.
+    "laneA": None,
+    "scenes": None,
+    # Before scenes, a Stack reel: one clip (a timelapse, say) in the top pane
+    # for the whole reel while the parts play one after another underneath.
     "format": "standard",   # standard | stack
     "topItemId": None,      # the reel_items row pinned on top; still a normal row
     "stackSplit": 0.5,      # the top pane's share of the height
@@ -295,7 +302,8 @@ def migrate(db):
                              ("reel_items", "zoom", "REAL NOT NULL DEFAULT 1"),
                              ("reel_items", "layout", "TEXT NOT NULL DEFAULT ''"),
                              ("reel_items", "pane", "TEXT NOT NULL DEFAULT ''"),
-                             ("reel_items", "top_after", "REAL NOT NULL DEFAULT 0")]:
+                             ("reel_items", "top_after", "REAL NOT NULL DEFAULT 0"),
+                             ("reel_items", "frames", "TEXT")]:
         if col not in have[table]:
             db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
     # v1: photo sizes now honour EXIF rotation; re-measure photos once.

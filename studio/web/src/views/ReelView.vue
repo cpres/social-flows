@@ -8,15 +8,16 @@
         <h1>
           <span class="sw" :style="{ background: reelColor(id) }"></span>
           <span class="rename" title="Rename" @click="rename">{{ reel.name }}</span>
-          <span class="formats" role="group" aria-label="Reel format">
+          <span class="formats" role="group" aria-label="Output shape">
+            <span class="muted small">Output</span>
             <button
-              v-for="f in FORMATS" :key="f.v" class="btn small" :class="{ active: (settings.format || 'standard') === f.v }"
-              @click="setFormat(f.v)" :title="f.hint"
-            >{{ f.label }}</button>
+              v-for="sh in SHAPES" :key="sh.v" class="btn small" :class="{ active: (settings.shape || 'tall') === sh.v }"
+              @click="settings.shape = sh.v" :title="sh.hint"
+            >{{ sh.v === 'tall' ? '9:16 · A top' : sh.v === 'wide' ? '16:9 · A left' : sh.short }}</button>
           </span>
         </h1>
         <p class="muted">
-          {{ kept.length + (topPart ? 1 : 0) }} of {{ items.length }} parts kept ·
+          {{ kept.length + aParts.length }} of {{ items.length }} parts · {{ sceneList.length }} scene{{ sceneList.length === 1 ? '' : 's' }} ·
           reel <b class="mono total">{{ fmtTime(reelLength) }}</b>
           <span class="save">{{ saveState }}</span>
         </p>
@@ -181,56 +182,14 @@
       <div class="sgroup">
         <h3>Look &amp; timing</h3>
         <div class="sgrid">
-          <template v-if="isStack">
-            <label class="field">
-              Split, top / underneath
-              <input type="range" min="0.3" max="0.7" step="0.05" v-model.number="settings.stackSplit" />
-              <small class="mono">{{ Math.round(settings.stackSplit * 100) }} / {{ 100 - Math.round(settings.stackSplit * 100) }}</small>
-            </label>
-            <label class="field">
-              Divider (px at 1080 wide)
-              <input type="number" min="0" max="20" step="2" v-model.number="settings.dividerPx" />
-            </label>
-            <label class="field">
-              Divider colour
-              <input type="color" v-model="settings.dividerColor" />
-            </label>
-            <div class="field span2">
-              Top clip speed
-              <div class="shapes">
-                <button
-                  class="btn small" :class="{ active: settings.fitTop && settings.fitTopBy !== 'quiet' }"
-                  @click="settings.fitTop = true; settings.fitTopBy = 'speed'"
-                  title="Sped up (a timelapse) or slowed down to end with the parts underneath"
-                >Fit to the parts</button>
-                <button
-                  class="btn small" :class="{ active: settings.fitTop && settings.fitTopBy === 'quiet' }"
-                  @click="settings.fitTop = true; settings.fitTopBy = 'quiet'"
-                  title="Normal speed: its quiet stretches are cut out until it ends with the parts underneath"
-                >Cut quiet moments to fit</button>
-                <button
-                  class="btn small" :class="{ active: !settings.fitTop }" @click="settings.fitTop = false"
-                  title="A speed you pick"
-                >Its own speed</button>
-                <select v-if="!settings.fitTop" v-model.number="settings.topSpeed">
-                  <option v-for="r in TOP_SPEEDS" :key="r" :value="r">{{ r }}×</option>
-                </select>
-              </div>
-              <small>{{ settings.fitTop
-                ? (settings.fitTopBy === 'quiet' ? 'Plays at normal speed; where nothing much happens is cut out so it ends with the parts.'
-                  : `Ends with the parts: ${topRate.toFixed(2)}× here.`)
-                : moving ? 'Holds its last frame if it runs out before the parts do.'
-                  : `The reel runs as long as the top clip at that speed (${fmtTime(topRun)}).` }}</small>
-            </div>
-            <label class="field">
-              Open on the top clip alone
-              <select v-model.number="settings.stackIntro">
-                <option :value="0">No, split from the start</option>
-                <option v-for="b in [2, 4, 8, 16]" :key="b" :value="b">{{ b }} beats{{ synced ? ` ≈ ${(b * period).toFixed(1)}s` : ` ≈ ${b / 2}s` }}</option>
-              </select>
-              <small>Then it slides {{ settings.shape === 'wide' ? 'left' : 'up' }} as the parts come in.</small>
-            </label>
-          </template>
+          <label class="field">
+            Divider between the slots (px at 1080)
+            <input type="number" min="0" max="20" step="2" v-model.number="settings.dividerPx" />
+          </label>
+          <label class="field">
+            Divider colour
+            <input type="color" v-model="settings.dividerColor" />
+          </label>
           <div class="field">
             Shape
             <div class="shapes">
@@ -242,9 +201,9 @@
             <button class="link" @click="squareBottom" title="Square, with every part framed to the bottom of its shot, where the hands are">Square, framed to the bottom</button>
           </div>
           <label class="field">
-            {{ isStack ? 'Underneath framing' : 'Framing' }}
+            Framing on its own
             <select v-model="settings.fit">
-              <option value="fill">Fill (crop to {{ isStack ? 'the pane' : shapeOf(settings.shape).short }})</option>
+              <option value="fill">Fill (crop to {{ shapeOf(settings.shape).short }})</option>
               <option value="blur">Blurred background</option>
               <option value="pad">Brand colour bars</option>
             </select>
@@ -301,26 +260,63 @@
       <span v-if="settings.music" class="songtag" :title="settings.music">
         ♪ {{ songTitle(shelf, settings.music) }}{{ beatData ? ` · ${Math.round(beatData.bpm)} bpm` : '' }}
       </span>
+      <span class="spacer"></span>
+      <span v-if="toast" class="toast">{{ toast }}</span>
+      <button class="btn small" @click="splitAtPlayhead" title="A new scene starts at the playhead (the nearest cut), with the last split used">Split scene at playhead <kbd>S</kbd></button>
+      <button class="btn small" @click="swapScene()" :disabled="!['stack', 'swap'].includes(shownSc?.layout)" title="Swap which lane has the primary slot">Swap A ⇄ B <kbd>W</kbd></button>
+      <RouterLink class="btn small" to="/" title="Open a shoot and add parts to this reel: they join lane B">Add clip to B lane…</RouterLink>
       <div class="tracks">
-      <div v-if="isStack" class="strip toptrack">
-        <button
-          v-if="topPart" class="seg topseg" :class="{ current: topPart === current }"
-          @click="select(items.indexOf(topPart))" :title="`${topPart.media.file}: plays on top for the whole reel`"
-        >▤ {{ topPart.media.file }} · {{ quietFit && topFill.pieces.length > 1 ? `${topFill.pieces.length} pieces` : `${topRate.toFixed(2)}×` }}</button>
-        <span v-else class="muted toptrack-empty">No top clip: drag one to the Top slot</span>
-        <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
+      <div class="ruler">
+        <span v-for="t in rulerTicks" :key="t" class="rt mono" :style="{ left: `${(t / (reelLength || 1)) * 100}%` }">{{ fmtTime(t).replace(/\.\d$/, '') }}</span>
       </div>
-      <div class="strip">
+      <div class="lanerow">
+        <div class="lanename"><b>Layout</b><small>scenes</small></div>
+        <div class="lanebody scenes" @pointermove="edgeMove" @pointerup="edgeUp">
+          <button
+            v-for="(sc, k) in sceneList" :key="sc.id" class="scene" :class="[`l-${sc.layout}`, { sel: sc.id === selScene, now: k === shownScene }]"
+            :style="laneStyle(sceneTimes[k].start, sceneTimes[k].end - sceneTimes[k].start)" @click="selectScene(k)"
+            :title="`Scene ${k + 1}: ${layoutLabel(sc.layout, wide)} · ${fmtTime(sceneTimes[k].start)} → ${fmtTime(sceneTimes[k].end)}`"
+          >
+            <span class="glyph" :class="`g-${sc.layout}`"><i></i><i></i></span>
+            <span class="sname">{{ layoutLabel(sc.layout, wide) }}</span>
+            <small class="mono">{{ fmtTime(sceneTimes[k].start) }} → {{ fmtTime(sceneTimes[k].end) }}</small>
+          </button>
+          <span
+            v-for="k in sceneList.length - 1" :key="`e${k}`" class="edge"
+            :style="{ left: `${((dragEdge?.k === k ? dragEdge.t : sceneTimes[k].start) / (reelLength || 1)) * 100}%` }"
+            @pointerdown.stop="edgeDown($event, k)" title="Drag to move where the scene changes"
+          ></span>
+          <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
+        </div>
+      </div>
+      <div class="lanerow">
+        <div class="lanename"><b>A lane</b><small>{{ wide ? 'left' : 'top' }} / main</small></div>
+        <div class="lanebody">
+          <template v-for="(sc, k) in sceneList" :key="sc.id">
+            <button
+              v-if="aPlans[k]" class="aseg" :class="{ current: isA(current) && current.id === sc.a.item, warn: aPlans[k].rate > 4.001 }"
+              :style="laneStyle(sceneTimes[k].start, sceneTimes[k].end - sceneTimes[k].start)"
+              @click="select(items.indexOf(byId.get(sc.a.item)))"
+              :title="`${byId.get(sc.a.item)?.media.file}: ${fmtTime(aRanges[k][0])} → ${fmtTime(aRanges[k][1])} of the clip`"
+            >{{ byId.get(sc.a.item)?.media.file }} · {{ aPlans[k].pieces.length > 1 ? `${aPlans[k].pieces.length} pieces · ` : '' }}{{ rateText(k) }}{{ sc.layout !== 'soloA' && sc.a.timing === 'fit' ? ' fit to scene' : '' }}<span v-if="aPlans[k].rate > 4.001" class="warnchip">over 4×</span></button>
+            <div v-else class="off" :style="laneStyle(sceneTimes[k].start, sceneTimes[k].end - sceneTimes[k].start)">{{ aIds.length ? 'A off-screen' : '' }}</div>
+          </template>
+          <span v-if="!aIds.length" class="muted laneempty">No clip in lane A: ⤒ on a part puts it here</span>
+          <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
+        </div>
+      </div>
+      <div class="lanerow">
+        <div class="lanename"><b>B lane</b><small>{{ wide ? 'right' : 'bottom' }} / cut list</small></div>
+      <div class="strip lanebody">
         <template v-for="st in stretches" :key="st.key">
           <div
-            v-if="st.kind === 'gap'" class="seg gap" :style="{ flexGrow: st.end - st.start }"
-            :title="`The top clip alone · ${st.beats} beats`"
-          >▤</div>
+            v-if="st.kind === 'gap'" class="seg gap abs" :style="laneStyle(st.start, st.end - st.start)"
+            title="B isn't on screen in this scene"
+          >B off-screen</div>
           <button
-            v-else class="seg"
-            :class="{ current: st.part === current, playing: reelOn && st.part === current, photo: st.part.media.kind === 'photo', solo: topPart && st.part.pane === 'solo' }"
-            :style="{ flexGrow: len(st.part) }" :title="`${st.part.media.file} · ${len(st.part).toFixed(1)}s` + (topPart && st.part.pane === 'solo' ? ' · on its own' : '')"
-            :data-past="pastEnd(st.part) || null"
+            v-else class="seg abs"
+            :class="{ current: st.part === current, playing: reelOn && st.part === current, photo: st.part.media.kind === 'photo' }"
+            :style="laneStyle(st.start, st.end - st.start)" :title="`${st.part.media.file} · ${len(st.part).toFixed(1)}s`"
             @click="jumpTo(st.part)"
           >{{ synced ? `${fmtBeats(beatsOf(st.part))}♩` : len(st.part).toFixed(1) }}</button>
         </template>
@@ -328,9 +324,9 @@
           v-for="(x, i) in beatTicks" :key="i" class="tick" :class="{ bar: i % 4 === 0 }"
           :style="{ left: `${x}%` }"
         ></div>
-        <div v-if="spare > 0" class="seg spare" :style="{ flexGrow: spare }" title="The last part holds while the top clip finishes"></div>
-        <div v-if="voiceHold > 0 && !spare" class="seg spare" :style="{ flexGrow: voiceHold }" :title="`The last part holds ${voiceHold.toFixed(1)}s longer, until the voice ends`"></div>
+        <div v-if="voiceHold > 0" class="seg spare abs" :style="laneStyle(partsEnd, voiceHold)" :title="`The last part holds ${voiceHold.toFixed(1)}s longer, until the voice ends`"></div>
         <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
+      </div>
       </div>
       <!-- the voice track and its captions, on the same clock -->
       <div v-if="voiceTl.pieces.length" class="lane vlane" @click="seekLane" title="The voice: click to play from there">
@@ -352,7 +348,7 @@
       </div>
       </div>
     </section>
-    <p v-if="isStack && topPart && kept.length" class="readout mono muted">{{ readout }}</p>
+    <p class="readout muted small">Hatched = that lane isn't on screen in the scene. Click a scene to edit its layout; drag a scene edge to move where it changes.</p>
 
     <p v-if="!items.length" class="panel empty">
       This reel is empty. Open a shoot from the <RouterLink to="/">home page</RouterLink>,
@@ -361,32 +357,30 @@
 
     <div class="workspace" v-else>
       <aside class="cliplist" ref="listEl">
-        <!-- Stack: the clip on top for the whole reel, then the parts underneath -->
-        <template v-if="isStack">
-          <div class="slotlabel">Top (timelapse)</div>
+        <!-- lane A: the main footage; then lane B, the cut list -->
+        <div class="slotlabel">A lane · {{ wide ? 'left' : 'top' }} / main</div>
+        <div
+          class="topslot" :class="{ over: dragOver === 'A', empty: !aParts.length }"
+          @dragover.prevent="dragOver = 'A'" @dragleave="dragOver = null" @drop="dropA"
+        >
           <div
-            class="topslot" :class="{ over: dragOver === 'top', empty: !topPart }"
-            @dragover.prevent="dragOver = 'top'" @dragleave="dragOver = null" @drop="dropTop"
+            v-for="ap in aParts" :key="ap.id" class="row" :data-i="items.indexOf(ap)" draggable="true"
+            @dragstart="dragFrom = `A${ap.id}`" @dragend="dragOver = null"
           >
-            <div
-              v-if="topPart" class="row" :data-i="items.indexOf(topPart)" draggable="true"
-              @dragstart="dragFrom = 'top'" @dragend="dragOver = null"
-            >
-              <span class="num">▤</span>
-              <ClipCard
-                :media="topPart.media" :thumb-time="topPart.start" :selected="topPart === current"
-                :sub="folderTitle(topPart.media.folder)"
-                :chip="`${fmtTime(topPart.start)} → ${fmtTime(topPart.start + topPart.length)}  ${topPart.length.toFixed(1)}s · ${topRate.toFixed(2)}×` + (topPart.lighten ? '  ☀' : '')"
-                @select="select(items.indexOf(topPart))"
-              />
-            </div>
-            <p v-else class="muted">Drop a clip here to play it on top for the whole reel</p>
+            <span class="num">A</span>
+            <ClipCard
+              :media="ap.media" :thumb-time="ap.start" :selected="ap === current"
+              :sub="folderTitle(ap.media.folder)"
+              :chip="`${fmtTime(ap.start)} → ${fmtTime(ap.start + ap.length)}  ${ap.length.toFixed(1)}s` + (ap.lighten ? '  ☀' : '')"
+              @select="select(items.indexOf(ap))"
+            />
           </div>
-          <div class="slotlabel">Underneath</div>
-        </template>
+          <p v-if="!aParts.length" class="muted">Drop a clip here (or ⤒ on a part) for the main, continuous footage</p>
+        </div>
+        <div class="slotlabel">B lane · cut list</div>
         <template v-for="(p, i) in items" :key="p.id">
         <div
-          v-if="p !== topPart" class="row" :data-i="i"
+          v-if="!isA(p)" class="row" :data-i="i"
           :class="{ over: dragOver === i, playing: reelOn && i === selected }"
           draggable="true" @dragstart="dragFrom = i" @dragover.prevent="dragOver = i"
           @dragleave="dragOver = null" @drop="drop(i)" @dragend="dragOver = null"
@@ -405,8 +399,8 @@
               :title="p.keep ? 'In the cut — click to skip (X)' : 'Skipped — click to keep (X)'"
             >{{ p.keep ? '✓' : '–' }}</button>
             <button
-              v-if="isStack && p.media.kind === 'video'" class="maketop" @click.stop="makeTop(p)"
-              title="Play this on top for the whole reel"
+              v-if="p.media.kind === 'video'" class="maketop" @click.stop="addToA(p)"
+              title="Put this in lane A: the main, continuous footage"
             >⤒</button>
           </ClipCard>
           <button
@@ -426,32 +420,32 @@
               Put it back (or in any shoot folder) and it will relink.
             </p>
           </div>
-          <!-- Stack: the top clip over the parts, each pane framing its own clip -->
-          <StackFrame
-            v-else-if="isStack && topPart" :split="settings.stackSplit" :divider-px="settings.dividerPx"
-            :divider-color="settings.dividerColor" :editing="current === topPart ? 'top' : 'under'"
-            :frame-w="shapeOf(settings.shape).w" :frame-h="shapeOf(settings.shape).h" :x="stackX" :backdrop="stackBackdrop"
-            :top-t="topT" :top-rate="topRate" :top-playing="reelOn && stackX < 0.999" :guides="tall && guides"
+          <!-- lanes in their slots, as the scene on show has them -->
+          <SceneFrame
+            v-else-if="aIds.length && slots" :frame-w="frameW" :frame-h="frameH" :slots="slots"
+            :divider-color="settings.dividerColor" :editing="isA(current) ? 'A' : 'B'" :into="intoNow"
+            :a-t="aNow?.t ?? 0" :a-rate="aNow?.rate ?? 1" :a-playing="reelOn" :guides="tall && guides"
+            @split="(v) => setSplit(shownScene, v)"
           >
-            <template #top="{ maxH, out, bindTop }">
+            <template #A="{ maxH, out, bindA }">
               <ReelFrame
-                v-if="current === topPart" :key="`edit-${current.mediaId}`" v-bind="frameProps" v-on="frameOn"
-                fit="fill" :out="out" :max-h="maxH" muted
+                v-if="isA(current) && aNow?.part === current" :key="`edit-${current.id}`" v-bind="frameProps" v-on="frameOn"
+                :out="out" :max-h="maxH" muted
               />
               <ReelFrame
-                v-else :key="`top-${topPart.mediaId}`" :media="topPart.media" fit="fill" :out="out" :max-h="maxH"
-                cropped muted :lighten="topPart.lighten" :focus-x="topPart.focusX" :focus-y="topPart.focusY"
-                :zoom="topPart.zoom || 1" :poster-time="topPart.start" :bind-video="bindTop"
+                v-else-if="aNow" :key="`a-${aNow.part.id}`" :media="aNow.part.media" :fit="slotFit('A')" :out="out" :max-h="maxH"
+                cropped muted :lighten="aNow.part.lighten" v-bind="focusProps(aNow.part, 'A')"
+                :poster-time="aNow.t" :bind-video="bindA"
               />
             </template>
-            <template #under="{ maxH, out }">
+            <template #B="{ maxH, out }">
               <ReelFrame
-                v-if="current !== topPart" :key="`edit-${current.mediaId}`" v-bind="frameProps" v-on="frameOn"
+                v-if="!isA(current)" :key="`edit-${current.id}`" v-bind="frameProps" v-on="frameOn"
                 :out="out" :max-h="maxH"
               />
               <div v-else class="underidle">
-                <img v-if="kept[0]" :src="api.thumb(kept[0].media.folder, kept[0].media.file, kept[0].start, 480)" alt="" />
-                <span>The parts play here, one after another</span>
+                <img v-if="shownPart" :src="api.thumb(shownPart.media.folder, shownPart.media.file, shownPart.start, 480)" alt="" />
+                <span>Lane B plays here</span>
               </div>
             </template>
             <p v-if="player.failed.value" class="unplayable">
@@ -459,7 +453,7 @@
               Thumbnails and trimming still work.
             </p>
             <template #overlay><CaptionLayer v-if="showCaptions" v-bind="captionProps" /></template>
-          </StackFrame>
+          </SceneFrame>
           <ReelFrame v-else :key="current.mediaId" v-bind="frameProps" v-on="frameOn" :guides="tall && guides">
             <p v-if="player.failed.value" class="unplayable">
               This browser can't play this file's codec (HEVC often won't play in Chrome — try Safari).
@@ -477,7 +471,96 @@
 
         <div class="edit-col">
 
-        <template v-if="current.media.kind === 'video' && !current.media.missing">
+        <!-- the scene inspector -->
+        <div v-if="selSc" class="inspector">
+          <div class="ihead">
+            <div>
+              <small class="muted caps">Scene {{ selK + 1 }} of {{ sceneList.length }}</small>
+              <h3>{{ layoutLabel(selSc.layout, wide) }}</h3>
+              <small class="mono muted">{{ fmtTime(sceneTimes[selK].start) }} → {{ fmtTime(sceneTimes[selK].end) }} · {{ sceneSecs[selK].toFixed(1) }}s</small>
+            </div>
+            <button class="btn small" @click="selScene = null" title="Back to the part editor">Close</button>
+          </div>
+          <span class="muted">Layout</span>
+          <div class="layouts">
+            <button
+              v-for="l in SCENE_LAYOUTS" :key="l.v" class="lay" :class="{ active: selSc.layout === l.v }"
+              @click="setSceneLayout(selK, l.v)" :title="`${l.label} (${l.key})`"
+            ><span class="glyph big" :class="[`g-${l.v}`, { side: wide }]"><i></i><i></i></span>{{ wide && l.wide ? l.wide : l.label }}</button>
+          </div>
+          <template v-if="['stack', 'swap'].includes(selSc.layout)">
+            <span class="muted">Split · or drag the divider in the preview</span>
+            <div class="tbtns">
+              <button class="btn small" :class="{ active: selSc.split === 0.5 }" @click="setSplit(selK, 0.5)">50 / 50</button>
+              <button class="btn small" :class="{ active: selSc.split === 0.58 }" @click="setSplit(selK, 0.58)">58 / 42</button>
+              <button class="btn small" :class="{ active: selSc.split === 'square' }" @click="setSplit(selK, 'square')">Square {{ wide ? 'right' : 'bottom' }}</button>
+              <span v-if="typeof selSc.split === 'number' && ![0.5, 0.58].includes(selSc.split)" class="mono muted">{{ Math.round(selSc.split * 100) }} / {{ 100 - Math.round(selSc.split * 100) }}</span>
+            </div>
+          </template>
+          <template v-if="selSc.layout !== 'soloB' && aIds.length">
+            <span class="muted">A lane {{ selSc.layout === 'soloA' ? 'in this scene' : 'timing in this scene' }}</span>
+            <div class="tbtns" v-if="aParts.length > 1">
+              <button
+                v-for="ap in aParts" :key="ap.id" class="btn small" :class="{ active: selSc.a.item === ap.id }"
+                @click="editA(selK, { item: ap.id, in: null, out: null })"
+              >{{ ap.media.file }}</button>
+            </div>
+            <template v-if="selSc.layout === 'soloA'">
+              <label class="field">
+                How long A plays alone (s)
+                <input type="number" min="1" step="0.5" :value="soloSeconds(selSc).toFixed(1)" @change="editScene(selK, { len: Math.max(1, Number($event.target.value) || 4) }); editA(selK, { out: null })" />
+              </label>
+            </template>
+            <div v-else class="timings">
+              <button
+                v-for="tm in TIMINGS" :key="tm.v" class="timing" :class="{ active: (selSc.a.timing || 'fit') === tm.v }"
+                @click="editA(selK, { timing: tm.v, ...(tm.v === 'range' ? { speed: 1 } : {}) })"
+              >
+                <b>{{ tm.label }}{{ (selSc.a.timing || 'fit') === tm.v && aPlans[selK] ? ` · ${rateText(selK)}` : '' }}</b>
+                <small>{{ tm.hint }}</small>
+              </button>
+            </div>
+            <div class="tbtns" v-if="selSc.layout === 'soloA' || selSc.a.timing === 'hold'">
+              <span class="muted">Speed</span>
+              <button
+                v-for="r in [0.5, 1, 1.5, 2, 4]" :key="r" class="btn small" :class="{ active: (selSc.a.speed || 1) === r }"
+                @click="editA(selK, { speed: r })"
+              >{{ r }}×</button>
+            </div>
+            <label class="field" v-if="aRanges[selK]">
+              A starts at (in its clip)
+              <span class="tbtns">
+                <input class="mono" :value="fmtTime(aRanges[selK][0])" @change="setAIn(selK, $event)" />
+                <button v-if="selSc.a.in != null" class="link" @click="editA(selK, { in: null })">carry on from the last scene</button>
+              </span>
+              <small class="muted">Plays {{ fmtTime(aRanges[selK][0]) }} → {{ fmtTime(aRanges[selK][1]) }} of {{ byId.get(selSc.a.item)?.media.file }}{{ aPlans[selK].pieces.length > 1 ? `, in ${aPlans[selK].pieces.length} pieces` : '' }}.
+                <b v-if="aPlans[selK].rate > 4.001" class="warn">Over 4×: think about a shorter stretch of A, or Cut quiet moments.</b></small>
+            </label>
+          </template>
+          <template v-if="selSc.layout === 'soloA' || selSc.layout === 'soloB'">
+            <span class="muted">On its own</span>
+            <div class="tbtns">
+              <button class="btn small" :class="{ active: soloFitOf(selSc) === 'fill' }" @click="editScene(selK, { fill: 'fill' })">Fill</button>
+              <button class="btn small" :class="{ active: soloFitOf(selSc) === 'blur' }" @click="editScene(selK, { fill: 'blur' })">Blur fill</button>
+            </div>
+          </template>
+          <template v-if="selK > 0">
+            <span class="muted">Into this scene</span>
+            <div class="tbtns">
+              <button
+                v-for="t in INTOS" :key="t.v" class="btn small" :class="{ active: (selSc.into || 'cut') === t.v }"
+                @click="editScene(selK, { into: t.v })"
+              >{{ t.v === 'slide' ? (wide ? 'Slide in' : 'Slide up') : t.label }}</button>
+            </div>
+            <small class="muted">{{ INTOS.find((t) => t.v === (selSc.into || 'cut')).hint }}</small>
+          </template>
+          <div class="ilinks">
+            <button v-if="['stack', 'swap'].includes(selSc.layout)" class="link" @click="splitEverywhere(selK)">Use this split on every stacked scene</button>
+            <button v-if="selK > 0" class="link danger" @click="mergeIntoPrevious(selK)">Merge into previous scene</button>
+          </div>
+        </div>
+
+        <template v-if="!selSc && current.media.kind === 'video' && !current.media.missing">
           <TrimBar
             :duration="current.media.duration" :start="current.start" :length="len(current)"
             :playhead="player.playhead.value" :segments="segments"
@@ -495,20 +578,18 @@
         </template>
 
         <TimingFields
-          :kind="current.media.kind" :start="current.start" :length="len(current)"
+          v-if="!selSc" :kind="current.media.kind" :start="current.start" :length="len(current)"
           :duration="current.media.duration" @update="setRange"
         >
-          <p v-if="current === topPart" class="topnote muted">
-            ▤ On top {{ moving ? `while it's on screen (${fmtTime(topShown)})` : 'for the whole reel' }}: {{ fmtTime(current.length) }} of the clip
-            <template v-if="quietFit && topFill.pieces.length > 1">in {{ topFill.pieces.length }} pieces, its quiet stretches cut out{{ topRate > 1.005 ? `, at ${topRate.toFixed(2)}×` : '' }}</template>
-            <template v-else>at {{ topRate.toFixed(2) }}×</template>.
-            Change its speed under Settings → Top clip speed.
-            It pauses while a part is on its own. Drag the window above to reframe.
+          <p v-if="isA(current)" class="topnote muted">
+            A lane: the main footage. {{ fmtTime(current.start) }} → {{ fmtTime(current.start + current.length) }} is what the scenes can use;
+            each scene with A on screen plays a stretch of it (pick a scene to set its timing). Drag the window above to reframe it
+            {{ editShape === 'full' ? 'full frame' : `in its ${editShape} slot` }}.
           </p>
-          <label class="field check" v-if="current !== topPart">
+          <label class="field check" v-if="!isA(current)">
             <span><input type="checkbox" :checked="current.keep" @change="setKeep(current, $event.target.checked)" /> In the cut <kbd>X</kbd></span>
           </label>
-          <div class="tpick" v-if="synced && current !== topPart">
+          <div class="tpick" v-if="synced && !isA(current)">
             <span class="muted">Beats (one beat = {{ period.toFixed(2) }}s)</span>
             <div>
               <button
@@ -518,7 +599,7 @@
               <button class="btn small" @click="beatsAll(beatsOf(current))" :title="`Make every part ${fmtBeats(beatsOf(current))} beats`">Use on every part</button>
             </div>
           </div>
-          <div class="tpick" v-if="!synced && current !== topPart && current.media.kind === 'video'">
+          <div class="tpick" v-if="!synced && !isA(current) && current.media.kind === 'video'">
             <span class="muted">Length {{ len(current).toFixed(1) }}s</span>
             <div>
               <button class="btn small" @click="lengthAll(len(current))" :title="`Make every kept clip part ${len(current).toFixed(1)}s (as far as each clip runs)`">Use on every part</button>
@@ -534,7 +615,7 @@
               <button class="btn small" @click="lightenAll(current.lighten)" :title="`Set every part to ${lightenLabel(current.lighten)}`">Use on every part</button>
             </div>
           </div>
-          <div class="tpick" v-if="current !== topPart && layoutOf(current) === 'fill'">
+          <div class="tpick" v-if="!isA(current) && layoutOf(current) === 'fill'">
             <span class="muted">Framing</span>
             <div>
               <button
@@ -544,27 +625,14 @@
               <button class="btn small" @click="framingAll(current)" title="Frame every part the way this one is">Use on every part</button>
             </div>
           </div>
-          <template v-if="isStack && topPart && current !== topPart && current.keep">
-            <div class="tpick">
-              <span class="muted">In the stack</span>
-              <div>
-                <button class="btn small" :class="{ active: current.pane !== 'solo' }" @click="setPane(current, '')"
-                        title="Split with the top clip">With the top clip</button>
-                <button class="btn small" :class="{ active: current.pane === 'solo' }" @click="setPane(current, 'solo')"
-                        title="Fills the frame on its own; the top clip slides away and pauses">On its own</button>
-              </div>
+          <div class="tpick" v-if="!isA(current) && current.keep && aIds.length">
+            <span class="muted">Scene {{ sceneOfPart(current) + 1 }}: {{ layoutLabel(sceneList[sceneOfPart(current)]?.layout, wide) }}</span>
+            <div>
+              <button class="btn small" @click="showAAbove(current)" :title="`Start a split scene at this part`">Show A {{ wide ? 'beside' : 'above' }} this</button>
+              <button class="btn small" @click="selectScene(sceneOfPart(current))">Edit the scene</button>
             </div>
-            <div class="tpick">
-              <span class="muted">Then the top clip alone</span>
-              <div>
-                <button
-                  v-for="b in [0, 2, 4, 8]" :key="b" class="btn small" :class="{ active: (current.topAfter || 0) === b }"
-                  @click="setTopAfter(current, b)" :title="b ? `${b} beats of the top clip on its own after this part` : 'Straight on to the next part'"
-                >{{ b ? `${b} beats` : 'No' }}</button>
-              </div>
-            </div>
-          </template>
-          <div class="tpick" v-if="current !== topPart">
+          </div>
+          <div class="tpick" v-if="!isA(current)">
             <span class="muted">Layout</span>
             <div>
               <button
@@ -573,30 +641,33 @@
               >{{ l.label }}</button>
             </div>
           </div>
-          <div class="tpick" v-if="hasNext(current)">
+          <div class="tpick" v-if="hasNext(current)" :class="{ overruled: sceneEdgeAfter(current) }">
             <span class="muted">Into next part <kbd>T</kbd></span>
             <div>
               <button
                 v-for="t in TRANSITIONS" :key="t.v" class="btn small" :class="{ active: effective(current) === t.v }"
-                @click="setTransition(current, t.v)" :title="t.hint"
+                @click="setTransition(current, t.v)" :title="t.hint" :disabled="!!sceneEdgeAfter(current)"
               >{{ t.icon }} {{ t.label }}</button>
             </div>
+            <small v-if="sceneEdgeAfter(current)" class="muted">A new scene starts after this part: its transition ({{ INTOS.find((t) => t.v === (sceneEdgeAfter(current).into || 'cut')).label }}) is used here.</small>
           </div>
-          <button class="btn small" @click="duplicate(current)" v-if="current.media.kind === 'video' && current !== topPart">Use another part of this clip</button>
+          <button class="btn small" @click="duplicate(current)" v-if="current.media.kind === 'video' && !isA(current)">Use another part of this clip</button>
           <button
-            class="btn small" v-if="current.media.kind === 'video' && current !== topPart && current.length >= 8" :disabled="splitting"
+            class="btn small" v-if="current.media.kind === 'video' && !isA(current) && current.length >= 8" :disabled="splitting"
             @click="splitQuiet(current)" title="Cut this part where nothing much happens, into parts you can trim like a weave"
           >{{ splitting ? 'Looking for quiet moments…' : '✂ Take out quiet moments' }}</button>
           <small v-if="splitNote" class="muted">{{ splitNote }}</small>
-          <button class="btn small" @click="unTop" v-if="current === topPart">Move underneath</button>
+          <button class="btn small" @click="toB(current)" v-if="isA(current)">Move to lane B</button>
           <button class="btn small" @click="remove(current)">Remove from reel</button>
         </TimingFields>
 
-        <p class="muted legend" v-if="segments.length">
+        <p class="muted legend" v-if="segments.length && !selSc">
           Coloured marks under the filmstrip are other parts of this clip:
           <span v-for="s in segments" :key="s.id" class="lg"><span class="sw" :style="{ background: s.color }"></span>{{ s.label }}</span>
         </p>
         <p class="muted keys">
+          <kbd>S</kbd> split scene at playhead · <kbd>W</kbd> swap A ⇄ B · <kbd>1</kbd>–<kbd>4</kbd> layout: Solo A · A over B · Solo B · B over A ·
+          <kbd>[</kbd>/<kbd>]</kbd> nudge the split 2% · <kbd>Tab</kbd> between lane A and B ·
           <kbd>Space</kbd> play/pause the whole reel · <kbd>Shift</kbd>+<kbd>Space</kbd> play from the start · <kbd>Enter</kbd> play just this part · <kbd>I</kbd>/<kbd>O</kbd> start/end at playhead ·
           <kbd>←</kbd>/<kbd>→</kbd> nudge 0.1s · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next · <kbd>X</kbd> keep/skip ·
           <kbd>T</kbd> change transition · <kbd>L</kbd> lighten · <kbd>G</kbd> Instagram overlays · drag the list to reorder
@@ -637,8 +708,10 @@ import SongPicker from '../components/SongPicker.vue'
 import ComposePanel from '../components/ComposePanel.vue'
 import ReelFrame from '../components/ReelFrame.vue'
 import { SHAPES, shapeOf, shapeRatio } from '../shapes'
-import { layoutKeys, quietCut, shownBy, topPlan, topSource, xAt } from '../stack'
-import StackFrame from '../components/StackFrame.vue'
+import { quietCut, topSource } from '../stack'
+import { INTOS, LAYOUTS as SCENE_LAYOUTS, SCENE_IN, SOLO_A_MIN, TIMINGS, fitted, frameFor, layoutLabel, newId, normalize,
+  resolveA, sceneAPlan, sceneSlots, showsA, showsB, slotShape, soloSeconds } from '../scenes'
+import SceneFrame from '../components/SceneFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
 import TrimBar from '../components/TrimBar.vue'
 
@@ -715,14 +788,13 @@ const draftAt = ref(null)   // an unsaved weave edit of this reel, saved then
 const clock = ref(Date.now() / 1000)
 
 const current = computed(() => items.value[selected.value])
-// A Stack reel's top clip; the kept parts play in order underneath it.
-const topPart = computed(() => (settings.format === 'stack'
-  ? items.value.find((p) => p.id === settings.topItemId && p.media.kind === 'video' && !p.media.missing) || null
-  : null))
-const kept = computed(() => items.value.filter((p) => p.keep && !p.media.missing && p !== topPart.value))
-// Fit off, a Stack reel runs as long as its top clip.
-const reelLength = computed(() => (topPart.value && !settings.fitTop && !moving.value
-  ? topRun.value : partsEnd.value + voiceHold.value))
+// Lane A: the main, continuous footage (settings.laneA); lane B: the other
+// kept parts, one after another (see scenes.js).
+const aIds = computed(() => (settings.laneA || []).filter((i) => items.value.some((p) => p.id === i && p.media.kind === 'video')))
+const aParts = computed(() => aIds.value.map((i) => items.value.find((p) => p.id === i)))
+const isA = (p) => !!p && aIds.value.includes(p.id)
+const kept = computed(() => items.value.filter((p) => p.keep && !p.media.missing && !isA(p)))
+const reelLength = computed(() => partsEnd.value + voiceHold.value)
 const player = usePlayer(() => current.value && { start: current.value.start, length: len(current.value) })
 const reelName = (rid) => reels.value.find((r) => r.id === rid)?.name ?? 'reel'
 
@@ -782,6 +854,7 @@ function select(i, fromReel = false) {
   if (!fromReel) {
     stopReel()
     restart = false   // picking a cut means "play from here"
+    selScene.value = null
   }
   selected.value = i
   player.reset()
@@ -835,12 +908,22 @@ function setOut() {
   if (player.playhead.value - p.start >= 0.2) setRange({ start: p.start, length: player.playhead.value - p.start })
 }
 
+// The selected part's framing is kept per slot shape: the full frame is its
+// own (focusX/Y, zoom), a half or square slot remembers its own.
 function setFocus({ x, y, zoom }) {
   const p = current.value
-  const patch = { focusX: x, focusY: y }
-  if (zoom !== undefined) patch.zoom = zoom
-  Object.assign(p, patch)
-  saver.queue(p.id, patch)
+  const shape = editShape.value
+  if (shape === 'full') {
+    const patch = { focusX: x, focusY: y }
+    if (zoom !== undefined) patch.zoom = zoom
+    Object.assign(p, patch)
+    saver.queue(p.id, patch)
+    return
+  }
+  const was = frameFor(p, shape, isA(p) ? 'A' : 'B')
+  const frames = { ...(p.frames || {}), [shape]: { x, y, zoom: zoom ?? was.zoom } }
+  p.frames = frames
+  saver.queue(p.id, { frames })
 }
 
 // Quick framings: the whole width (zoom 1), at the top, middle or bottom.
@@ -853,15 +936,20 @@ function frame(p, patch) {
   Object.assign(p, patch)
   saver.queue(p.id, patch)
 }
-// Every part framed like this one (the top clip of a Stack keeps its own).
+// Every B part framed like this one, in the slot shape being edited.
 function framingAll(from) {
-  const patch = { focusX: from.focusX, focusY: from.focusY, zoom: from.zoom || 1 }
-  for (const p of items.value) if (p !== from && p !== topPart.value) frame(p, patch)
+  const shape = editShape.value
+  const f = frameFor(from, shape, 'B')
+  for (const p of kept.value) {
+    if (p === from) continue
+    if (shape === 'full') frame(p, { focusX: f.x, focusY: f.y, zoom: f.zoom })
+    else frame(p, { frames: { ...(p.frames || {}), [shape]: { ...f } } })
+  }
 }
 // Square, every part showing the bottom of its shot at full width.
 function squareBottom() {
   settings.shape = 'square'
-  for (const p of items.value) if (p !== topPart.value) frame(p, { focusY: 1, zoom: 1 })
+  for (const p of kept.value) frame(p, { focusY: 1, zoom: 1 })
 }
 
 function setKeep(p, keep) {
@@ -875,7 +963,7 @@ function applyLengthToAll() {
 function lengthAll(len) {
   if (!(len > 0)) return
   for (const p of items.value) {
-    if (!p.keep || p.media.kind !== 'video' || p === topPart.value) continue
+    if (!p.keep || p.media.kind !== 'video' || isA(p)) continue
     const r = fitRange(p.start, len, p.media.duration)
     Object.assign(p, r)
     saver.queue(p.id, r)
@@ -893,7 +981,7 @@ async function remove(p) {
 async function duplicate(p) {
   const r = fitRange(p.start + len(p), p.length, p.media.duration)
   const item = await api.addItem(id, { mediaId: p.mediaId, ...r, focusX: p.focusX, focusY: p.focusY, zoom: p.zoom,
-                                       lighten: p.lighten, layout: p.layout })
+                                       lighten: p.lighten, layout: p.layout, frames: p.frames || {} })
   const i = items.value.indexOf(p) + 1
   items.value.splice(i, 0, { ...item, media: p.media })
   await saveOrder()
@@ -910,7 +998,7 @@ async function saveOrder() {
 async function drop(to) {
   const from = dragFrom.value
   dragOver.value = null
-  if (from === 'top') return unTop(to)   // the top clip dragged into the list
+  if (typeof from === 'string' && from.startsWith('A')) return toB(byId.value.get(Number(from.slice(1))), to)   // from lane A
   if (from === null || from === to) return
   const cur = current.value
   const [moved] = items.value.splice(from, 1)
@@ -1017,27 +1105,41 @@ const beatAt = (i) => {
 }
 const beatsOf = (p) => p.beats || Number(settings.beatsPerCut) || 4
 
-// The reel's stretches, in order: the kept parts and, in a Stack, the top
-// clip alone (at the start, and after any part that asks for it), a number
-// of beats long (about the same at 120 bpm without beat sync). Each gets its
-// start and end on the reel's timeline.
+// The reel's stretches, in order: each scene's parts, and for a Solo A
+// scene the time A plays alone (whole beats when cutting on the beat). Each
+// gets its start and end on the reel's timeline, and its scene.
+const sceneList = computed(() => normalize(settings.scenes, kept.value.map((p) => p.id), aIds.value))
+const byId = computed(() => new Map(items.value.map((p) => [p.id, p])))
 const stretches = computed(() => {
   const out = []
-  const stack = !!topPart.value
-  if (stack && Number(settings.stackIntro) > 0) out.push({ kind: 'gap', key: 'intro', beats: Number(settings.stackIntro) })
-  for (const p of kept.value) {
-    out.push({ kind: 'part', key: p.id, part: p, beats: beatsOf(p), secs: p.length })
-    if (stack && p.topAfter > 0) out.push({ kind: 'gap', key: `after${p.id}`, part: p, beats: p.topAfter })
-  }
+  sceneList.value.forEach((sc, k) => {
+    if (sc.layout === 'soloA') {
+      const secs = soloSeconds(sc)
+      out.push({ kind: 'gap', key: `solo${sc.id}`, scene: k, secs, beats: synced.value && period.value ? Math.max(1, Math.round(secs / period.value)) : 0 })
+    } else {
+      for (const pid of sc.parts) {
+        const p = byId.value.get(pid)
+        out.push({ kind: 'part', key: p.id, part: p, scene: k, beats: beatsOf(p), secs: p.length })
+      }
+    }
+  })
   let c = 0
   let t = 0
   for (const st of out) {
     st.start = t
-    if (synced.value && grid.value) { c += st.beats; t = beatAt(c) } else t += st.kind === 'gap' ? st.beats * 0.5 : st.secs
+    if (synced.value && grid.value) { c += st.beats; t = beatAt(c) } else t += st.secs
     st.end = t
   }
   return out
 })
+// Where each scene starts and ends on the reel's clock (the last runs on
+// while the voice finishes).
+const sceneTimes = computed(() => sceneList.value.map((sc, k) => {
+  const own = stretches.value.filter((st) => st.scene === k)
+  const start = own[0]?.start ?? 0
+  const end = k === sceneList.value.length - 1 ? reelLength.value : (own[own.length - 1]?.end ?? start)
+  return { start, end }
+}))
 const spans = computed(() => stretches.value.filter((st) => st.kind === 'part'))
 const partsEnd = computed(() => stretches.value[stretches.value.length - 1]?.end || 0)
 const partStart = (k) => spans.value[k]?.start ?? partsEnd.value
@@ -1045,7 +1147,7 @@ const partEnd = (k) => spans.value[k]?.end ?? partsEnd.value
 // How long a part plays: its beats when cutting on the beat, else its length.
 function len(p) {
   if (!p) return 0
-  if (p === topPart.value) return p.length
+  if (isA(p)) return p.length
   if (!synced.value) return p.length
   const k = kept.value.indexOf(p)
   return k >= 0 ? partEnd(k) - partStart(k) : beatsOf(p) * period.value
@@ -1181,7 +1283,7 @@ onBeforeUnmount(() => { cancelAnimationFrame(songRaf); audioEl.value?.pause() })
 const voiceTl = computed(() => voiceTimeline(settings.voice))
 const voiceHold = computed(() => {
   const end = voiceTl.value.end
-  if (!end || settings.voiceFit === false || (topPart.value && !settings.fitTop && !moving.value)) return 0
+  if (!end || settings.voiceFit === false) return 0
   return Math.max(0, end + VOICE_TAIL - partsEnd.value)
 })
 const voicePlayer = useVoicePlayer()
@@ -1283,121 +1385,286 @@ function setLayout(p, v) {
   saver.queue(p.id, { layout: v })
 }
 
-// ---------------------------------------------------------------- stack format
+// ---------------------------------------------------------------- lanes & scenes
 
-// A Stack reel: one clip (a timelapse, say) plays in the top pane for the whole
-// reel; the kept parts play one after another underneath. The top clip is a
-// normal part of the reel, pinned by the reel's topItemId.
-const FORMATS = [
-  { v: 'standard', label: 'Standard', hint: 'One clip at a time, full frame' },
-  { v: 'stack', label: 'Stack', hint: 'A clip on top for the whole reel, the parts underneath' },
-]
-const isStack = computed(() => settings.format === 'stack')
+// Scenes say what's on screen (scenes.js): Solo A, A over B, Solo B, B over
+// A. A B scene runs as long as its parts; a Solo A scene as long as A plays
+// alone. The output shape decides whether a split reads top/bottom or
+// left/right.
 const tall = computed(() => (settings.shape || 'tall') === 'tall')   // Instagram's overlays only cover a tall reel
-const underLength = computed(() => partsEnd.value)
-// The layout moves (see stack.js) when the top clip plays alone somewhere or
-// a part fills the frame on its own; then the reel is as long as its parts.
-const moving = computed(() => !!topPart.value && stretches.value.some((st) => st.kind === 'gap' || st.part?.pane === 'solo'))
-const TOP_SPEEDS = [0.5, 1, 1.25, 1.5, 2, 3, 4, 8]
-const topSpeed = computed(() => Number(settings.topSpeed) || 1)
-// How long the top clip runs at its own speed (fit off).
-const topRun = computed(() => (topPart.value ? topPart.value.length / topSpeed.value : 0))
-const quietFit = computed(() => !!topPart.value && settings.fitTop && settings.fitTopBy === 'quiet')
-const layout = computed(() => {
-  const marks = topPart.value ? stretches.value.map((st) => ({
-    at: st.start, x: st.kind === 'gap' ? -1 : st.part.pane === 'solo' ? 1 : 0,
-  })) : []
-  return layoutKeys(marks, reelLength.value)
-})
-// How the top clip fills the time it's on screen: sped up, or its quiet
-// stretches cut out (measured once per clip), as the render does.
-const topPoints = ref(null)
-watch(() => quietFit.value && topPart.value && `${topPart.value.media.folder}/${topPart.value.media.file}`, async (key) => {
-  topPoints.value = null
-  if (!key) return
-  try { topPoints.value = (await api.activity(topPart.value.media.folder, topPart.value.media.file)).points } catch { /* measured at render */ }
-}, { immediate: true })
-const topShown = computed(() => shownBy(layout.value.length ? layout.value : [[0, 0]], reelLength.value))
-const topFill = computed(() => (topPart.value ? topPlan({
-  start: topPart.value.start, length: topPart.value.length, fit: !!settings.fitTop, speed: topSpeed.value,
-  by: quietFit.value && topPoints.value ? 'quiet' : 'speed', points: topPoints.value,
-}, topShown.value) : { pieces: [[0, 0]], rate: 1 }))
-const topRate = computed(() => topFill.value.rate)
-const topT = computed(() => (topPart.value ? topSource(topFill.value, shownBy(layout.value, reelTime.value ?? 0)) : 0))
-// Where the layout is: on the reel's clock while it plays, else as the
-// selected part has it (on its own, or split).
-const stackX = computed(() => {
-  if (reelOn.value) return xAt(layout.value, reelTime.value ?? 0)
-  return current.value && current.value !== topPart.value && current.value.pane === 'solo' ? 1 : 0
-})
-const stackBackdrop = computed(() => {
-  const x = stackX.value
-  if (Math.abs(x) < 0.001) return ''
-  const m = x < 0 ? topPart.value?.media : current.value?.media
-  if (!m) return ''
-  const t = x < 0 ? Math.floor(topT.value / 2) * 2 : (current.value.start || 0)
-  return api.thumb(m.folder, m.file, t, 320)
-})
-// Fit off: the top clip at normal speed sets the length; the parts are cut
-// where it ends, or the last one holds.
-const spare = computed(() => (isStack.value && topPart.value && !settings.fitTop && !moving.value
-  ? Math.max(topRun.value - underLength.value, 0) : 0))
-const pastEnd = (p) => isStack.value && topPart.value && !settings.fitTop && !moving.value
-  && offsetOf(kept.value.indexOf(p)) >= topRun.value
-const readout = computed(() => {
-  const top = topPart.value.length
-  const under = underLength.value
-  let line = `Top ${fmtTime(top)} · Underneath ${fmtTime(under)} · `
-  const { pieces, rate } = topFill.value
-  if (moving.value || quietFit.value) {
-    line += `top on screen ${fmtTime(topShown.value)}`
-    if (pieces.length > 1) line += ` · ${pieces.length} pieces, ${fmtTime(top - pieces.reduce((a, [, l]) => a + l, 0))} of quiet taken out`
-    if (Math.abs(rate - 1) > 0.005) line += ` · at ${rate.toFixed(2)}×`
-    if (!settings.fitTop && topRun.value < topShown.value - 0.05) line += ` · holds its last frame for ${(topShown.value - topRun.value).toFixed(1)}s`
-    if (quietFit.value && !topPoints.value) line += ' · measuring movement…'
-    return line
+const frameW = computed(() => shapeOf(settings.shape).w)
+const frameH = computed(() => shapeOf(settings.shape).h)
+const wide = computed(() => frameW.value > frameH.value)
+const selScene = ref(null)   // the scene in the inspector (its id), or null: the part editor
+const sceneSecs = computed(() => sceneTimes.value.map((t) => Math.max(t.end - t.start, 0.04)))
+const sceneIndexAt = (t) => {
+  const k = sceneTimes.value.findIndex((x) => t < x.end - 1e-6)
+  return k < 0 ? sceneList.value.length - 1 : k
+}
+const sceneOfPart = (p) => sceneList.value.findIndex((sc) => sc.parts.includes(p?.id))
+// The scene in the preview: on the reel's clock while it plays; else the one
+// in the inspector; else the selected part's.
+const shownScene = computed(() => {
+  if (reelOn.value && reelTime.value !== null) return sceneIndexAt(reelTime.value)
+  const sel = sceneList.value.findIndex((sc) => sc.id === selScene.value)
+  if (sel >= 0) return sel
+  if (current.value && !isA(current.value)) {
+    const k = sceneOfPart(current.value)
+    if (k >= 0) return k
   }
-  const run = topRun.value
-  if (settings.fitTop) line += `timelapse at ${(top / (under || 1)).toFixed(2)}×`
-  else if (topSpeed.value !== 1) line += `at ${topSpeed.value}× · `
-  if (settings.fitTop) { /* said */ } else if (under > run + 0.05) line += `underneath cut at ${fmtTime(run)}`
-  else if (under < run - 0.05) line += `last part holds ${(run - under).toFixed(1)}s`
-  else line += 'same length'
-  return line
+  if (isA(current.value)) {
+    const k = sceneList.value.findIndex((sc) => showsA(sc) && sc.a?.item === current.value.id)
+    if (k >= 0) return k
+  }
+  return 0
+})
+const shownSc = computed(() => sceneList.value[shownScene.value] || null)
+const slots = computed(() => shownSc.value && sceneSlots(shownSc.value, frameW.value, frameH.value, Number(settings.dividerPx) || 0))
+// Which framing the selected part is edited in: the slot shape it has in the scene shown.
+const editShape = computed(() => {
+  const sc = shownSc.value
+  const lane = isA(current.value) ? 'A' : 'B'
+  if (!sc || (lane === 'A' && !showsA(sc)) || (lane === 'B' && !showsB(sc))) return 'full'
+  return slotShape(sc, lane)
 })
 
-// Standard → Stack picks a top clip: one called "timelapse", else the longest.
-function defaultTop() {
-  const videos = items.value.filter((p) => p.media.kind === 'video' && !p.media.missing)
-  return videos.find((p) => /timelapse/i.test(p.media.file))
-    || [...videos].sort((a, b) => b.media.duration - a.media.duration)[0] || null
-}
-async function setFormat(f) {
-  if (f === (settings.format || 'standard')) return
-  stopReel()
-  if (f === 'stack') {
-    const keep = items.value.find((p) => p.id === settings.topItemId && p.media.kind === 'video')
-    settings.topItemId = (keep || defaultTop())?.id ?? null
-    settings.format = 'stack'
-    return
+// Lane A in each scene: its stretch of the clip, and how fast it plays.
+const aPoints = ref({})   // movement measures, for scenes that cut A's quiet moments
+watch(() => sceneList.value.filter((sc) => showsA(sc) && sc.a?.timing === 'quiet').map((sc) => sc.a.item).join(','), async (ids) => {
+  for (const i of new Set(ids ? ids.split(',').map(Number) : [])) {
+    const p = byId.value.get(i)
+    if (!p || aPoints.value[i]) continue
+    try { aPoints.value = { ...aPoints.value, [i]: (await api.activity(p.media.folder, p.media.file)).points } } catch { /* measured at render */ }
   }
-  // Back to Standard: the top clip becomes the first part again.
-  const top = topPart.value
-  settings.format = 'standard'
-  if (top) await moveItem(top, 0)
+}, { immediate: true })
+const aRanges = computed(() => resolveA(sceneList.value, sceneSecs.value, byId.value))
+const aPlans = computed(() => sceneList.value.map((sc, k) => (aRanges.value[k]
+  ? sceneAPlan(sc, aRanges.value[k], sceneSecs.value[k], aPoints.value[sc.a.item]) : null)))
+// What the A slot shows now: which clip, where in it and how fast.
+const aNow = computed(() => {
+  const k = shownScene.value
+  const plan = aPlans.value[k]
+  if (!plan) return null
+  const within = reelOn.value && reelTime.value !== null ? reelTime.value - sceneTimes.value[k].start : 0
+  return { part: byId.value.get(sceneList.value[k].a.item), t: topSource(plan, within), rate: plan.rate }
+})
+// The scene coming in, while it does: {type, p}.
+const intoNow = computed(() => {
+  if (!reelOn.value || reelTime.value === null) return null
+  const k = shownScene.value
+  const sc = sceneList.value[k]
+  if (!k || !sc || (sc.into || 'cut') === 'cut') return null
+  const p = (reelTime.value - sceneTimes.value[k].start) / SCENE_IN
+  return p < 1 ? { type: sc.into, p } : null
+})
+const rateText = (k) => (aPlans.value[k] ? `${aPlans.value[k].rate.toFixed(2)}×` : '')
+// Trimming parts moves scene edges and A re-fits: say so.
+const toast = ref('')
+let toastTimer
+function say(text) {
+  toast.value = text
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toast.value = '' }, 2200)
 }
-function makeTop(p) {
-  stopReel()
-  settings.topItemId = p.id
+let trimmedAt = 0   // when a part's length last changed, so only that says "A now…"
+watch(() => stretches.value.map((st) => st.end.toFixed(2)).join(), () => { trimmedAt = Date.now() })
+watch(() => aPlans.value.map((x) => (x ? x.rate.toFixed(2) : '')), (now, was) => {
+  if (!ready || !was || reelOn.value || now.length !== was.length || Date.now() - trimmedAt > 1500) return
+  const k = now.findIndex((r, i) => r && was[i] && r !== was[i])
+  if (k >= 0) say(`A now ${now[k]}× in scene ${k + 1}`)
+})
+
+// Editing scenes: settings.scenes is saved as the normalized list.
+function commit(list) {
+  settings.scenes = list.map(({ parts, ...sc }) => sc)   // eslint-disable-line no-unused-vars
 }
-// The top clip back into the list, as a normal part, at `to` (default: first).
-async function unTop(to = 0) {
-  const top = topPart.value
-  if (!top) return
+const sceneCopy = () => sceneList.value.map((sc) => ({ ...sc, a: sc.a ? { ...sc.a } : sc.a, parts: [...sc.parts] }))
+const lastSplit = () => [...sceneList.value].reverse().find((sc) => sc.layout === 'stack' || sc.layout === 'swap')
+function newA(itemFrom) {
+  return { item: itemFrom ?? aIds.value[0], in: null, out: null, timing: 'fit', speed: 1 }
+}
+function selectScene(k) {
+  const sc = sceneList.value[k]
+  if (!sc) return
   stopReel()
-  settings.topItemId = null
-  if (!top.keep) setKeep(top, true)
-  await moveItem(top, to)
+  selScene.value = sc.id
+  const first = sc.parts[0] && byId.value.get(sc.parts[0])
+  if (first) selected.value = items.value.indexOf(first)
+}
+function editScene(k, patch) {
+  const list = sceneCopy()
+  Object.assign(list[k], patch)
+  commit(list)
+}
+function editA(k, patch) {
+  const list = sceneCopy()
+  list[k].a = { ...(list[k].a || newA()), ...patch }
+  commit(list)
+}
+// A new layout for scene k. A scene that loses B (Solo A) hands its parts to
+// the scene before (or after) and keeps its length; one that gains B takes
+// the first part of the next scene with B.
+function setSceneLayout(k, layout) {
+  const list = sceneCopy()
+  const sc = list[k]
+  if (!sc || sc.layout === layout) return
+  if (layout !== 'soloB' && !aIds.value.length) return say('Put a clip in lane A first: ⤒ on a part')
+  if (layout === 'soloA' && sc.layout !== 'soloA') {
+    const others = list.filter((x) => x.layout !== 'soloA' && x !== sc)
+    if (!others.length) return say('Keep one scene with B in it')
+    sc.len = Math.max(SOLO_A_MIN, sceneSecs.value[k])
+  }
+  if (sc.layout === 'soloA' && layout !== 'soloA') {
+    const next = list.slice(k + 1).find((x) => x.layout !== 'soloA')
+    if (!next) return say('No parts after this scene to show with A')
+    sc.from = next.parts[0]
+    if (next.parts.length > 1) next.from = next.parts[1]
+  }
+  sc.layout = layout
+  if (layout !== 'soloB') sc.a = sc.a || newA(lastA(k))
+  if ((layout === 'stack' || layout === 'swap') && sc.split == null) sc.split = lastSplit()?.split ?? 0.5
+  commit(list)
+}
+const lastA = (k) => [...sceneList.value.slice(0, k)].reverse().find((x) => x.a)?.a.item
+// S: a new scene starts at the playhead (at the nearest cut in a B scene),
+// with the last split used. A carries on from the same point in its clip.
+function splitAtPlayhead() {
+  const t = reelTime.value ?? sceneTimes.value[shownScene.value]?.start ?? 0
+  const k = sceneIndexAt(t)
+  const list = sceneCopy()
+  const sc = list[k]
+  if (!sc) return
+  const start = sceneTimes.value[k].start
+  if (sc.layout === 'soloA') {
+    if (t - start < SOLO_A_MIN) return say('Too near the start of the scene')
+    const a = aRanges.value[k]
+    sc.len = t - start
+    if (a && sc.a?.in != null) sc.a.out = sc.a.in + (t - start) * (sc.a.speed || 1)
+    commit(list)
+    return say('Solo A ends here')
+  }
+  const own = stretches.value.filter((st) => st.scene === k)
+  const cut = own.slice(1).reduce((best, st) => (!best || Math.abs(st.start - t) < Math.abs(best.start - t) ? st : best), null)
+  if (!cut) return say('A scene needs two parts to split: this one has one')
+  const like = lastSplit()
+  const fresh = {
+    id: newId(), from: cut.part.id, into: 'slide',
+    layout: sc.layout === 'soloB' ? (aIds.value.length ? like?.layout || 'stack' : 'soloB') : sc.layout,
+    split: like?.split ?? sc.split ?? 0.5,
+  }
+  if (showsA(fresh)) {
+    const range = aRanges.value[k]
+    const plan = aPlans.value[k]
+    if (sc.a && range && plan) {   // A splits where the cut is
+      const at = topSource(plan, cut.start - start)
+      fresh.a = { ...sc.a, in: Math.round(at * 1000) / 1000, out: sc.a.out }
+      if (fitted(sc)) sc.a.out = Math.round(at * 1000) / 1000
+    } else fresh.a = newA(lastA(k + 1))
+  }
+  list.splice(k + 1, 0, fresh)
+  commit(list)
+  selScene.value = fresh.id
+  say(`Scene ${k + 2} starts at ${fmtTime(cut.start)}`)
+}
+// W: swap which lane has the primary slot (top, or left).
+function swapScene(k = shownScene.value) {
+  const sc = sceneList.value[k]
+  if (sc?.layout === 'stack') setSceneLayout(k, 'swap')
+  else if (sc?.layout === 'swap') setSceneLayout(k, 'stack')
+}
+function setSplit(k, split) {
+  editScene(k, { split })
+}
+function nudgeSplit(d) {
+  const k = shownScene.value
+  const sc = sceneList.value[k]
+  if (!sc || !['stack', 'swap'].includes(sc.layout)) return
+  const now = sc.split === 'square' ? 0.5 : Number(sc.split) || 0.5
+  setSplit(k, Math.round(Math.min(0.7, Math.max(0.3, now + d)) * 100) / 100)
+}
+function splitEverywhere(k) {
+  const split = sceneList.value[k].split
+  commit(sceneCopy().map((sc) => (['stack', 'swap'].includes(sc.layout) ? { ...sc, split } : sc)))
+  say('Every split scene uses this split')
+}
+function mergeIntoPrevious(k) {
+  if (k < 1) return
+  const list = sceneCopy()
+  list.splice(k, 1)
+  commit(list)
+  selScene.value = list[k - 1].id
+}
+// Scene edges: drag the start of scene k. Between two B scenes it snaps to a
+// cut; the end of a Solo A scene sets its length. Under 1s, the scenes merge.
+const dragEdge = ref(null)
+function edgeDown(e, k) {
+  e.currentTarget.setPointerCapture(e.pointerId)
+  dragEdge.value = { k, row: e.currentTarget.parentElement.getBoundingClientRect(), t: sceneTimes.value[k].start }
+}
+function edgeMove(e) {
+  const d = dragEdge.value
+  if (!d) return
+  d.t = Math.max(0, Math.min(reelLength.value, ((e.clientX - d.row.left) / d.row.width) * reelLength.value))
+}
+function edgeUp() {
+  const d = dragEdge.value
+  dragEdge.value = null
+  if (!d) return
+  const { k, t } = d
+  const list = sceneCopy()
+  const prev = list[k - 1]
+  const sc = list[k]
+  const pStart = sceneTimes.value[k - 1].start
+  if (prev.layout === 'soloA') {
+    if (t - pStart < SOLO_A_MIN) { list.splice(k - 1, 1); commit(list); return say('Merged: under 1s') }
+    prev.len = t - pStart
+    if (prev.a?.in != null && prev.a?.out != null) prev.a.out = prev.a.in + prev.len * (prev.a.speed || 1)
+    return commit(list)
+  }
+  if (sc.layout === 'soloA') return say('Drag the other edge of a Solo A scene, or split with S')
+  const cuts = stretches.value.filter((st) => (st.scene === k - 1 || st.scene === k) && st.kind === 'part')
+  const best = cuts.reduce((b, st) => (!b || Math.abs(st.start - t) < Math.abs(b.start - t) ? st : b), null)
+  if (!best) return
+  if (best.start - pStart < SOLO_A_MIN || best.part.id === prev.from) { list.splice(k, 1); commit(list); return say('Merged: under 1s') }
+  const end = sceneTimes.value[k].end
+  if (end - best.start < SOLO_A_MIN && best.scene === k && best.part.id !== sc.from) { list.splice(k, 1); commit(list); return say('Merged: under 1s') }
+  sc.from = best.part.id
+  commit(list)
+}
+// "Show A above this": a split scene starting at this part.
+function showAAbove(p) {
+  if (!aIds.value.length) return say('Put a clip in lane A first: ⤒ on a part')
+  const k = sceneOfPart(p)
+  const list = sceneCopy()
+  const sc = list[k]
+  const like = lastSplit()
+  if (sc.from === p.id) {
+    if (sc.layout === 'soloB') { setSceneLayout(k, like?.layout || 'stack'); return }
+    return say('A is already on screen here')
+  }
+  list.splice(k + 1, 0, { id: newId(), from: p.id, layout: like?.layout || 'stack', split: like?.split ?? 0.5,
+                          into: 'slide', a: newA(lastA(k + 1)) })
+  commit(list)
+}
+
+// Lane A: ⤒ puts a part there; it leaves lane B.
+function addToA(p) {
+  if (p.media.kind !== 'video') return
+  stopReel()
+  settings.laneA = [...aIds.value.filter((i) => i !== p.id), p.id]
+  if (!sceneList.value.some(showsA)) {
+    const list = sceneCopy()
+    if (list[0]) { list[0].layout = 'stack'; list[0].split = list[0].split ?? 0.5; list[0].a = newA(p.id) }
+    commit(list)
+  }
+  if (!p.keep) setKeep(p, true)
+}
+// Back into lane B, as a normal part at `to` (default: first).
+async function toB(p, to = 0) {
+  stopReel()
+  settings.laneA = aIds.value.filter((i) => i !== p.id)
+  if (!p.keep) setKeep(p, true)
+  await moveItem(p, to)
 }
 async function moveItem(p, to) {
   const cur = current.value
@@ -1407,22 +1674,43 @@ async function moveItem(p, to) {
   selected.value = items.value.indexOf(cur)
   await saveOrder()
 }
-function dropTop() {
+function dropA() {
   const from = dragFrom.value
   dragOver.value = null
   if (typeof from !== 'number') return
-  const p = items.value[from]
-  if (p.media.kind !== 'video') return
-  makeTop(p)
+  addToA(items.value[from])
 }
-const rowNumber = (p) => items.value.filter((q) => q !== topPart.value).indexOf(p) + 1
-function setPane(p, v) {
-  p.pane = v
-  saver.queue(p.id, { pane: v })
+const rowNumber = (p) => kept.value.indexOf(p) + 1
+// The scene in the inspector.
+const selK = computed(() => sceneList.value.findIndex((sc) => sc.id === selScene.value))
+const selSc = computed(() => (selK.value >= 0 ? sceneList.value[selK.value] : null))
+// A lane on its own: blur fill by default in a wide frame.
+const soloFitOf = (sc) => sc.fill || (wide.value ? 'blur' : (settings.fit === 'blur' ? 'blur' : 'fill'))
+const slotFit = (lane) => (shownSc.value && slotShape(shownSc.value, lane) === 'full' ? soloFitOf(shownSc.value) : 'fill')
+const focusProps = (p, lane) => {
+  const f = frameFor(p, shownSc.value ? slotShape(shownSc.value, lane) : 'full', lane)
+  return { focusX: f.x, focusY: f.y, zoom: f.zoom }
 }
-function setTopAfter(p, beats) {
-  p.topAfter = beats
-  saver.queue(p.id, { topAfter: beats })
+// The B part to show while lane A's clip is being edited.
+const shownPart = computed(() => byId.value.get(shownSc.value?.parts[0]) || kept.value[0] || null)
+function setAIn(k, e) {
+  const t = parseTime(e.target.value)
+  if (!isNaN(t) && t >= 0) editA(k, { in: Math.round(t * 100) / 100, ...(fitted(sceneList.value[k]) ? { out: null } : {}) })
+  e.target.value = fmtTime(aRanges.value[k]?.[0] ?? 0)
+}
+// The ruler over the lanes: a mark every 5, 15 or 30 seconds (or minute).
+const rulerTicks = computed(() => {
+  const L = reelLength.value || 0
+  const step = [5, 15, 30, 60, 120].find((x) => L / x <= 8) || 300
+  const out = []
+  for (let t = 0; t < L; t += step) out.push(t)
+  return out
+})
+// Where a part's "Into next part" is overruled by the scene coming in after it.
+const sceneEdgeAfter = (p) => {
+  const k = sceneOfPart(p)
+  const sc = sceneList.value[k]
+  return k >= 0 && sc.parts[sc.parts.length - 1] === p.id && k + 1 < sceneList.value.length ? sceneList.value[k + 1] : null
 }
 
 // A long part with boring stretches in it: cut where nothing much happens
@@ -1444,7 +1732,7 @@ async function splitQuiet(p) {
     await saver.flushAll()
     const cut = p.length - pieces.reduce((a, [, l]) => a + l, 0)
     const fields = { focusX: p.focusX, focusY: p.focusY, zoom: p.zoom, lighten: p.lighten, layout: p.layout,
-                     transition: p.transition, pane: p.pane }
+                     transition: p.transition, frames: p.frames || {} }
     const beatsFor = (l) => (synced.value ? snapBeats(l / period.value, false) : 0)
     const [first, ...rest] = pieces
     const r = { start: first[0], length: first[1], ...(synced.value ? { beats: beatsFor(first[1]) } : {}) }
@@ -1456,11 +1744,6 @@ async function splitQuiet(p) {
                                            ...(synced.value ? { beats: beatsFor(length) } : {}) })
       items.value.splice(++at, 0, { ...item, media: p.media })
     }
-    if (p.topAfter) {   // the top clip alone comes after the last piece now
-      const last = items.value[at]
-      setTopAfter(last, p.topAfter)
-      setTopAfter(p, 0)
-    }
     await saveOrder()
     splitNote.value = `${pieces.length} parts, ${cut.toFixed(1)}s of quiet taken out.`
   } catch (e) {
@@ -1471,13 +1754,17 @@ async function splitQuiet(p) {
 }
 
 // What every ReelFrame showing the selected clip gets.
-const frameProps = computed(() => ({
-  media: current.value.media, fit: layoutOf(current.value), guides: !isStack.value && tall.value && guides.value,
-  out: shapeRatio(settings.shape),
-  muted: !settings.originalAudio, cropped: reelOn.value, effect: effect.value, lighten: current.value.lighten,
-  focusX: current.value.focusX, focusY: current.value.focusY, zoom: current.value.zoom || 1,
-  posterTime: current.value.start, bindVideo: (el) => { player.video.value = el },
-}))
+const frameProps = computed(() => {
+  const f = frameFor(current.value, editShape.value, isA(current.value) ? 'A' : 'B')
+  return {
+    media: current.value.media,
+    fit: editShape.value !== 'full' ? 'fill' : (!isA(current.value) && current.value.layout) || (aIds.value.length ? soloFitOf(shownSc.value || {}) : layoutOf(current.value)),
+    guides: !aIds.value.length && tall.value && guides.value, out: shapeRatio(settings.shape),
+    muted: !settings.originalAudio, cropped: reelOn.value, effect: effect.value, lighten: current.value.lighten,
+    focusX: f.x, focusY: f.y, zoom: f.zoom,
+    posterTime: current.value.start, bindVideo: (el) => { player.video.value = el },
+  }
+})
 const frameOn = {
   loaded: (e) => onFrameLoaded(e), play: () => player.events.onPlay(), pause: () => player.events.onPause(),
   ended: () => onFrameEnded(),
@@ -1616,14 +1903,6 @@ function onFrameEnded() {
   if (p && p === current.value && p.media.kind === 'video') afterPart(reelIdx.value)
 }
 
-// A Stack reel with fit off ends when its top clip does.
-watch(() => reelTime.value, (t) => {
-  if (reelOn.value && topPart.value && !settings.fitTop && !moving.value && t >= reelLength.value) {
-    stopReel()
-    restart = true
-  }
-})
-
 // Start from the cut you're on (or the next kept one if it's skipped); only
 // go back to the top when the reel just finished and nothing was picked since.
 function playReel() {
@@ -1754,8 +2033,24 @@ function onKey(e) {
   else if (k === 'g' || k === 'G') guides.value = !guides.value
   else if ((k === 't' || k === 'T') && hasNext(current.value)) cycle(current.value)
   else if (k === 'l' || k === 'L') cycleLighten(current.value)
+  else if (k === 's' || k === 'S') splitAtPlayhead()
+  else if (k === 'w' || k === 'W') swapScene()
+  else if (['1', '2', '3', '4'].includes(k)) setSceneLayout(shownScene.value, SCENE_LAYOUTS[Number(k) - 1].v)
+  else if (k === '[') nudgeSplit(-0.02)
+  else if (k === ']') nudgeSplit(0.02)
+  else if (k === 'Tab') tabLane()
   else return
   e.preventDefault()
+}
+// Tab: from a B part to the A clip on screen, and back.
+function tabLane() {
+  if (isA(current.value)) {
+    const p = shownPart.value
+    if (p) select(items.value.indexOf(p))
+  } else {
+    const a = aNow.value?.part || aParts.value[0]
+    if (a) select(items.value.indexOf(a))
+  }
 }
 onMounted(() => window.addEventListener('keydown', onKey))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
@@ -1773,7 +2068,7 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .field.check span { display: flex; gap: 6px; align-items: center; color: var(--ink); font-size: 14px; }
 .field.check small { font-size: 12px; }
 .danger { color: var(--danger); }
-.transport { display: flex; align-items: center; gap: 12px; margin: 16px 0 34px; }
+.transport { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin: 16px 0 34px; }
 .playreel { flex: none; min-width: 148px; }
 .clock { flex: none; color: var(--forest); min-width: 116px; }
 .strip { position: relative; flex: 1; display: flex; gap: 2px; height: 30px; }
@@ -1854,7 +2149,7 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .formats { display: inline-flex; gap: 2px; margin-left: 6px; padding: 2px; border-radius: 999px; background: rgb(128 128 128 / 16%); }
 .formats .btn { border-radius: 999px; border-color: transparent; background: transparent; }
 .formats .btn.active { background: var(--sage); color: var(--on-sage); }
-.tracks { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.tracks { flex: 1 1 100%; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .tracks .strip { flex: none; }
 .toptrack { height: 22px; }
 .toptrack .topseg { flex: 1; text-align: left; padding-left: 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -1904,4 +2199,70 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .lg { display: inline-flex; align-items: center; gap: 4px; }
 .lg .sw { width: 10px; height: 10px; border-radius: 50%; }
 .shapes { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* lanes & scenes */
+.strip.lanebody { display: block; flex: 1; height: 30px; }
+.seg.abs { position: absolute; top: 0; bottom: 0; margin-right: 2px; box-sizing: border-box; border-right: 2px solid var(--bg, transparent); }
+.toast { font-size: 12px; padding: 3px 10px; border-radius: 12px; background: var(--sage); color: #1d2a1d; }
+.ruler { position: relative; height: 16px; margin-left: 110px; }
+.rt { position: absolute; font-size: 10px; color: var(--muted); transform: translateX(-2px); }
+.lanerow { display: flex; align-items: stretch; gap: 8px; }
+.lanename { width: 102px; flex: none; display: flex; flex-direction: column; justify-content: center; font-size: 12px; line-height: 1.2; }
+.lanename small { color: var(--muted); font-size: 10px; }
+.lanebody { position: relative; flex: 1; min-height: 34px; }
+.lanebody.scenes { min-height: 44px; }
+.scene {
+  position: absolute; top: 2px; bottom: 2px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center;
+  gap: 1px; padding: 2px 8px 2px 26px; overflow: hidden; white-space: nowrap; text-align: left;
+  border: 1px solid var(--line, rgb(128 128 128 / 30%)); border-radius: 8px; background: var(--panel-2, rgb(128 128 128 / 10%));
+  color: inherit; font: inherit; font-size: 12px; cursor: pointer;
+}
+.scene .sname { font-weight: 600; }
+.scene small { font-size: 10px; color: var(--muted); }
+.scene.sel { border-color: var(--sage); box-shadow: inset 0 0 0 1px var(--sage); }
+.scene .glyph { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); }
+.edge { position: absolute; top: 0; bottom: 0; width: 10px; margin-left: -5px; cursor: ew-resize; z-index: 3; touch-action: none; }
+.edge::after { content: ''; position: absolute; left: 4px; top: 8px; bottom: 8px; width: 2px; border-radius: 1px; background: var(--muted); opacity: 0.5; }
+.edge:hover::after { opacity: 1; background: var(--sage); }
+.glyph { display: inline-flex; flex-direction: column; gap: 2px; width: 10px; height: 16px; }
+.glyph i { flex: 1; border-radius: 2px; }
+.glyph.g-soloA i:first-child { background: #b8cfa8; } .glyph.g-soloA i:last-child { display: none; }
+.glyph.g-soloB i:first-child { background: #e9b27a; } .glyph.g-soloB i:last-child { display: none; }
+.glyph.g-stack i:first-child { background: #b8cfa8; } .glyph.g-stack i:last-child { background: #e9b27a; }
+.glyph.g-swap i:first-child { background: #e9b27a; } .glyph.g-swap i:last-child { background: #b8cfa8; }
+.glyph.big { width: 20px; height: 32px; margin-bottom: 4px; }
+.glyph.big.side { flex-direction: row; width: 32px; height: 20px; }
+.aseg, .off {
+  position: absolute; top: 2px; bottom: 2px; display: flex; align-items: center; justify-content: center; overflow: hidden;
+  white-space: nowrap; font-size: 11px; border-radius: 6px; padding: 0 6px;
+}
+.aseg { border: 0; background: #b8cfa8; color: #1d2a1d; cursor: pointer; font-family: var(--mono, monospace); }
+.aseg.current { box-shadow: inset 0 0 0 2px #344a34; }
+.aseg.warn { background: #e8c27a; }
+.warnchip { margin-left: 6px; padding: 0 5px; border-radius: 4px; background: #b3412f; color: #fff; font-size: 10px; }
+.off, .seg.gap { background: repeating-linear-gradient(45deg, rgb(128 128 128 / 16%) 0 6px, transparent 6px 12px); color: var(--muted); font-size: 11px; }
+.seg.gap { display: grid; place-items: center; overflow: hidden; white-space: nowrap; }
+.laneempty { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); font-size: 12px; }
+.inspector { display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: var(--radius); background: var(--panel); }
+.inspector h3 { margin: 2px 0; }
+.ihead { display: flex; justify-content: space-between; align-items: flex-start; }
+.caps { text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; }
+.layouts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.lay {
+  display: flex; flex-direction: column; align-items: center; padding: 10px 4px; border-radius: 10px; font: inherit; font-size: 12px;
+  border: 1px solid var(--line, rgb(128 128 128 / 30%)); background: transparent; color: inherit; cursor: pointer;
+}
+.lay.active { border-color: var(--sage); background: rgb(138 163 124 / 18%); }
+.tbtns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.timings { display: flex; flex-direction: column; gap: 6px; }
+.timing {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 12px; border-radius: 8px; text-align: left;
+  border: 1px solid var(--line, rgb(128 128 128 / 30%)); background: transparent; color: inherit; font: inherit; cursor: pointer;
+}
+.timing small { color: var(--muted); font-size: 11px; }
+.timing.active { border-color: var(--sage); background: rgb(138 163 124 / 18%); }
+.ilinks { display: flex; gap: 16px; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid var(--line, rgb(128 128 128 / 20%)); }
+.link.danger { color: #c0583f; }
+.warn { color: #b3412f; }
+.overruled .btn { opacity: 0.45; }
 </style>

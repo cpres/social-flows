@@ -159,7 +159,7 @@ blurred sides), and captions keep to a centred column so they stay the size
 they'd be on a square. Glasses footage is 3:4, so a square keeps its whole
 width; *Square, framed to the bottom* there (also in Weave's Moments) picks
 square and frames every part on the bottom of its shot, where the hands are,
-at full width. A Stack reel in 16:9 puts its panes side by side. The preview shows each clip
+at full width. In 16:9, split scenes put the lanes side by side. The preview shows each clip
 as it will appear in the reel. When a clip isn't exactly the reel's shape,
 the part the reel keeps is outlined and the rest dimmed. *Framing* in the part
 editor puts the window at the *Top*, *Middle* or *Bottom* at full width, and
@@ -176,50 +176,59 @@ can override the reel's framing, chosen under *Layout* on the shoot page
 *Blur* shows the whole frame with a blurred copy filling the top and bottom
 (marked ◫ in the list).
 
-**Stack reels.** Switch a reel from *Standard* to *Stack* next to its name.
-One clip (a timelapse, say) plays in the top pane for the whole reel, and the
-parts play one after another underneath, with their trims, framing,
-transitions and lighten as usual; photos are simply parts underneath. The list
-shows the clip on top in its own *Top (timelapse)* slot: drag a part onto it,
-or click ⤒ on a part, to put that one on top; drag it back into the list (or
-*Move underneath*) to make it a normal part. Switching to Stack picks a clip
-with "timelapse" in its name, else the longest; switching back to Standard
-makes the top clip the first part again. The top clip's start and length pick
-which stretch of it plays; drag its window to frame it. Settings has the
-split (50/50 by default), the divider's thickness and colour, and the *Top
-clip speed*:
+**Lanes and scenes.** A reel has two lanes of footage and a row of scenes
+over them. Lanes say what's playing; scenes say what's on screen.
 
-- *Fit to the parts* (the default): it speeds up or slows down to end with the
-  parts.
-- *Cut quiet moments to fit*: it plays at normal speed, and the stretches
-  where nothing much happens (the same movement measure as Weave's) are cut
-  out until it ends with the parts. The quietest go first, a few seconds at a
-  time, and no piece is left shorter than 3s. If that isn't enough, what's
-  left is sped up a little. The top track shows how many pieces it plays.
-- *Its own speed*: ½× to 8×, whatever you pick. If the layout never changes,
-  the reel runs as long as the top clip at that speed, and the parts are cut
-  where it ends, or the last one holds.
-
-The line under the timeline shows the lengths and the speed. The top clip is
-silent; the parts keep their sound.
-
-**Moving between one and two.** A Stack doesn't have to be split the whole
-way through:
-
-- *Open on the top clip alone* (Settings, in beats) starts on the top clip
-  by itself, in the middle of the frame over a blurred copy of itself, then
-  slides it up (left, in 16:9) as the parts come in from the bottom (right).
-- *In the stack → On its own* (a part's editor) gives that part the frame:
-  the top clip slides away and the part moves to the middle. The next part
-  that's *With the top clip* brings it back.
-- *Then the top clip alone* (2, 4 or 8 beats) after a part sends the parts
-  away for a while.
-
-The top clip pauses while it's off screen and picks up where it left off;
-the part underneath carries on out of sight while it slides away. Each slide
-takes half a second. On the strip, a hatched ▤ block is the top clip alone,
-and a part on its own has a green underline. Without beat sync a beat counts
-as half a second.
+- **Lane A** is the main, continuous footage: usually one long glasses POV
+  clip, or a few. ⤒ on a part (or dragging it onto the *A lane* slot in the
+  list) puts it there; *Move to lane B* puts it back. Its start and length
+  pick the stretch the scenes can use.
+- **Lane B** is the cut list: every other kept part, one after another, as
+  before.
+- **Scenes** follow one another along the *Layout* row: **Solo A**, **A over
+  B** (A in the primary slot), **Solo B** and **B over A**. The output shape
+  (next to the reel's name) decides which way a split reads: *9:16 · A top*
+  stacks them, *16:9 · A left* puts them side by side. A reel with nothing in
+  lane A is all Solo B, which is just a normal reel.
+- **Who sets the length:** when B is on screen, the scene runs as long as its
+  parts, so trimming a part moves the scene's edge and A re-fits (a note says
+  "A now 1.81×"). In Solo A, A plays alone for the scene's length (or its
+  range), and B waits. A lane that's off screen is hatched, and it pauses: it
+  picks up where it left off.
+- **Click a scene** to edit it on the right: its layout (or `1`–`4`), the
+  split (50/50, 58/42, a square second slot, or drag the divider in the
+  preview; `[` `]` nudge it 2%), how A plays in it, how it comes in (Cut,
+  Slide, Push or Dissolve, 0.4s), and how a lane alone fills the frame (16:9
+  defaults to a blurred fill). *Use this split on every stacked scene* and
+  *Merge into previous scene* are at the bottom.
+- **How A plays in a scene:** *Fit to scene* speeds it up or slows it down to
+  span the scene (a warning chip shows over 4×). *Cut quiet moments to fit*
+  keeps real speed and cuts out where nothing much happens (the same
+  movement measure as Weave's), the quietest first, no piece under 3s.
+  *Its own speed, then hold* plays it at ½× to 4× and holds its last frame
+  if it runs out. *Real speed, pick a range* plays it 1× from where you say.
+  A scene that doesn't say where A starts carries on from the scene before.
+  Fitted scenes share what's left of the clip by their lengths.
+- **Starting a split:** `S` (*Split scene at playhead*) starts a new scene at
+  the nearest cut with the last split you used, and A carries on from the
+  same point. *Show A above this* in a part's editor starts one at that part.
+  `W` swaps A and B. Drag the edge between two scenes to move where it
+  changes (it snaps to a cut). Under 1s, the two scenes merge.
+- **Framing per slot:** a part keeps a framing for each slot shape: full
+  frame, half, square. So reframing it for the bottom half doesn't touch its
+  full-frame crop. Drag the window in its slot to reframe. In a slot, new B
+  parts start framed low (hands are low in glasses footage) and A a little
+  above the middle. `Tab` jumps between the A clip and the B part on screen.
+- **Transitions:** inside a scene, parts keep their own *Into next part*.
+  Where a scene starts, the scene's transition wins, and the part's picker
+  says so.
+- **Sound:** *Keep glasses audio* follows the primary slot (the full frame
+  when a lane is alone), so a swap moves the sound with it. A sped-up A is
+  silent. Music and voice sit over both lanes, as before.
+- **Reels from before:** a Standard reel becomes one Solo B scene. A Stack
+  reel's top clip becomes lane A, with one *A over B* scene fitted as before.
+  The top-alone and on-its-own parts from the first moving-stack version
+  become Solo A and Solo B scenes. Nothing changes until you edit it.
 
 **Take out quiet moments.** A long video part (8s or more) with boring
 stretches in it has *✂ Take out quiet moments* in its editor. It cuts the

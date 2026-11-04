@@ -54,6 +54,7 @@ sys.path.insert(0, str(HERE))
 import looks  # noqa: E402
 from db import DEFAULT_SETTINGS, Library, default_start, now, settings_of  # noqa: E402
 import compose  # noqa: E402
+import scenes as scenes_mod  # noqa: E402
 from music import AUDIO_EXTS, Shelf, beat_detection_available  # noqa: E402
 from share import Shares  # noqa: E402
 from voice import MODEL as VOICE_MODEL, Voice, align, lines_from_words, transcription_available  # noqa: E402
@@ -72,7 +73,7 @@ voice = Voice(CACHE / "voice", lib.home / "voice")
 shares = Shares(port=int(os.environ.get("SHARE_PORT", 3010)),
                 ttl=int(os.environ.get("SHARE_TTL", 3600)))
 ITEM_COLUMNS = ("media_id", "position", "start", "length", "keep", "focus_x", "focus_y",
-                "transition", "lighten", "beats", "zoom", "layout", "pane", "top_after")
+                "transition", "lighten", "beats", "zoom", "layout", "pane", "top_after", "frames")
 LAYOUTS = ("", "fill", "blur")   # per part; '' = the reel's framing
 FORMATS = ("standard", "stack")
 PANES = ("", "solo")   # a Stack part: split with the top clip, or the whole frame on its own
@@ -106,7 +107,20 @@ def item_dict(row):
             "position": row["position"], "start": row["start"], "length": row["length"],
             "keep": bool(row["keep"]), "focusX": row["focus_x"], "focusY": row["focus_y"],
             "transition": row["transition"], "lighten": row["lighten"], "beats": row["beats"],
-            "zoom": row["zoom"], "layout": row["layout"], "pane": row["pane"], "topAfter": row["top_after"]}
+            "zoom": row["zoom"], "layout": row["layout"], "pane": row["pane"], "topAfter": row["top_after"],
+            "frames": frames_of(row["frames"])}
+
+
+def frames_of(text):
+    """A part's framing per slot shape, or None for a part from before slots."""
+    if text is None:
+        return None
+    try:
+        f = json.loads(text)
+    except ValueError:
+        return {}
+    return {k: {"x": unit(v.get("x", 0.5)), "y": unit(v.get("y", 0.5)), "zoom": zoom_of(v.get("zoom", 1))}
+            for k, v in f.items() if k in ("half", "square") and isinstance(v, dict)} if isinstance(f, dict) else {}
 
 
 def pick_dict(row):
@@ -148,6 +162,13 @@ def clean_settings(db, reel_id, s):
     s["fitTopBy"] = "quiet" if s.get("fitTopBy") == "quiet" else "speed"
     s["topSpeed"] = round(min(max(float(s.get("topSpeed") or 1), 0.25), 16.0), 3)
     s["stackIntro"] = beats_of(s.get("stackIntro"))
+    if s.get("laneA") is not None:
+        ids = [int(i) for i in s["laneA"]]
+        mine = {r["id"] for r in db.execute("""SELECT i.id FROM reel_items i JOIN media m ON m.id = i.media_id
+                                              WHERE i.reel_id = ? AND m.kind = 'video'""", (reel_id,))}
+        s["laneA"] = [i for i in dict.fromkeys(ids) if i in mine]
+    if s.get("scenes") is not None:
+        s["scenes"] = scenes_mod.clean(s["scenes"], s)
     if s.get("topItemId") is not None:
         s["topItemId"] = int(s["topItemId"])
         if not top_item(db, reel_id, {**s, "format": "stack"}):
@@ -313,7 +334,7 @@ def folder_to_reel(name: str, body: dict = Body(default={})):
             else:
                 length, start = float(s.get("length", pick.get("length", settings["defaultHold"]))), 0.0
             db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length, "
-                       "focus_x, focus_y, zoom, layout) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                       "focus_x, focus_y, zoom, layout, frames) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '{}')",
                        (reel_id, lib.original_of(db, m["id"]), pos, start, length,
                         pick.get("focusX", 0.5), pick.get("focusY", 0.5), pick.get("zoom", 1),
                         pick.get("layout", "") if m["kind"] == "video" else ""))
@@ -424,6 +445,12 @@ def get_reel(reel_id: int):
         settings = settings_of(r)
         if settings["format"] == "stack" and not top_item(db, reel_id, settings):
             settings["topItemId"] = None   # its clip was removed: pick another
+        if settings.get("scenes") is None:   # from before scenes: worked out once, saved on the next change
+            settings["laneA"] = scenes_mod.lane_a(settings)
+            settings["scenes"] = scenes_mod.migrated(settings, [{**item_dict(row), "id": row["item_id"],
+                                                                  "missing": row["missing"],
+                                                                  "top_after": row["top_after"]} for row in rows])
+        settings["laneA"] = [i for i in scenes_mod.lane_a(settings) if any(it["id"] == i for it in items)]
         draft_at = draft_time(db, draft_key(reel=reel_id))
     return {"id": r["id"], "name": r["name"], "settings": settings, "items": items,
             "otherItems": others, "reels": reels, "draftAt": draft_at, "updatedAt": r["updated_at"]}
@@ -493,6 +520,7 @@ def item_values(m, body, s, pick=None):
             "beats": beats_of(body.get("beats")),
             "zoom": zoom_of(body.get("zoom", 1)), "layout": layout, "transition": transition,
             "pane": pane_of(body.get("pane")), "top_after": beats_of(body.get("topAfter")),
+            "frames": json.dumps(frames_of(json.dumps(body["frames"])) if body.get("frames") else {}),
             "keep": int(bool(body.get("keep", True)))}
 
 
@@ -538,7 +566,8 @@ def set_items(reel_id: int, body: dict = Body(...)):
                 # Unsent fields keep what the part already had.
                 base = {"focusX": old["focus_x"], "focusY": old["focus_y"], "lighten": old["lighten"],
                         "zoom": old["zoom"], "layout": old["layout"], "keep": bool(old["keep"]),
-                        "pane": old["pane"], "topAfter": old["top_after"]}
+                        "pane": old["pane"], "topAfter": old["top_after"],
+                        "frames": frames_of(old["frames"])}
                 values = {**item_values(m, {**base, **body_item}, s), "position": pos}
                 sets = ", ".join(f"{k} = :{k}" for k in values)
                 db.execute(f"UPDATE reel_items SET {sets} WHERE id = :id", {**values, "id": item_id})
@@ -578,6 +607,8 @@ def update_item(item_id: int, body: dict = Body(...)):
         fields["pane"] = pane_of(body["pane"])
     if "topAfter" in body:
         fields["top_after"] = beats_of(body["topAfter"])
+    if "frames" in body:
+        fields["frames"] = json.dumps(frames_of(json.dumps(body["frames"] or {})))
     if not fields:
         return {"ok": True}
     with lib.connect() as db:
@@ -654,13 +685,22 @@ def duplicate_reel(reel_id: int, body: dict = Body(default={})):
         db.execute(f"INSERT INTO reel_items (reel_id, {cols}) "
                    f"SELECT ?, {cols} FROM reel_items WHERE reel_id = ? ORDER BY position, id",
                    (new_id, reel_id))
-        # The copy's top clip is the copy of the original's.
+        # The copy's lane A, scenes (and top clip, from before scenes) point at
+        # the copies of the original's parts.
         s = settings_of(r)
+        new = [row["id"] for row in db.execute(
+            "SELECT id FROM reel_items WHERE reel_id = ? ORDER BY id", (new_id,))]
+        to_new = dict(zip(old, new)).get
         if s.get("topItemId") in old:
-            new = [row["id"] for row in db.execute(
-                "SELECT id FROM reel_items WHERE reel_id = ? ORDER BY id", (new_id,))]
-            s["topItemId"] = new[old.index(s["topItemId"])]
-            db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), new_id))
+            s["topItemId"] = to_new(s["topItemId"])
+        if s.get("laneA") is not None:
+            s["laneA"] = [to_new(i) for i in s["laneA"] if to_new(i)]
+        for sc in s.get("scenes") or []:
+            if sc.get("from") is not None:
+                sc["from"] = to_new(sc["from"])
+            if isinstance(sc.get("a"), dict) and sc["a"].get("item") is not None:
+                sc["a"]["item"] = to_new(sc["a"]["item"])
+        db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), new_id))
     return {"id": new_id, "name": name}
 
 
@@ -939,75 +979,79 @@ def build_config(reel, rows, grid_bpm=None):
     song not made yet: on a steady grid at that tempo when cutting on the
     beat, and without music."""
     s = settings_of(reel)
-    # A Stack reel: the top clip plays in the top pane for the whole reel;
-    # the kept parts play one after another underneath.
-    top = None
-    if s.get("format") == "stack":
-        top = next((r for r in rows if r["id"] == s.get("topItemId") and r["kind"] == "video"), None)
-        if not top or top["missing"]:
-            raise HTTPException(400, "Pick a clip for the top of this Stack reel." if not top else
-                                f"The top clip is missing: {top['path']}")
-    kept = [r for r in rows if r["keep"] and not r["missing"] and r is not top]
-    if top and not kept:
-        raise HTTPException(400, "Add parts to play underneath the top clip.")
+    # Lanes and scenes (scenes.py): lane A's clips and, one after another,
+    # what's on screen; each kept part plays in its scene.
+    a_ids = scenes_mod.lane_a(s)
+    by_id = {r["id"]: r for r in rows}
+    lane_rows = {i: by_id[i] for i in a_ids if i in by_id and by_id[i]["kind"] == "video"}
+    for r in lane_rows.values():
+        if r["missing"]:
+            raise HTTPException(400, f"A clip in lane A is missing: {r['path']}")
+    kept = [r for r in rows if r["keep"] and not r["missing"] and r["id"] not in lane_rows]
+    scenes = scenes_mod.normalized(s.get("scenes") if s.get("scenes") is not None
+                                   else scenes_mod.migrated(s, [{**dict(r), "top_after": r["top_after"]} for r in rows]),
+                                   [r["id"] for r in kept], list(lane_rows))
+    if not kept and not any(sc["layout"] == "soloA" for sc in scenes):
+        raise HTTPException(400, "Add parts to this reel first.")
     track = shelf.path_of(s.get("music")) if grid_bpm is None else None
     synced = bool((track or grid_bpm) and s.get("beatSync"))
-    sources, seen = [], {}
-
-    def top_alone(beats, name):   # a Stack's top clip on its own: beats, or about the same at 120 bpm
-        sources.append({"id": name, "gap": True, **({"beats": beats} if synced else {"length": round(beats * 0.5, 2)})})
-
-    if top and s.get("stackIntro"):
-        top_alone(s["stackIntro"], "top alone")
-    for n, row in enumerate(kept):
-        stem = Path(row["name"]).stem[:14]
-        seen[stem] = seen.get(stem, 0) + 1
-        entry = {"id": stem if seen[stem] == 1 else f"{stem}-{seen[stem]}",
-                 "file": str(ROOT / row["path"])}
-        if (row["focus_x"], row["focus_y"]) != (0.5, 0.5):
-            entry["focus"] = [round(row["focus_x"], 3), round(row["focus_y"], 3)]
-        if row["lighten"]:
-            entry["lighten"] = round(row["lighten"], 2)
-        if row["zoom"] > 1.001:
-            entry["zoom"] = round(row["zoom"], 3)
-        if row["layout"] in ("fill", "blur"):
-            entry["fit"] = row["layout"]
-        if row["kind"] == "video":
-            entry["times"] = [round(row["start"], 2)]
-            entry["length"] = round(row["length"], 2)
-        else:
-            entry["hold"] = round(row["length"], 2)
-            entry["in_round"] = "all"
-        if synced:
-            entry["hold_beats" if row["kind"] == "photo" else "beats"] = (
-                beats_of(row["beats"]) or int(s.get("beatsPerCut", 4)))
-        if n + 1 < len(kept):
-            entry["transition"] = row["transition"] or s.get("transition") or "cut"
-        if top and row["pane"] == "solo":
-            entry["pane"] = "solo"
-        sources.append(entry)
-        if top and row["top_after"]:
-            top_alone(row["top_after"], f"top alone {n + 1}")
+    sources, seen, scene_cfg = [], {}, []
+    kept_ids = [r["id"] for r in kept]
+    for k, sc in enumerate(scenes):
+        entry_sc = {"layout": sc["layout"], "split": sc.get("split", 0.5),
+                    "into": sc.get("into", "cut") if k else "cut", **({"fill": sc["fill"]} if sc.get("fill") else {})}
+        if sc["layout"] != "soloB":
+            a, row = sc["a"], lane_rows[sc["a"]["item"]]
+            fx, fy, zoom = scenes_mod.frame_for(row, scenes_mod.slot_shape(sc, "A"), "A")
+            entry_sc["a"] = {"item": row["id"], "file": str(ROOT / row["path"]), "start": round(row["start"], 3),
+                             "end": round(row["start"] + row["length"], 3), "in": a.get("in"), "out": a.get("out"),
+                             "timing": a.get("timing", "fit"), "speed": a.get("speed", 1),
+                             "focus": [round(fx, 3), round(fy, 3)], "zoom": round(zoom, 3)}
+            if row["lighten"]:
+                entry_sc["a"]["lighten"] = round(row["lighten"], 2)
+            if a.get("timing") == "quiet":
+                entry_sc["a"]["activity"] = activity_of(ROOT / row["path"])["points"]
+        scene_cfg.append(entry_sc)
+        if sc["layout"] == "soloA":   # A alone: its range (or the scene's length) sets how long
+            a = sc["a"]
+            secs = ((a["out"] - a["in"]) / (a.get("speed") or 1) if a.get("in") is not None and a.get("out") is not None
+                    else sc.get("len", scenes_mod.SOLO_A_DEFAULT))
+            sources.append({"id": f"solo A {k + 1}", "gap": True, "length": round(max(secs, scenes_mod.SOLO_A_MIN), 3),
+                            "scene": k})
+            continue
+        for pid in sc["parts"]:
+            row = by_id[pid]
+            n = kept_ids.index(pid)
+            stem = Path(row["name"]).stem[:14]
+            seen[stem] = seen.get(stem, 0) + 1
+            entry = {"id": stem if seen[stem] == 1 else f"{stem}-{seen[stem]}",
+                     "file": str(ROOT / row["path"]), "scene": k}
+            fx, fy, zoom = scenes_mod.frame_for(row, scenes_mod.slot_shape(sc, "B"), "B")
+            if (fx, fy) != (0.5, 0.5):
+                entry["focus"] = [round(fx, 3), round(fy, 3)]
+            if row["lighten"]:
+                entry["lighten"] = round(row["lighten"], 2)
+            if zoom > 1.001:
+                entry["zoom"] = round(zoom, 3)
+            if row["layout"] in ("fill", "blur"):
+                entry["fit"] = row["layout"]
+            if row["kind"] == "video":
+                entry["times"] = [round(row["start"], 2)]
+                entry["length"] = round(row["length"], 2)
+            else:
+                entry["hold"] = round(row["length"], 2)
+                entry["in_round"] = "all"
+            if synced:
+                entry["hold_beats" if row["kind"] == "photo" else "beats"] = (
+                    beats_of(row["beats"]) or int(s.get("beatsPerCut", 4)))
+            if n + 1 < len(kept):
+                entry["transition"] = row["transition"] or s.get("transition") or "cut"
+            sources.append(entry)
 
     w, h = frame_size(s)
     cfg = {"output": str(RENDERS / f"{slug(reel['name'])}.mp4"), "rounds": 1, "sources": sources,
-           "width": w, "height": h}
-    if top:
-        cfg["top"] = {"file": str(ROOT / top["path"]), "start": round(top["start"], 2),
-                      "length": round(top["length"], 2)}
-        if (top["focus_x"], top["focus_y"]) != (0.5, 0.5):
-            cfg["top"]["focus"] = [round(top["focus_x"], 3), round(top["focus_y"], 3)]
-        if top["zoom"] > 1.001:
-            cfg["top"]["zoom"] = round(top["zoom"], 3)
-        if top["lighten"]:
-            cfg["top"]["lighten"] = round(top["lighten"], 2)
-        cfg["stack"] = {"split": s["stackSplit"], "divider": s["dividerPx"],
-                        "divider_color": s["dividerColor"], "fit": bool(s["fitTop"])}
-        if not s["fitTop"] and abs(float(s.get("topSpeed") or 1) - 1) > 0.001:
-            cfg["stack"]["speed"] = float(s["topSpeed"])
-        if s["fitTop"] and s.get("fitTopBy") == "quiet":
-            cfg["stack"]["fit_by"] = "quiet"
-            cfg["top"]["activity"] = activity_of(ROOT / top["path"])["points"]
+           "width": w, "height": h, "scenes": scene_cfg,
+           "stack": {"divider": s["dividerPx"], "divider_color": s["dividerColor"]}}
     if track:
         if not track.exists():
             raise HTTPException(400, f"Music file not found: {track}")

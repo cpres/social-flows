@@ -1,59 +1,12 @@
-// A Stack reel whose layout changes: the top clip alone, the two split, or
-// a part underneath alone, with the panes sliding between. The same rules
-// as the engine (montage.py: layout_keys, x_at, quiet_cut, top_plan), so the
-// preview moves where the render does.
-//
-// x is where the layout is: -1 the top clip alone, 0 split, 1 the part
-// underneath (or on the right, in a wide reel) alone.
+// Quiet moments: where nothing much happens in a clip, to cut out (the
+// same rule as the engine's quiet_cut), and where a clip played in pieces
+// is after so many seconds. Used for lane A's "cut quiet moments to fit"
+// and B's "Take out quiet moments".
 
-export const SLIDE = 0.5        // seconds the panes take to slide
 export const QUIET_KEEP = 3.0   // quiet cuts never leave a piece shorter than this
 export const QUIET_GAP = 12.0   // ... and take out about this much at a time, at most
 export const QUIET_LEVEL = 0.22 // "nothing much happening"
 export const QUIET_MIN = 1.5    // a lull has to last this long to be cut out
-
-// marks: [{ at, x }] where each stretch of the reel starts and its layout;
-// total: where the reel ends. Returns [[t, x]]: between two keys x eases
-// from one to the other.
-export function layoutKeys(marks, total) {
-  if (!marks.length) return [[0, 0]]
-  const changes = [marks[0]]
-  for (const m of marks.slice(1)) if (m.x !== changes[changes.length - 1].x) changes.push(m)
-  const keys = [[changes[0].at, changes[0].x]]
-  changes.slice(1).forEach((c, i) => {
-    const next = i + 2 < changes.length ? changes[i + 2].at : total
-    const slide = Math.max(1 / 30, Math.min(SLIDE, next - c.at))
-    keys.push([c.at, keys[keys.length - 1][1]], [c.at + slide, c.x])
-  })
-  keys[0][0] = 0
-  return keys
-}
-
-export function xAt(keys, t) {
-  let x = keys[0][1]
-  for (let i = 0; i + 1 < keys.length; i++) {
-    const [t0, x0] = keys[i]
-    const [t1, x1] = keys[i + 1]
-    if (t < t0) break
-    if (t < t1 && t1 > t0) return x0 + (x1 - x0) * (0.5 - 0.5 * Math.cos((Math.PI * (t - t0)) / (t1 - t0)))
-    x = x1
-  }
-  return x
-}
-
-// How long the top clip has been on screen by reel time t: it pauses while
-// the part underneath is alone.
-export function shownBy(keys, t) {
-  let hidden = 0
-  for (let i = 0; i + 1 < keys.length; i++) {
-    const [a, xa] = keys[i]
-    const [b, xb] = keys[i + 1]
-    if (xa === 1 && xb === 1 && a < t) hidden += Math.min(b, t) - a
-  }
-  const [last, xl] = keys[keys.length - 1]
-  if (xl === 1 && t > last) hidden += t - last
-  return Math.max(0, t - hidden)
-}
 
 // Pieces [[start, length]] of start..start+length with its quiet moments
 // taken out (points: [[seconds, 0..1]] of how much happens). With need,
@@ -129,21 +82,7 @@ export function quietCut(points, start, length, need = null) {
 }
 const round3 = (v) => Math.round(v * 1000) / 1000
 
-// How the top clip fills the time it's on screen (shown, in seconds): the
-// pieces of it that play and how fast.
-export function topPlan({ start, length, fit, by, points, speed = 1 }, shown) {
-  let pieces = [[start, length]]
-  let rate = fit ? 1 : speed   // fit off: its own speed
-  if (fit && shown > 0) {
-    if (by === 'quiet') {
-      pieces = quietCut(points || [], start, length, shown)
-      rate = Math.max(1, pieces.reduce((s, [, l]) => s + l, 0) / shown)
-    } else rate = length / shown
-  }
-  return { pieces, rate }
-}
-
-// Where in the top clip it is after `shown` seconds on screen.
+// Where in the clip it is after `shown` seconds of its pieces at `rate`.
 export function topSource({ pieces, rate }, shown) {
   let left = Math.max(0, shown) * rate
   for (const [s, l] of pieces) {
@@ -152,26 +91,4 @@ export function topSource({ pieces, rate }, shown) {
   }
   const [s, l] = pieces[pieces.length - 1]
   return s + l - 0.05
-}
-
-// Where each pane sits at layout x, in the frame's pixels along the split:
-// the top pane, the divider and the other pane (as the engine's overlays).
-export function panePositions(x, { full, top, under, divider: d }) {
-  if (x < 0) {
-    const pa = ((full - top) / 2) * -x
-    const pb = full - under + (d + under) * -x
-    return { a: pa, b: pb, d: pb - d }
-  }
-  const pa = -(top + d) * x
-  return { a: pa, b: top + d + ((full - under) / 2 - (top + d)) * x, d: pa + top }
-}
-
-// The panes' sizes for a frame w × h (the engine's load_top): side by side
-// when it's wider than tall.
-export function stackGeometry(w, h, split, dividerPx) {
-  const axis = w > h ? 'x' : 'y'
-  const full = axis === 'x' ? w : h
-  const divider = Math.max(0, Math.round(dividerPx / 2) * 2)
-  const top = Math.round(((full - divider) * split) / 2) * 2
-  return { axis, full, top, under: full - divider - top, divider, w, h }
 }

@@ -1,0 +1,172 @@
+<template>
+  <div class="scene-stage" ref="stage" :style="{ height: `${size.h}px` }">
+    <div class="scenebox" :style="{ width: `${size.w}px`, height: `${size.h}px` }">
+      <div class="content" :style="moveStyle">
+        <div
+          v-for="lane in lanes" :key="lane" class="slot" :class="{ editing: editing === lane }"
+          :style="rectStyle(slots[lane])"
+        >
+          <slot :name="lane" :max-h="px(slots[lane]).h" :out="slots[lane].w / slots[lane].h" :bind-a="bindA" />
+          <span class="chip" :class="`lane-${lane}`">{{ lane }} · {{ where(lane) }}</span>
+        </div>
+        <div
+          v-if="slots.divider" class="divider" :class="slots.axis" :style="{ ...rectStyle(slots.divider), background: dividerColor }"
+          @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="up"
+          title="Drag to change the split · [ and ] nudge it"
+        ><span class="ratio mono">{{ ratio }}</span></div>
+      </div>
+      <div v-if="guides" class="guides">
+        <div class="g-caption">caption</div>
+        <div class="g-buttons">buttons</div>
+      </div>
+      <slot name="overlay" />
+    </div>
+    <slot />
+  </div>
+</template>
+
+<script setup>
+// The reel's frame for one scene: each lane on screen in its slot (see
+// scenes.js sceneSlots), a lane chip on each, and the divider between, which
+// can be dragged to change the split. The A lane's video is kept at the
+// reel's time (aT, aRate). A scene coming in moves as the render does:
+// slide and push from the bottom (the right in a wide frame), dissolve.
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { clamp } from '../time'
+
+const props = defineProps({
+  frameW: { type: Number, default: 1080 },
+  frameH: { type: Number, default: 1920 },
+  slots: { type: Object, required: true },    // sceneSlots(): {A?, B?, divider?, axis, first, second, d, full}
+  dividerColor: { type: String, default: '#f7f1e3' },
+  editing: { type: String, default: '' },      // which lane holds the selected part
+  into: { type: Object, default: null },       // {type, p}: the scene coming in, p 0..1
+  aT: { type: Number, default: 0 },            // where in the A clip the reel is
+  aRate: { type: Number, default: 1 },
+  aPlaying: Boolean,
+  guides: Boolean,
+})
+const emit = defineEmits(['split'])
+
+const lanes = computed(() => ['A', 'B'].filter((l) => props.slots[l]))
+const wide = computed(() => props.frameW > props.frameH)
+const where = (lane) => {
+  if (lanes.value.length === 1) return 'alone'
+  const first = props.slots[lane].x === 0 && props.slots[lane].y === 0
+  return wide.value ? (first ? 'left' : 'right') : (first ? 'top' : 'bottom')
+}
+
+const stage = ref(null)
+const width = ref(0)
+const cap = ref(0)
+const measureCap = () => { cap.value = Math.max(360, Math.min(window.innerHeight - 150, 820)) }
+let observer
+onMounted(() => {
+  measureCap()
+  window.addEventListener('resize', measureCap)
+  observer = new ResizeObserver(([entry]) => { width.value = entry.contentRect.width })
+  observer.observe(stage.value)
+})
+onBeforeUnmount(() => {
+  observer?.disconnect()
+  window.removeEventListener('resize', measureCap)
+})
+const size = computed(() => {
+  const r = props.frameW / props.frameH
+  const w = Math.round(Math.min(width.value, cap.value * r))
+  return { w, h: Math.round(w / r) }
+})
+const k = computed(() => size.value.w / props.frameW)
+const px = (r) => ({ w: Math.round(r.w * k.value), h: Math.round(r.h * k.value) })
+function rectStyle(r) {
+  const p = px(r)
+  return { left: `${Math.round(r.x * k.value)}px`, top: `${Math.round(r.y * k.value)}px`, width: `${p.w}px`, height: `${p.h}px` }
+}
+
+// A scene coming in: eased like the render's.
+const moveStyle = computed(() => {
+  const t = props.into
+  if (!t || t.type === 'cut' || t.p >= 1) return {}
+  const e = 0.5 - 0.5 * Math.cos(Math.PI * clamp(t.p, 0, 1))
+  if (t.type === 'dissolve') return { opacity: e }
+  const off = `${(1 - e) * 100}%`
+  return { transform: wide.value ? `translateX(${off})` : `translateY(${off})` }
+})
+
+// The divider: drag along the split to change the primary slot's share.
+const ratio = computed(() => {
+  const s = props.slots
+  const a = Math.round((s.first / (s.first + s.second)) * 100)
+  return `${a} / ${100 - a}`
+})
+let dragging = null
+function down(e) {
+  e.currentTarget.setPointerCapture(e.pointerId)
+  const box = e.currentTarget.parentElement.getBoundingClientRect()
+  dragging = { box }
+}
+function move(e) {
+  if (!dragging) return
+  const { box } = dragging
+  const at = wide.value ? (e.clientX - box.left) / box.width : (e.clientY - box.top) / box.height
+  emit('split', Math.round(clamp(at, 0.3, 0.7) * 50) / 50)
+}
+function up() { dragging = null }
+
+// The A lane's video, when it isn't the one being edited: follow the reel's clock.
+let aVideo = null
+function bindA(el) {
+  if (el === aVideo) return
+  aVideo = el
+  el?.addEventListener('loadedmetadata', syncA)
+  syncA()
+}
+function syncA() {
+  const v = aVideo
+  if (!v || v.readyState < 1) return
+  const rate = clamp(props.aRate, 0.0625, 16)
+  if (!props.aPlaying || Math.abs(v.currentTime - props.aT) > 0.3 * Math.max(1, rate)) v.currentTime = props.aT
+  if (props.aPlaying) {
+    v.playbackRate = rate
+    if (v.paused) v.play().catch(() => {})
+  } else if (!v.paused) v.pause()
+}
+watch(() => [props.aT, props.aPlaying, props.aRate], syncA)
+</script>
+
+<style scoped>
+.scene-stage {
+  position: relative; display: grid; place-items: center;
+  background: var(--stage); border-radius: var(--radius); overflow: hidden;
+}
+.scenebox { position: relative; overflow: hidden; background: #000; }
+.content { position: absolute; inset: 0; }
+.slot { position: absolute; overflow: hidden; }
+.slot::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 4;
+  box-shadow: inset 0 0 0 2px transparent; transition: box-shadow 0.15s;
+}
+.slot.editing::after { box-shadow: inset 0 0 0 2px var(--sage); }
+.chip {
+  position: absolute; left: 8px; top: 8px; z-index: 5; pointer-events: none;
+  font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 6px; color: #1d2a1d;
+}
+.chip.lane-A { background: #b8cfa8; }
+.chip.lane-B { background: #e9b27a; }
+.divider { position: absolute; z-index: 6; display: grid; place-items: center; touch-action: none; }
+.divider.y { cursor: ns-resize; }
+.divider.x { cursor: ew-resize; }
+.divider::before { content: ''; position: absolute; inset: -6px; }
+.ratio {
+  position: relative; font-size: 11px; padding: 1px 8px; border-radius: 10px;
+  background: var(--panel, #f7f1e3); color: var(--ink, #1d2a1d); box-shadow: 0 1px 3px rgb(0 0 0 / 30%); white-space: nowrap;
+}
+.guides { position: absolute; inset: 0; pointer-events: none; z-index: 7; }
+.g-caption, .g-buttons {
+  position: absolute; display: grid; place-items: center; font-size: 10px; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--on-media); background: rgb(247 241 227 / 18%);
+  border: 1px dashed rgb(247 241 227 / 60%);
+}
+.g-caption { left: 0; right: 16%; bottom: 0; height: 20%; }
+.g-buttons { right: 0; width: 14%; bottom: 0; height: 45%; }
+</style>
