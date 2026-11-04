@@ -184,8 +184,8 @@ over them. Lanes say what's playing; scenes say what's on screen.
   list or the *A lane* row of the timeline, puts it there. *Move to lane B*,
   or dragging its block down onto the *B lane* row, puts it back. While you
   drag a B video (from the list or the timeline), the whole timeline becomes
-  a *Move to A lane* drop zone. Dragging a
-  B block onto another reorders the cut list. Its start and length
+  a *Move to A lane* drop zone (reorder the cut list in the list below). Its
+  start and length
   pick the stretch the scenes can use.
 - **Lane B** is the cut list: every other kept part, one after another, as
   before.
