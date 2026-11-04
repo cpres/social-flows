@@ -72,10 +72,11 @@ voice = Voice(CACHE / "voice", lib.home / "voice")
 shares = Shares(port=int(os.environ.get("SHARE_PORT", 3010)),
                 ttl=int(os.environ.get("SHARE_TTL", 3600)))
 ITEM_COLUMNS = ("media_id", "position", "start", "length", "keep", "focus_x", "focus_y",
-                "transition", "lighten", "beats", "zoom", "layout")
+                "transition", "lighten", "beats", "zoom", "layout", "pane", "top_after")
 LAYOUTS = ("", "fill", "blur")   # per part; '' = the reel's framing
 FORMATS = ("standard", "stack")
-# The reel's shape: the size it renders at. Stack splits a tall frame, so it stays tall.
+PANES = ("", "solo")   # a Stack part: split with the top clip, or the whole frame on its own
+# The reel's shape: the size it renders at. A wide Stack is side by side.
 SHAPES = {"tall": (1080, 1920), "wide": (1920, 1080), "portrait": (1080, 1350), "square": (1080, 1080)}
 LOGOS = {"oufp": ["oufp.png"], "garden-steward": ["garden-steward.png"],
          "both": ["oufp.png", "garden-steward.png"]}
@@ -105,7 +106,7 @@ def item_dict(row):
             "position": row["position"], "start": row["start"], "length": row["length"],
             "keep": bool(row["keep"]), "focusX": row["focus_x"], "focusY": row["focus_y"],
             "transition": row["transition"], "lighten": row["lighten"], "beats": row["beats"],
-            "zoom": row["zoom"], "layout": row["layout"]}
+            "zoom": row["zoom"], "layout": row["layout"], "pane": row["pane"], "topAfter": row["top_after"]}
 
 
 def pick_dict(row):
@@ -130,7 +131,7 @@ def top_item(db, reel_id, s):
 
 def frame_size(s):
     """Width and height a reel renders at."""
-    return SHAPES["tall"] if s.get("format") == "stack" else SHAPES.get(s.get("shape"), SHAPES["tall"])
+    return SHAPES.get(s.get("shape"), SHAPES["tall"])
 
 
 def clean_settings(db, reel_id, s):
@@ -144,6 +145,9 @@ def clean_settings(db, reel_id, s):
     if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(s.get("dividerColor") or "")):
         s["dividerColor"] = DEFAULT_SETTINGS["dividerColor"]
     s["fitTop"] = bool(s.get("fitTop"))
+    s["fitTopBy"] = "quiet" if s.get("fitTopBy") == "quiet" else "speed"
+    s["topSpeed"] = round(min(max(float(s.get("topSpeed") or 1), 0.25), 16.0), 3)
+    s["stackIntro"] = beats_of(s.get("stackIntro"))
     if s.get("topItemId") is not None:
         s["topItemId"] = int(s["topItemId"])
         if not top_item(db, reel_id, {**s, "format": "stack"}):
@@ -183,6 +187,12 @@ def beats_of(v):
     """A part's beats: whole ones, or ½ and ¼ for quick photos (0 = the reel's)."""
     n = round(min(max(float(v or 0), 0.0), 64.0) * 4) / 4
     return int(n) if n == int(n) else n
+
+
+def pane_of(v):
+    if (v or "") not in PANES:
+        raise HTTPException(400, f"Unknown pane: {v}")
+    return v or ""
 
 
 def slug(name):
@@ -482,6 +492,7 @@ def item_values(m, body, s, pick=None):
             "lighten": unit(body.get("lighten", 0)),
             "beats": beats_of(body.get("beats")),
             "zoom": zoom_of(body.get("zoom", 1)), "layout": layout, "transition": transition,
+            "pane": pane_of(body.get("pane")), "top_after": beats_of(body.get("topAfter")),
             "keep": int(bool(body.get("keep", True)))}
 
 
@@ -526,7 +537,8 @@ def set_items(reel_id: int, body: dict = Body(...)):
                 old = db.execute("SELECT * FROM reel_items WHERE id = ?", (item_id,)).fetchone()
                 # Unsent fields keep what the part already had.
                 base = {"focusX": old["focus_x"], "focusY": old["focus_y"], "lighten": old["lighten"],
-                        "zoom": old["zoom"], "layout": old["layout"], "keep": bool(old["keep"])}
+                        "zoom": old["zoom"], "layout": old["layout"], "keep": bool(old["keep"]),
+                        "pane": old["pane"], "topAfter": old["top_after"]}
                 values = {**item_values(m, {**base, **body_item}, s), "position": pos}
                 sets = ", ".join(f"{k} = :{k}" for k in values)
                 db.execute(f"UPDATE reel_items SET {sets} WHERE id = :id", {**values, "id": item_id})
@@ -562,6 +574,10 @@ def update_item(item_id: int, body: dict = Body(...)):
     for key, col in (("focusX", "focus_x"), ("focusY", "focus_y")):
         if key in body:
             fields[col] = unit(body[key])
+    if "pane" in body:
+        fields["pane"] = pane_of(body["pane"])
+    if "topAfter" in body:
+        fields["top_after"] = beats_of(body["topAfter"])
     if not fields:
         return {"ok": True}
     with lib.connect() as db:
@@ -937,6 +953,12 @@ def build_config(reel, rows, grid_bpm=None):
     track = shelf.path_of(s.get("music")) if grid_bpm is None else None
     synced = bool((track or grid_bpm) and s.get("beatSync"))
     sources, seen = [], {}
+
+    def top_alone(beats, name):   # a Stack's top clip on its own: beats, or about the same at 120 bpm
+        sources.append({"id": name, "gap": True, **({"beats": beats} if synced else {"length": round(beats * 0.5, 2)})})
+
+    if top and s.get("stackIntro"):
+        top_alone(s["stackIntro"], "top alone")
     for n, row in enumerate(kept):
         stem = Path(row["name"]).stem[:14]
         seen[stem] = seen.get(stem, 0) + 1
@@ -961,7 +983,11 @@ def build_config(reel, rows, grid_bpm=None):
                 beats_of(row["beats"]) or int(s.get("beatsPerCut", 4)))
         if n + 1 < len(kept):
             entry["transition"] = row["transition"] or s.get("transition") or "cut"
+        if top and row["pane"] == "solo":
+            entry["pane"] = "solo"
         sources.append(entry)
+        if top and row["top_after"]:
+            top_alone(row["top_after"], f"top alone {n + 1}")
 
     w, h = frame_size(s)
     cfg = {"output": str(RENDERS / f"{slug(reel['name'])}.mp4"), "rounds": 1, "sources": sources,
@@ -977,6 +1003,11 @@ def build_config(reel, rows, grid_bpm=None):
             cfg["top"]["lighten"] = round(top["lighten"], 2)
         cfg["stack"] = {"split": s["stackSplit"], "divider": s["dividerPx"],
                         "divider_color": s["dividerColor"], "fit": bool(s["fitTop"])}
+        if not s["fitTop"] and abs(float(s.get("topSpeed") or 1) - 1) > 0.001:
+            cfg["stack"]["speed"] = float(s["topSpeed"])
+        if s["fitTop"] and s.get("fitTopBy") == "quiet":
+            cfg["stack"]["fit_by"] = "quiet"
+            cfg["top"]["activity"] = activity_of(ROOT / top["path"])["points"]
     if track:
         if not track.exists():
             raise HTTPException(400, f"Music file not found: {track}")
@@ -1535,6 +1566,11 @@ def activity(name: str, file: str):
     path = resolve(name, file)
     if Library.kind_of(path) != "video":
         raise HTTPException(400, "Not a video")
+    return activity_of(path)
+
+
+def activity_of(path):
+    """{points: [[seconds, 0..1], ...]} for a video, measured once and cached."""
     key = hashlib.sha1(f"activity|{path}|{path.stat().st_mtime}".encode()).hexdigest()
     out = CACHE / f"{key}.json"
     if not out.exists():

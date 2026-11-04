@@ -319,6 +319,8 @@ def build_plan(cfg, base_dir, beats, voice=None):
     total_rounds = int(total_rounds)
 
     for src in sources:
+        if src.get("gap"):   # a Stack reel's "top alone": no footage underneath
+            continue
         path = (base_dir / src["file"]).expanduser()
         if not path.exists():
             sys.exit(f"File not found: {path}")
@@ -331,7 +333,14 @@ def build_plan(cfg, base_dir, beats, voice=None):
     plan, warnings = [], []
     for r in range(1, total_rounds + 1):
         for src in sources:
+            if src.get("gap"):
+                plan.append({"kind": "gap", "label": src.get("id", "top alone"), "round": r,
+                             "start": 0.0, "pane": "gap", "transition": "cut",
+                             "seconds": float(src.get("length", 2.0)),
+                             "beats": beat_count(src.get("beats"), 4)})
+                continue
             label = src.get("id", src["_path"].stem)
+            pane = "solo" if src.get("pane") == "solo" else "split"
             if src["_is_image"]:
                 if r in rounds_for_image(src, total_rounds):
                     plan.append({"kind": "image", "path": src["_path"], "label": label,
@@ -339,7 +348,7 @@ def build_plan(cfg, base_dir, beats, voice=None):
                                  "transition": src.get("transition"),
                                  "lighten": float(src.get("lighten", 0) or 0),
                                  "zoom": float(src.get("zoom", 1) or 1),
-                                 "fit": src.get("fit"),
+                                 "fit": src.get("fit"), "pane": pane,
                                  "seconds": float(src.get("hold", default_hold)),
                                  "beats": beat_count(src.get("hold_beats"), beats_per_cut * 2)})
                 continue
@@ -359,7 +368,7 @@ def build_plan(cfg, base_dir, beats, voice=None):
                          "transition": src.get("transition"),
                          "lighten": float(src.get("lighten", 0) or 0),
                          "zoom": float(src.get("zoom", 1) or 1),
-                         "fit": src.get("fit"),
+                         "fit": src.get("fit"), "pane": pane,
                          "has_audio": src["_has_audio"],
                          "seconds": float(src.get("length", default_len)),
                          "beats": beat_count(src.get("beats"), beats_per_cut)})
@@ -421,7 +430,9 @@ def build_plan(cfg, base_dir, beats, voice=None):
         if i + 1 < len(plan):
             nxt = plan[i + 1]
             style = seg.get("transition")
-            if style == "zoom":            # a hard cut; the next shot punches in
+            if "gap" in (seg["kind"], nxt["kind"]) or seg.get("pane") != nxt.get("pane"):
+                pass   # the Stack's panes move here: their slide is the transition
+            elif style == "zoom":            # a hard cut; the next shot punches in
                 nxt["punch_in"] = min(PUNCH_D, nxt["length"])
                 seg["label_after"] = "zoom punch-in"
             else:
@@ -496,9 +507,36 @@ def fit_filter(cfg, src_label, out_label, focus=(0.5, 0.5), zoom=1.0, fit=None):
     sys.exit(f"Unknown fit mode: {fit} (use fill, blur, or pad)")
 
 
+def gap_footage(plan, i):
+    """What plays underneath during "top alone" (plan[i]): the part before it
+    carries on, so it doesn't freeze while it slides away; at the very start,
+    nothing (it's never seen). Silent either way."""
+    seg = plan[i]
+    prev = plan[i - 1] if i > 0 else None
+    while prev is not None and prev["kind"] == "gap":
+        prev = prev.get("_from")
+    if prev is None:
+        return {**seg, "kind": "blank"}
+    out = {**prev, **{k: seg[k] for k in ("length", "render_length", "label", "round")},
+           "has_audio": False, "punch_in": 0.0, "whip_in": 0.0, "whip_out": 0.0,
+           "hold_extra": seg.get("hold_extra", 0.0), "_from": prev}
+    if prev["kind"] == "video":
+        out["start"] = prev["start"] + prev["length"]
+    return out
+
+
 def render_segment(seg, idx, cfg, workdir, keep_audio):
     """Render one cut to a uniform intermediate (x264 + PCM in mkv)."""
     w, h, fps = cfg["width"], cfg["height"], cfg["fps"]
+    if seg["kind"] == "blank":
+        out = workdir / f"seg_{idx:03d}.mkv"
+        length = seg["render_length"]
+        run(["ffmpeg", "-nostdin", "-y", "-v", "error",
+             "-f", "lavfi", "-i", f"color=c=black:s={w}x{h}:r={fps}",
+             "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+             "-t", f"{length:.4f}", "-map", "0:v", "-map", "1:a", *video_codec(cfg),
+             "-r", str(fps), "-c:a", "pcm_s16le", str(out)])
+        return out
     length = seg["render_length"]
     n_frames = round(length * fps)
     out = workdir / f"seg_{idx:03d}.mkv"
@@ -602,14 +640,30 @@ def assemble(segs, plan, cfg, workdir):
     return out
 
 
-def load_top(cfg, base_dir):
-    """A stack piece: `top:` is a clip shown in the top pane for the whole
-    piece, `stack:` the split and the divider. The cuts play underneath, so
-    this narrows cfg's height to the bottom pane. Returns the top, or None.
+SLIDE = 0.5          # seconds the Stack's panes take to slide into a new layout
+QUIET_KEEP = 3.0     # quiet cuts never leave a piece shorter than this
+QUIET_GAP = 12.0     # ... and take out about this much at a time, at most
+QUIET_LEVEL = 0.22   # "nothing much happening": movement below this share of the clip's busiest
+QUIET_MIN = 1.5      # a lull has to last this long to be cut out
 
-    With stack fit on (the default) the top clip is sped up or slowed down to
-    end with the cuts; with it off, the piece is as long as the top clip at
-    normal speed and the cuts are cut short, or hold their last frame."""
+
+def load_top(cfg, base_dir):
+    """A stack piece: `top:` is a clip shown in the top pane (the left one in
+    a wide frame), `stack:` the split and the divider. The cuts play in the
+    other pane, so this narrows cfg's height (or width) to it. Returns the
+    top, or None.
+
+    With stack fit on (the default) the top clip is made to end with the
+    cuts: sped up or slowed down (fit_by: speed), or with its quiet stretches
+    taken out (fit_by: quiet, from `top.activity`). With it off, the top
+    clip plays at normal speed: a piece whose layout never changes is then
+    as long as the top clip, and the cuts are cut short or hold their last
+    frame.
+
+    A cut can fill the frame on its own (pane: solo) and a `gap:` source is
+    the top clip on its own; then the panes slide between the layouts, a
+    pane on its own sits in the middle over a blurred copy of itself, and
+    the top clip pauses while it's off screen."""
     top = cfg.get("top")
     if not top:
         return None
@@ -621,55 +675,302 @@ def load_top(cfg, base_dir):
     length = parse_time(top.get("length")) or duration - start
     length = max(0.2, min(length, duration - start))
     st = cfg.get("stack") or {}
-    h = cfg["height"]
+    axis = "x" if cfg["width"] > cfg["height"] else "y"   # side by side in a wide frame
+    along = "width" if axis == "x" else "height"
+    full = cfg[along]
     divider = min(max(int(st.get("divider", 4)) // 2 * 2, 0), 40)
     split = min(max(float(st.get("split", 0.5)), 0.1), 0.9)
-    top_h = round((h - divider) * split / 2) * 2
-    out = {"path": path, "start": start, "length": length, "height": top_h,
+    top_size = round((full - divider) * split / 2) * 2
+    out = {"path": path, "start": start, "length": length, "axis": axis, "along": along,
+           "size": top_size, "full": full, "under": full - divider - top_size,
+           "width": top_size if axis == "x" else cfg["width"],
+           "height": top_size if axis == "y" else cfg["height"],
            "focus": top.get("focus", (0.5, 0.5)), "zoom": float(top.get("zoom", 1) or 1),
-           "lighten": float(top.get("lighten", 0) or 0), "full_height": h,
+           "lighten": float(top.get("lighten", 0) or 0),
            "divider": divider, "color": str(st.get("divider_color", "#f7f1e3")).replace("#", "0x"),
-           "fit": bool(st.get("fit", True))}
-    cfg["height"] = h - divider - top_h
+           "fit": bool(st.get("fit", True)),
+           "fit_by": "quiet" if st.get("fit_by") == "quiet" else "speed",
+           "speed": min(max(float(st.get("speed", 1) or 1), 0.25), 16.0),   # with fit off
+           "activity": [(float(t), float(v)) for t, v in top.get("activity") or []]}
+    cfg[along] = out["under"]
     return out
 
 
-def top_length(top, under):
+def layout_keys(plan, fps):
+    """Where the Stack's layout is over time, as [(frame, x)]: x is -1 with
+    the top clip alone, 0 split, 1 the cuts alone; between two keys it
+    eases from one to the other. Each change starts at the cut and slides
+    for SLIDE seconds (less if the next change comes sooner)."""
+    state = {"gap": -1, "solo": 1}
+    marks, f = [], 0
+    for seg in plan:
+        marks.append((f, state.get(seg.get("pane"), 0)))
+        f += round(seg["length"] * fps)
+    total = f
+    changes = [marks[0]] + [(b, x) for (b, x), (_, prev) in zip(marks[1:], marks) if x != prev]
+    keys = [changes[0]]
+    for i, (b, x) in enumerate(changes[1:], 1):
+        nxt = changes[i + 1][0] if i + 1 < len(changes) else total
+        slide = max(1, min(round(SLIDE * fps), nxt - b))
+        keys += [(b, keys[-1][1]), (b + slide, x)]
+    return keys, total
+
+
+def x_at(keys, frame):
+    """The layout at a frame: as layout_expr, in Python."""
+    import math
+    x = keys[0][1]
+    for (f0, x0), (f1, x1) in zip(keys, keys[1:]):
+        if frame < f0:
+            break
+        if frame < f1 and f1 > f0:
+            u = (frame - f0) / (f1 - f0)
+            return x0 + (x1 - x0) * (0.5 - 0.5 * math.cos(math.pi * u))
+        x = x1
+    return x
+
+
+def layout_expr(keys, fps):
+    """x(t) for an ffmpeg expression: eased from key to key."""
+    out = f"{keys[-1][1]}"
+    for (f0, x0), (f1, x1) in reversed(list(zip(keys, keys[1:]))):
+        t0, t1 = f0 / fps, f1 / fps
+        if x0 == x1 or f1 <= f0:
+            piece = f"{x0}"
+        else:
+            piece = f"({x0}+({x1 - x0})*(0.5-0.5*cos(PI*(t-{t0:.4f})/{t1 - t0:.4f})))"
+        out = f"if(lt(t,{t1:.4f}),{piece},{out})"
+    return out
+
+
+def quiet_cut(points, start, length, need=None):
+    """Pieces [(start, length)] of the stretch start..start+length with its
+    quiet moments taken out. points are [(seconds, 0..1)] of how much
+    happens (the studio's movement measure).
+
+    With `need` (seconds), about length - need is taken out, a few seconds
+    at a time from the quietest stretches, so the pieces add up to need.
+    Without it, every lull (QUIET_LEVEL for QUIET_MIN seconds or more) is
+    taken out. Pieces are never shorter than QUIET_KEEP; the first and last
+    stay put. What can't be taken out is left in."""
+    end = start + length
+    step = 0.25
+    n = int(length / step)
+    if n < 4:
+        return [(start, length)]
+    pts = sorted(p for p in points if start - 2 <= p[0] <= end + 2)
+
+    def level(t):   # straight lines between the measured points
+        if not pts:
+            return 1.0
+        if t <= pts[0][0]:
+            return pts[0][1]
+        for (ta, va), (tb, vb) in zip(pts, pts[1:]):
+            if t <= tb:
+                return va + (vb - va) * (t - ta) / max(tb - ta, 1e-6)
+        return pts[-1][1]
+
+    raw = [level(start + (i + 0.5) * step) for i in range(n)]
+    act = [sum(raw[max(0, i - 2):i + 3]) / len(raw[max(0, i - 2):i + 3]) for i in range(n)]
+    keep_n = int(QUIET_KEEP / step)
+    gaps = []   # [(first bin, bins)] taken out
+
+    def free(a, k):   # a gap at bins a..a+k leaves every piece at least QUIET_KEEP
+        if a < keep_n or a + k > n - keep_n:
+            return False
+        return all(a + k + keep_n <= g or g + gk + keep_n <= a for g, gk in gaps)
+
+    lulls, i, min_k = [], 0, int(QUIET_MIN / step)
+    while i < n:   # stretches where nothing much happens, a moment in from each end
+        if act[i] < QUIET_LEVEL:
+            j = i
+            while j < n and act[j] < QUIET_LEVEL:
+                j += 1
+            if j - i - 2 >= min_k:
+                lulls.append((sum(act[i:j]) / (j - i), i + 1, j - i - 2))
+            i = j
+        else:
+            i += 1
+    drop = int(round(max(length - need, 0) / step)) if need is not None else n
+    for _, a, k in sorted(lulls):   # the quietest first
+        if drop <= 0:
+            break
+        if k > drop:                # only part of it is needed: from its middle
+            a, k = a + (k - drop) // 2, drop
+        while k >= 2 and not free(a, k):   # too near an end or another cut
+            a, k = a + 1, k - 2
+        if k >= 2:
+            gaps.append((a, k))
+            drop -= k
+    if need is not None:            # still too long: the quietest of what's left
+        k = min(drop, int(QUIET_GAP / step))
+        while drop > 0 and k >= 2:
+            k = min(k, drop)
+            options = [(sum(act[a:a + k]) / k, a) for a in range(n - k + 1) if free(a, k)]
+            if not options:   # no room for one this long: try shorter ones
+                k //= 2
+                continue
+            gaps.append((min(options)[1], k))
+            drop -= k
+    pieces, at = [], 0
+    for a, k in sorted(gaps):
+        pieces.append((round(start + at * step, 3), round((a - at) * step, 3)))
+        at = a + k
+    pieces.append((round(start + at * step, 3), round(end - (start + at * step), 3)))
+    return [p for p in pieces if p[1] > 0.05]
+
+
+def top_plan(top, keys, total, fps):
+    """How the top clip fills the time it's on screen: the frames it shows
+    (on the piece's clock), the pieces of the clip it plays and how fast."""
+    visible = [x_at(keys, f) < 0.999 for f in range(total)]
+    shown = sum(visible) / fps
+    pieces, rate = [(top["start"], top["length"])], top["speed"]
+    if top["fit"] and shown > 0:
+        if top["fit_by"] == "quiet":
+            pieces = quiet_cut(top["activity"], top["start"], top["length"], shown)
+            rate = max(1.0, sum(l for _, l in pieces) / shown)   # what couldn't be cut, sped up
+        else:
+            rate = top["length"] / shown
+    return visible, pieces, rate
+
+
+def top_length(top, under, keys=None):
     """How long the piece runs: the cuts' length when the top is fitted to
-    them, else the top clip's own length."""
-    return under if top["fit"] else round(top["length"] * 1000) / 1000
+    them or the layout changes, else the top clip's own length."""
+    moving = keys is not None and len(keys) > 1
+    return under if top["fit"] or moving or top["fit_by"] == "quiet" else round(top["length"] / top["speed"] * 1000) / 1000
 
 
-def compose_top(top, assembled, cfg, under, workdir):
-    """The top clip (sped to fit, or not) over the divider over the cuts."""
-    w, fps = cfg["width"], cfg["fps"]
+def lighten_eq(lift):
+    lift = min(max(lift, 0.0), 1.0)
+    return f"eq=gamma={1 + LIGHTEN_GAMMA * lift:.3f}:saturation={1 + 0.08 * lift:.3f}," if lift else ""
+
+
+def compose_top(top, assembled, cfg, under, workdir, plan=None):
+    """The top clip over the divider over the cuts (left of them, in a wide
+    frame). With a layout that changes (see load_top), compose_layout."""
+    fps = cfg["fps"]
+    keys, frames_total = layout_keys(plan, fps) if plan else ([(0, 0)], round(under * fps))
+    if len(keys) > 1 or top["fit_by"] == "quiet":
+        return compose_layout(top, assembled, cfg, keys, frames_total, workdir)
     total = top_length(top, under)
-    bottom_h = cfg["height"]
+    along = top["along"]
+    pane = cfg[along]
     out = workdir / "stacked.mkv"
-    cfg["height"] = top["height"]
+    cfg[along] = top["size"]
     graph = fit_filter(cfg, "0:v", "tfit", top["focus"], top["zoom"], "fill") + ";"
-    cfg["height"] = bottom_h
-    lift = min(max(top["lighten"], 0.0), 1.0)
-    eq = (f"eq=gamma={1 + LIGHTEN_GAMMA * lift:.3f}:saturation={1 + 0.08 * lift:.3f}," if lift else "")
-    speed = total / top["length"] if top["fit"] else 1.0
+    cfg[along] = pane
+    speed = total / top["length"] if top["fit"] else 1 / top["speed"]
     frames = round(total * fps)
-    graph += (f"[tfit]setpts=(PTS-STARTPTS)*{speed:.6f},fps={fps},{eq}setsar=1,format=yuv420p,"
-              f"trim=end_frame={frames},setpts=PTS-STARTPTS[top];")
+    graph += (f"[tfit]setpts=(PTS-STARTPTS)*{speed:.6f},fps={fps},{lighten_eq(top['lighten'])}setsar=1,"
+              f"format=yuv420p,trim=end_frame={frames},setpts=PTS-STARTPTS[top];")
     # Cuts shorter than the top clip hold their last frame (and go quiet).
     hold = max(total - under, 0)
     pad = f",tpad=stop_mode=clone:stop_duration={hold:.3f}" if hold > 0.001 else ""
     graph += (f"[1:v]setsar=1,format=yuv420p{pad},trim=end_frame={frames},setpts=PTS-STARTPTS[bot];"
               f"[1:a]apad,atrim=0:{total:.4f},asetpts=PTS-STARTPTS[a];")
+    stack = "hstack" if top["axis"] == "x" else "vstack"
     if top["divider"]:
-        graph += (f"color=c={top['color']}:s={w}x{top['divider']}:r={fps},format=yuv420p,"
-                  f"trim=end_frame={frames}[div];[top][div][bot]vstack=inputs=3[v]")
+        size = f"{top['divider']}x{cfg['height']}" if top["axis"] == "x" else f"{cfg['width']}x{top['divider']}"
+        graph += (f"color=c={top['color']}:s={size}:r={fps},format=yuv420p,"
+                  f"trim=end_frame={frames}[div];[top][div][bot]{stack}=inputs=3[v]")
     else:
-        graph += "[top][bot]vstack=inputs=2[v]"
+        graph += f"[top][bot]{stack}=inputs=2[v]"
     run(["ffmpeg", "-nostdin", "-y", "-v", "error",
          "-ss", f"{top['start']:.3f}", "-t", f"{top['length']:.3f}", "-i", str(top["path"]),
          "-i", str(assembled), "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
          *video_codec(cfg), "-r", str(fps), "-c:a", "pcm_s16le", str(out)])
-    cfg["height"] = top["full_height"]
+    cfg[along] = top["full"]
+    return out
+
+
+def compose_layout(top, assembled, cfg, keys, total, workdir):
+    """A Stack whose layout changes: the top clip, the divider and the cuts
+    each move to where the layout has them at every frame, over a blurred
+    copy of whichever pane is on its own. total is in frames."""
+    fps, along = cfg["fps"], top["along"]
+    cfg[along] = top["full"]
+    W, H = cfg["width"], cfg["height"]
+    visible, pieces, rate = top_plan(top, keys, total, fps)
+    shown = sum(visible)
+
+    # 1. The top clip as it plays while on screen: its pieces, one after
+    #    another, framed to its pane (and held on its last frame if short).
+    seq = workdir / "top_seq.mkv"
+    tcfg = {**cfg, "width": top["width"], "height": top["height"]}
+    cmd, graph = ["ffmpeg", "-nostdin", "-y", "-v", "error"], []
+    for i, (s, l) in enumerate(pieces):
+        cmd += ["-ss", f"{s:.3f}", "-t", f"{l:.3f}", "-i", str(top["path"])]
+        graph.append(fit_filter(tcfg, f"{i}:v", f"f{i}", top["focus"], top["zoom"], "fill")
+                     + f";[f{i}]setpts=(PTS-STARTPTS)/{rate:.6f},fps={fps},setsar=1,format=yuv420p[p{i}]")
+    graph.append("".join(f"[p{i}]" for i in range(len(pieces)))
+                 + f"concat=n={len(pieces)}:v=1:a=0,{lighten_eq(top['lighten'])}"
+                 + f"tpad=stop_mode=clone:stop_duration={total / fps + 1:.3f},"
+                 + f"trim=end_frame={max(shown, 1)},setpts=PTS-STARTPTS[v]")
+    run(cmd + ["-filter_complex", ";".join(graph), "-map", "[v]", *video_codec(cfg), "-r", str(fps), str(seq)])
+
+    # 2. ... on the piece's clock: playing while on screen, paused while not.
+    runs, f = [], 0
+    while f < total:
+        g = f
+        while g < total and visible[g] == visible[f]:
+            g += 1
+        runs.append((visible[f], g - f))
+        f = g
+    shows = [n for on, n in runs if on] or [1]
+    graph = [f"[0:v]split={len(shows)}" + "".join(f"[s{i}]" for i in range(len(shows)))]
+    at, chunks, k = 0, [], -1
+    for j, (on, n) in enumerate(runs):
+        if on:
+            k += 1
+            pre = (f"tpad=start_mode=clone:start_duration={runs[0][1] / fps:.4f},"
+                   if k == 0 and j == 1 else "")
+            post = (f",tpad=stop_mode=clone:stop_duration={runs[j + 1][1] / fps:.4f}"
+                    if j + 1 < len(runs) else "")
+            graph.append(f"[s{k}]trim=start_frame={at}:end_frame={at + n},setpts=PTS-STARTPTS,"
+                         f"{pre}setpts=PTS-STARTPTS{post}[c{k}]")
+            chunks.append(f"[c{k}]")
+            at += n
+    if not chunks:   # never on screen
+        graph.append(f"[s0]trim=end_frame=1,tpad=stop_mode=clone:stop_duration={total / fps:.4f}[c0]")
+        chunks = ["[c0]"]
+    graph.append("".join(chunks) + f"concat=n={len(chunks)}:v=1:a=0,trim=end_frame={total},"
+                 "setpts=PTS-STARTPTS,split[A][Ab]")
+
+    # 3. Where everything sits. x: -1 top alone, 0 split, 1 cuts alone.
+    X = f"({layout_expr(keys, fps)})"
+    L, a, b, d = top["full"], top["size"], top["under"], top["divider"]
+    pos_a = f"if(lt({X},0),{(L - a) / 2}*(-{X}),-{a + d}*{X})"
+    pos_b = f"if(lt({X},0),{L - b}+{d + b}*(-{X}),{a + d}+{(L - b) / 2 - (a + d)}*{X})"
+    pos_d = f"if(lt({X},0),{L - b - d}+{d + b}*(-{X}),{a}-{a + d}*{X})"
+    seconds = total / fps
+
+    def at_xy(pos):
+        return f"x='{pos}':y=0" if top["axis"] == "x" else f"x=0:y='{pos}'"
+
+    blur = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
+            f"boxblur=30:5,eq=brightness=-0.06")
+    graph += [f"[1:v]setsar=1,format=yuv420p,tpad=stop_mode=clone:stop_duration={seconds:.4f},"
+              f"trim=end_frame={total},setpts=PTS-STARTPTS,split[B][Bb]",
+              f"[Ab]{blur}[bgA]", f"[Bb]{blur}[bgB]",
+              f"color=c=black:s={W}x{H}:r={fps}:d={seconds:.4f},format=yuv420p[base]",
+              f"[base][bgA]overlay=enable='lt({X},-0.001)'[l1]",
+              f"[l1][bgB]overlay=enable='gt({X},0.001)'[l2]",
+              f"[l2][A]overlay={at_xy(pos_a)}[l3]",
+              f"[l3][B]overlay={at_xy(pos_b)}[l4]"]
+    last = "[l4]"
+    if d:
+        size = f"{d}x{H}" if top["axis"] == "x" else f"{W}x{d}"
+        graph += [f"color=c={top['color']}:s={size}:r={fps}:d={seconds:.4f},format=yuv420p[div]",
+                  f"[l4][div]overlay={at_xy(pos_d)}[l5]"]
+        last = "[l5]"
+    graph += [f"{last}format=yuv420p,trim=end_frame={total}[v]",
+              f"[1:a]apad,atrim=0:{seconds:.4f},asetpts=PTS-STARTPTS[a]"]
+    out = workdir / "stacked.mkv"
+    run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(seq), "-i", str(assembled),
+         "-filter_complex", ";".join(graph), "-map", "[v]", "-map", "[a]",
+         *video_codec(cfg), "-r", str(fps), "-c:a", "pcm_s16le", str(out)])
     return out
 
 
@@ -1578,7 +1879,9 @@ def main():
     print(f"\n{len(plan)} cuts, {total:.1f}s total\n")
     t = 0.0
     for seg in plan:
-        where = "hold" if seg["kind"] == "image" else f"from {fmt(seg['start'])}"
+        where = {"image": "hold", "gap": ""}.get(seg["kind"], f"from {fmt(seg['start'])}")
+        if seg.get("pane") == "solo":
+            where += " (alone)"
         layout = ""
         if seg.get("fit"):
             layout = f"  [{seg['fit']}]"
@@ -1588,17 +1891,38 @@ def main():
         elif seg["label_after"]:
             print(f"  {'':>7}      ~ {seg['label_after']}")
         t += seg["length"]
+    keys = layout_keys(plan, cfg["fps"])[0] if top else None
     if top:
         line = (f"\n  top: {top['path'].name} {fmt(top['start'])} -> "
                 f"{fmt(top['start'] + top['length'])} · Top {fmt(top['length'])} · Underneath {fmt(total)}")
-        if top["fit"]:
-            line += f" · timelapse at {top['length'] / total:.2f}x"
-        elif total > top["length"]:
-            line += f" · underneath cut at {fmt(top['length'])}"
-        elif total < top["length"]:
-            line += f" · last part holds {top['length'] - total:.1f}s"
-        print(line)
-    length = top_length(top, total) if top else total
+        if len(keys) > 1 or top["fit_by"] == "quiet":
+            frames = round(total * cfg["fps"])
+            visible, pieces, rate = top_plan(top, keys, frames, cfg["fps"])
+            shown = sum(visible) / cfg["fps"]
+            line += f" · on screen {fmt(shown)}"
+            if len(pieces) > 1:
+                line += f" · {len(pieces)} pieces, {fmt(top['length'] - sum(l for _, l in pieces))} quiet taken out"
+            if abs(rate - 1) > 0.005:
+                line += f" · at {rate:.2f}x"
+            print(line)
+            if len(pieces) > 1:
+                print("        " + "  ".join(f"{fmt(s)}+{l:.1f}s" for s, l in pieces))
+            names = {-1: "top alone", 0: "split", 1: f"{'right' if top['axis'] == 'x' else 'underneath'} alone"}
+            moves = [keys[0]] + [(f, x) for (f, _), (_, x) in zip(keys[1::2], keys[2::2])]
+            print("  layout: " + " · ".join(f"{fmt(f / cfg['fps'])} {names[x]}" for f, x in moves))
+        else:
+            run_len = top["length"] / top["speed"]
+            if top["fit"]:
+                line += f" · timelapse at {top['length'] / total:.2f}x"
+            else:
+                if abs(top["speed"] - 1) > 0.005:
+                    line += f" · at {top['speed']:.2f}x, {fmt(run_len)}"
+                if total > run_len:
+                    line += f" · underneath cut at {fmt(run_len)}"
+                elif total < run_len:
+                    line += f" · last part holds {run_len - total:.1f}s"
+            print(line)
+    length = top_length(top, total, keys) if top else total
     times = card_times(cards, plan, length)
     for card in cards:
         start, end = times[card["kind"]]
@@ -1637,13 +1961,16 @@ def main():
         segs = []
         for i, seg in enumerate(plan):
             print(f"  cutting {i + 1}/{len(plan)}: {seg['label']}          ", end="\r")
+            if seg["kind"] == "gap":
+                seg = gap_footage(plan, i)
+                plan[i]["_from"] = seg.get("_from")
             segs.append(render_segment(seg, i, cfg, workdir, keep_audio))
         print("  joining cuts...                         ", end="\r")
         assembled = assemble(segs, plan, cfg, workdir)
         if top:
             print("  stacking under the top clip...          ", end="\r")
-            assembled = compose_top(top, assembled, cfg, total, workdir)
-            total = top_length(top, total)
+            assembled = compose_top(top, assembled, cfg, total, workdir, plan)
+            total = top_length(top, total, keys)
         if cap_lines:
             print("  laying the captions over...             ", end="\r")
             assembled = add_captions(assembled, cap_lines, cap, cfg, base_dir, total, workdir)

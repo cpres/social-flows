@@ -159,7 +159,7 @@ blurred sides), and captions keep to a centred column so they stay the size
 they'd be on a square. Glasses footage is 3:4, so a square keeps its whole
 width; *Square, framed to the bottom* there (also in Weave's Moments) picks
 square and frames every part on the bottom of its shot, where the hands are,
-at full width. A Stack reel is always 9:16. The preview shows each clip
+at full width. A Stack reel in 16:9 puts its panes side by side. The preview shows each clip
 as it will appear in the reel. When a clip isn't exactly the reel's shape,
 the part the reel keeps is outlined and the rest dimmed. *Framing* in the part
 editor puts the window at the *Top*, *Middle* or *Bottom* at full width, and
@@ -186,12 +186,46 @@ or click ⤒ on a part, to put that one on top; drag it back into the list (or
 with "timelapse" in its name, else the longest; switching back to Standard
 makes the top clip the first part again. The top clip's start and length pick
 which stretch of it plays; drag its window to frame it. Settings has the
-split (50/50 by default), the divider's thickness and colour, and *Fit
-timelapse to underneath* (on): the top clip speeds up or slows down to end with
-the parts. Turned off, the reel runs as long as the top clip at normal speed;
-the parts are cut where it ends, or the last one holds. The line under the
-timeline shows the lengths and the speed. The top clip is silent; the parts
-keep their sound.
+split (50/50 by default), the divider's thickness and colour, and the *Top
+clip speed*:
+
+- *Fit to the parts* (the default): it speeds up or slows down to end with the
+  parts.
+- *Cut quiet moments to fit*: it plays at normal speed, and the stretches
+  where nothing much happens (the same movement measure as Weave's) are cut
+  out until it ends with the parts. The quietest go first, a few seconds at a
+  time, and no piece is left shorter than 3s. If that isn't enough, what's
+  left is sped up a little. The top track shows how many pieces it plays.
+- *Its own speed*: ½× to 8×, whatever you pick. If the layout never changes,
+  the reel runs as long as the top clip at that speed, and the parts are cut
+  where it ends, or the last one holds.
+
+The line under the timeline shows the lengths and the speed. The top clip is
+silent; the parts keep their sound.
+
+**Moving between one and two.** A Stack doesn't have to be split the whole
+way through:
+
+- *Open on the top clip alone* (Settings, in beats) starts on the top clip
+  by itself, in the middle of the frame over a blurred copy of itself, then
+  slides it up (left, in 16:9) as the parts come in from the bottom (right).
+- *In the stack → On its own* (a part's editor) gives that part the frame:
+  the top clip slides away and the part moves to the middle. The next part
+  that's *With the top clip* brings it back.
+- *Then the top clip alone* (2, 4 or 8 beats) after a part sends the parts
+  away for a while.
+
+The top clip pauses while it's off screen and picks up where it left off;
+the part underneath carries on out of sight while it slides away. Each slide
+takes half a second. On the strip, a hatched ▤ block is the top clip alone,
+and a part on its own has a green underline. Without beat sync a beat counts
+as half a second.
+
+**Take out quiet moments.** A long video part (8s or more) with boring
+stretches in it has *✂ Take out quiet moments* in its editor. It cuts the
+part where nothing much happens (a lull of 1.5s or more) into parts one
+after another, each 3s or longer, which you can trim, move or skip like
+any other, the way you edit a weave.
 
 **Voice & captions.** *🎙 Voice* (in a reel's header) lays a reading over the
 footage, a poem or an idea, with its words on screen as they're said.

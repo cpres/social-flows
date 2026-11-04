@@ -195,13 +195,43 @@
               Divider colour
               <input type="color" v-model="settings.dividerColor" />
             </label>
-            <label class="field check">
-              <span><input type="checkbox" v-model="settings.fitTop" /> Fit timelapse to underneath</span>
-              <small>{{ settings.fitTop ? 'The top clip speeds up or slows down to end with the parts underneath.'
-                : 'The reel runs as long as the top clip at normal speed.' }}</small>
+            <div class="field span2">
+              Top clip speed
+              <div class="shapes">
+                <button
+                  class="btn small" :class="{ active: settings.fitTop && settings.fitTopBy !== 'quiet' }"
+                  @click="settings.fitTop = true; settings.fitTopBy = 'speed'"
+                  title="Sped up (a timelapse) or slowed down to end with the parts underneath"
+                >Fit to the parts</button>
+                <button
+                  class="btn small" :class="{ active: settings.fitTop && settings.fitTopBy === 'quiet' }"
+                  @click="settings.fitTop = true; settings.fitTopBy = 'quiet'"
+                  title="Normal speed: its quiet stretches are cut out until it ends with the parts underneath"
+                >Cut quiet moments to fit</button>
+                <button
+                  class="btn small" :class="{ active: !settings.fitTop }" @click="settings.fitTop = false"
+                  title="A speed you pick"
+                >Its own speed</button>
+                <select v-if="!settings.fitTop" v-model.number="settings.topSpeed">
+                  <option v-for="r in TOP_SPEEDS" :key="r" :value="r">{{ r }}×</option>
+                </select>
+              </div>
+              <small>{{ settings.fitTop
+                ? (settings.fitTopBy === 'quiet' ? 'Plays at normal speed; where nothing much happens is cut out so it ends with the parts.'
+                  : `Ends with the parts: ${topRate.toFixed(2)}× here.`)
+                : moving ? 'Holds its last frame if it runs out before the parts do.'
+                  : `The reel runs as long as the top clip at that speed (${fmtTime(topRun)}).` }}</small>
+            </div>
+            <label class="field">
+              Open on the top clip alone
+              <select v-model.number="settings.stackIntro">
+                <option :value="0">No, split from the start</option>
+                <option v-for="b in [2, 4, 8, 16]" :key="b" :value="b">{{ b }} beats{{ synced ? ` ≈ ${(b * period).toFixed(1)}s` : ` ≈ ${b / 2}s` }}</option>
+              </select>
+              <small>Then it slides {{ settings.shape === 'wide' ? 'left' : 'up' }} as the parts come in.</small>
             </label>
           </template>
-          <div class="field" v-if="!isStack">
+          <div class="field">
             Shape
             <div class="shapes">
               <button
@@ -214,7 +244,7 @@
           <label class="field">
             {{ isStack ? 'Underneath framing' : 'Framing' }}
             <select v-model="settings.fit">
-              <option value="fill">Fill (crop to {{ isStack ? '9:16' : shapeOf(settings.shape).short }})</option>
+              <option value="fill">Fill (crop to {{ isStack ? 'the pane' : shapeOf(settings.shape).short }})</option>
               <option value="blur">Blurred background</option>
               <option value="pad">Brand colour bars</option>
             </select>
@@ -276,18 +306,24 @@
         <button
           v-if="topPart" class="seg topseg" :class="{ current: topPart === current }"
           @click="select(items.indexOf(topPart))" :title="`${topPart.media.file}: plays on top for the whole reel`"
-        >▤ {{ topPart.media.file }} · {{ topRate.toFixed(2) }}×</button>
+        >▤ {{ topPart.media.file }} · {{ quietFit && topFill.pieces.length > 1 ? `${topFill.pieces.length} pieces` : `${topRate.toFixed(2)}×` }}</button>
         <span v-else class="muted toptrack-empty">No top clip: drag one to the Top slot</span>
         <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
       </div>
       <div class="strip">
-        <button
-          v-for="p in kept" :key="p.id" class="seg"
-          :class="{ current: p === current, playing: reelOn && p === current, photo: p.media.kind === 'photo' }"
-          :style="{ flexGrow: len(p) }" :title="`${p.media.file} · ${len(p).toFixed(1)}s`"
-          :data-past="pastEnd(p) || null"
-          @click="jumpTo(p)"
-        >{{ synced ? `${fmtBeats(beatsOf(p))}♩` : len(p).toFixed(1) }}</button>
+        <template v-for="st in stretches" :key="st.key">
+          <div
+            v-if="st.kind === 'gap'" class="seg gap" :style="{ flexGrow: st.end - st.start }"
+            :title="`The top clip alone · ${st.beats} beats`"
+          >▤</div>
+          <button
+            v-else class="seg"
+            :class="{ current: st.part === current, playing: reelOn && st.part === current, photo: st.part.media.kind === 'photo', solo: topPart && st.part.pane === 'solo' }"
+            :style="{ flexGrow: len(st.part) }" :title="`${st.part.media.file} · ${len(st.part).toFixed(1)}s` + (topPart && st.part.pane === 'solo' ? ' · on its own' : '')"
+            :data-past="pastEnd(st.part) || null"
+            @click="jumpTo(st.part)"
+          >{{ synced ? `${fmtBeats(beatsOf(st.part))}♩` : len(st.part).toFixed(1) }}</button>
+        </template>
         <div
           v-for="(x, i) in beatTicks" :key="i" class="tick" :class="{ bar: i % 4 === 0 }"
           :style="{ left: `${x}%` }"
@@ -394,7 +430,8 @@
           <StackFrame
             v-else-if="isStack && topPart" :split="settings.stackSplit" :divider-px="settings.dividerPx"
             :divider-color="settings.dividerColor" :editing="current === topPart ? 'top' : 'under'"
-            :top-t="topT" :top-rate="topRate" :top-playing="reelOn" :guides="guides"
+            :frame-w="shapeOf(settings.shape).w" :frame-h="shapeOf(settings.shape).h" :x="stackX" :backdrop="stackBackdrop"
+            :top-t="topT" :top-rate="topRate" :top-playing="reelOn && stackX < 0.999" :guides="tall && guides"
           >
             <template #top="{ maxH, out, bindTop }">
               <ReelFrame
@@ -430,7 +467,7 @@
             </p>
             <template #overlay><CaptionLayer v-if="showCaptions" v-bind="captionProps" /></template>
           </ReelFrame>
-          <label class="guides-toggle muted" v-if="isStack || tall"><input type="checkbox" v-model="guides" /> Show Instagram overlays <kbd>G</kbd></label>
+          <label class="guides-toggle muted" v-if="tall"><input type="checkbox" v-model="guides" /> Show Instagram overlays <kbd>G</kbd></label>
           <audio ref="audioEl" v-if="musicUrl" :src="musicUrl" preload="auto" @ended="onSongEnded"></audio>
           <video
             v-if="reelOn && nextMedia" class="preload" muted preload="auto"
@@ -462,9 +499,11 @@
           :duration="current.media.duration" @update="setRange"
         >
           <p v-if="current === topPart" class="topnote muted">
-            ▤ On top for the whole reel: {{ fmtTime(current.length) }} of the clip
-            {{ settings.fitTop ? `over ${fmtTime(underLength)}, at ${topRate.toFixed(2)}×` : 'at normal speed' }}.
-            No cuts or transitions up here; drag the window above to reframe.
+            ▤ On top {{ moving ? `while it's on screen (${fmtTime(topShown)})` : 'for the whole reel' }}: {{ fmtTime(current.length) }} of the clip
+            <template v-if="quietFit && topFill.pieces.length > 1">in {{ topFill.pieces.length }} pieces, its quiet stretches cut out{{ topRate > 1.005 ? `, at ${topRate.toFixed(2)}×` : '' }}</template>
+            <template v-else>at {{ topRate.toFixed(2) }}×</template>.
+            Change its speed under Settings → Top clip speed.
+            It pauses while a part is on its own. Drag the window above to reframe.
           </p>
           <label class="field check" v-if="current !== topPart">
             <span><input type="checkbox" :checked="current.keep" @change="setKeep(current, $event.target.checked)" /> In the cut <kbd>X</kbd></span>
@@ -505,6 +544,26 @@
               <button class="btn small" @click="framingAll(current)" title="Frame every part the way this one is">Use on every part</button>
             </div>
           </div>
+          <template v-if="isStack && topPart && current !== topPart && current.keep">
+            <div class="tpick">
+              <span class="muted">In the stack</span>
+              <div>
+                <button class="btn small" :class="{ active: current.pane !== 'solo' }" @click="setPane(current, '')"
+                        title="Split with the top clip">With the top clip</button>
+                <button class="btn small" :class="{ active: current.pane === 'solo' }" @click="setPane(current, 'solo')"
+                        title="Fills the frame on its own; the top clip slides away and pauses">On its own</button>
+              </div>
+            </div>
+            <div class="tpick">
+              <span class="muted">Then the top clip alone</span>
+              <div>
+                <button
+                  v-for="b in [0, 2, 4, 8]" :key="b" class="btn small" :class="{ active: (current.topAfter || 0) === b }"
+                  @click="setTopAfter(current, b)" :title="b ? `${b} beats of the top clip on its own after this part` : 'Straight on to the next part'"
+                >{{ b ? `${b} beats` : 'No' }}</button>
+              </div>
+            </div>
+          </template>
           <div class="tpick" v-if="current !== topPart">
             <span class="muted">Layout</span>
             <div>
@@ -524,6 +583,11 @@
             </div>
           </div>
           <button class="btn small" @click="duplicate(current)" v-if="current.media.kind === 'video' && current !== topPart">Use another part of this clip</button>
+          <button
+            class="btn small" v-if="current.media.kind === 'video' && current !== topPart && current.length >= 8" :disabled="splitting"
+            @click="splitQuiet(current)" title="Cut this part where nothing much happens, into parts you can trim like a weave"
+          >{{ splitting ? 'Looking for quiet moments…' : '✂ Take out quiet moments' }}</button>
+          <small v-if="splitNote" class="muted">{{ splitNote }}</small>
           <button class="btn small" @click="unTop" v-if="current === topPart">Move underneath</button>
           <button class="btn small" @click="remove(current)">Remove from reel</button>
         </TimingFields>
@@ -573,6 +637,7 @@ import SongPicker from '../components/SongPicker.vue'
 import ComposePanel from '../components/ComposePanel.vue'
 import ReelFrame from '../components/ReelFrame.vue'
 import { SHAPES, shapeOf, shapeRatio } from '../shapes'
+import { layoutKeys, quietCut, shownBy, topPlan, topSource, xAt } from '../stack'
 import StackFrame from '../components/StackFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
 import TrimBar from '../components/TrimBar.vue'
@@ -656,8 +721,8 @@ const topPart = computed(() => (settings.format === 'stack'
   : null))
 const kept = computed(() => items.value.filter((p) => p.keep && !p.media.missing && p !== topPart.value))
 // Fit off, a Stack reel runs as long as its top clip.
-const reelLength = computed(() => (topPart.value && !settings.fitTop
-  ? topPart.value.length : (bounds.value[bounds.value.length - 1] || 0) + voiceHold.value))
+const reelLength = computed(() => (topPart.value && !settings.fitTop && !moving.value
+  ? topRun.value : partsEnd.value + voiceHold.value))
 const player = usePlayer(() => current.value && { start: current.value.start, length: len(current.value) })
 const reelName = (rid) => reels.value.find((r) => r.id === rid)?.name ?? 'reel'
 
@@ -952,24 +1017,38 @@ const beatAt = (i) => {
 }
 const beatsOf = (p) => p.beats || Number(settings.beatsPerCut) || 4
 
-// Where each kept part starts on the reel's timeline (plus the end).
-const bounds = computed(() => {
-  const out = [0]
-  if (synced.value && grid.value) {
-    let c = 0
-    for (const p of kept.value) { c += beatsOf(p); out.push(beatAt(c)) }
-  } else {
-    for (const p of kept.value) out.push(out[out.length - 1] + p.length)
+// The reel's stretches, in order: the kept parts and, in a Stack, the top
+// clip alone (at the start, and after any part that asks for it), a number
+// of beats long (about the same at 120 bpm without beat sync). Each gets its
+// start and end on the reel's timeline.
+const stretches = computed(() => {
+  const out = []
+  const stack = !!topPart.value
+  if (stack && Number(settings.stackIntro) > 0) out.push({ kind: 'gap', key: 'intro', beats: Number(settings.stackIntro) })
+  for (const p of kept.value) {
+    out.push({ kind: 'part', key: p.id, part: p, beats: beatsOf(p), secs: p.length })
+    if (stack && p.topAfter > 0) out.push({ kind: 'gap', key: `after${p.id}`, part: p, beats: p.topAfter })
+  }
+  let c = 0
+  let t = 0
+  for (const st of out) {
+    st.start = t
+    if (synced.value && grid.value) { c += st.beats; t = beatAt(c) } else t += st.kind === 'gap' ? st.beats * 0.5 : st.secs
+    st.end = t
   }
   return out
 })
+const spans = computed(() => stretches.value.filter((st) => st.kind === 'part'))
+const partsEnd = computed(() => stretches.value[stretches.value.length - 1]?.end || 0)
+const partStart = (k) => spans.value[k]?.start ?? partsEnd.value
+const partEnd = (k) => spans.value[k]?.end ?? partsEnd.value
 // How long a part plays: its beats when cutting on the beat, else its length.
 function len(p) {
   if (!p) return 0
   if (p === topPart.value) return p.length
   if (!synced.value) return p.length
   const k = kept.value.indexOf(p)
-  return k >= 0 ? bounds.value[k + 1] - bounds.value[k] : beatsOf(p) * period.value
+  return k >= 0 ? partEnd(k) - partStart(k) : beatsOf(p) * period.value
 }
 const beatTicks = computed(() => {
   if (!synced.value || !reelLength.value) return []
@@ -1069,8 +1148,8 @@ function startSong(at) {
     const t = a.currentTime - songT0.value
     songClock.value = t
     if (voiceTl.value.pieces.length) a.volume = Math.min(1, Math.max(0, songVolume(t)))
-    const end = bounds.value[reelIdx.value + 1]
-    if (end !== undefined && t >= end) startPart(reelIdx.value + 1)
+    const k = reelIdx.value
+    if (gapFrom.value !== null) { if (t >= partStart(k + 1)) startPart(k + 1) } else if (k < kept.value.length && t >= partEnd(k)) afterPart(k)
     songRaf = requestAnimationFrame(tick)
   }
   songRaf = requestAnimationFrame(tick)
@@ -1102,8 +1181,8 @@ onBeforeUnmount(() => { cancelAnimationFrame(songRaf); audioEl.value?.pause() })
 const voiceTl = computed(() => voiceTimeline(settings.voice))
 const voiceHold = computed(() => {
   const end = voiceTl.value.end
-  if (!end || settings.voiceFit === false || (topPart.value && !settings.fitTop)) return 0
-  return Math.max(0, end + VOICE_TAIL - (bounds.value[bounds.value.length - 1] || 0))
+  if (!end || settings.voiceFit === false || (topPart.value && !settings.fitTop && !moving.value)) return 0
+  return Math.max(0, end + VOICE_TAIL - partsEnd.value)
 })
 const voicePlayer = useVoicePlayer()
 watch(() => voiceTl.value.pieces.map((p) => `${p.folder}/${p.file}`).join('|'), (keys) => {
@@ -1113,7 +1192,7 @@ const showCaptions = computed(() => reelOn.value && settings.captions !== false 
 const captionProps = computed(() => ({
   lines: voiceTl.value.lines, variant: settings.captionStyle, font: settings.captionFont, bg: settings.captionBg,
   size: Number(settings.captionSize) || 1, title: settings.captionTitle || '', t: reelTime.value ?? 0,
-  fx: settings.captionFx !== false, ratio: isStack.value ? 9 / 16 : shapeRatio(settings.shape),
+  fx: settings.captionFx !== false, ratio: shapeRatio(settings.shape),
 }))
 const laneStyle = (at, length) => ({
   left: `${(at / (reelLength.value || 1)) * 100}%`, width: `${(length / (reelLength.value || 1)) * 100}%`,
@@ -1123,9 +1202,9 @@ function partAt(t) {
   const list = kept.value
   if (!list.length) return null
   let k = list.length - 1
-  for (let i = 0; i < list.length; i++) if (t < bounds.value[i + 1]) { k = i; break }
+  for (let i = 0; i < list.length; i++) if (t < partEnd(i)) { k = i; break }
   const p = list[k]
-  const within = Math.max(0, t - bounds.value[k])
+  const within = Math.max(0, Math.min(t, partEnd(k)) - partStart(k))
   const src = p.media.kind === 'video'
     ? Math.floor(Math.max(0, Math.min(p.start + within, (p.media.duration || Infinity) - 0.2)) * 2) / 2 : 0
   return { item: p.id, src, thumb: api.thumb(p.media.folder, p.media.file, src, 480) }
@@ -1134,7 +1213,7 @@ function partAt(t) {
 function seekLane(e) {
   const r = e.currentTarget.getBoundingClientRect()
   const t = ((e.clientX - r.left) / r.width) * reelLength.value
-  const k = kept.value.findIndex((p, i) => t < bounds.value[i + 1])
+  const k = kept.value.findIndex((p, i) => t < partEnd(i))
   jumpTo(kept.value[k < 0 ? kept.value.length - 1 : k])
 }
 // The song while a voice plays: low under it, a little up in the breaths.
@@ -1215,23 +1294,74 @@ const FORMATS = [
 ]
 const isStack = computed(() => settings.format === 'stack')
 const tall = computed(() => (settings.shape || 'tall') === 'tall')   // Instagram's overlays only cover a tall reel
-const underLength = computed(() => bounds.value[bounds.value.length - 1] || 0)
-const topRate = computed(() => (topPart.value && settings.fitTop
-  ? topPart.value.length / (underLength.value || 1) : 1))
-const topT = computed(() => (topPart.value ? topPart.value.start + (reelTime.value ?? 0) * topRate.value : 0))
+const underLength = computed(() => partsEnd.value)
+// The layout moves (see stack.js) when the top clip plays alone somewhere or
+// a part fills the frame on its own; then the reel is as long as its parts.
+const moving = computed(() => !!topPart.value && stretches.value.some((st) => st.kind === 'gap' || st.part?.pane === 'solo'))
+const TOP_SPEEDS = [0.5, 1, 1.25, 1.5, 2, 3, 4, 8]
+const topSpeed = computed(() => Number(settings.topSpeed) || 1)
+// How long the top clip runs at its own speed (fit off).
+const topRun = computed(() => (topPart.value ? topPart.value.length / topSpeed.value : 0))
+const quietFit = computed(() => !!topPart.value && settings.fitTop && settings.fitTopBy === 'quiet')
+const layout = computed(() => {
+  const marks = topPart.value ? stretches.value.map((st) => ({
+    at: st.start, x: st.kind === 'gap' ? -1 : st.part.pane === 'solo' ? 1 : 0,
+  })) : []
+  return layoutKeys(marks, reelLength.value)
+})
+// How the top clip fills the time it's on screen: sped up, or its quiet
+// stretches cut out (measured once per clip), as the render does.
+const topPoints = ref(null)
+watch(() => quietFit.value && topPart.value && `${topPart.value.media.folder}/${topPart.value.media.file}`, async (key) => {
+  topPoints.value = null
+  if (!key) return
+  try { topPoints.value = (await api.activity(topPart.value.media.folder, topPart.value.media.file)).points } catch { /* measured at render */ }
+}, { immediate: true })
+const topShown = computed(() => shownBy(layout.value.length ? layout.value : [[0, 0]], reelLength.value))
+const topFill = computed(() => (topPart.value ? topPlan({
+  start: topPart.value.start, length: topPart.value.length, fit: !!settings.fitTop, speed: topSpeed.value,
+  by: quietFit.value && topPoints.value ? 'quiet' : 'speed', points: topPoints.value,
+}, topShown.value) : { pieces: [[0, 0]], rate: 1 }))
+const topRate = computed(() => topFill.value.rate)
+const topT = computed(() => (topPart.value ? topSource(topFill.value, shownBy(layout.value, reelTime.value ?? 0)) : 0))
+// Where the layout is: on the reel's clock while it plays, else as the
+// selected part has it (on its own, or split).
+const stackX = computed(() => {
+  if (reelOn.value) return xAt(layout.value, reelTime.value ?? 0)
+  return current.value && current.value !== topPart.value && current.value.pane === 'solo' ? 1 : 0
+})
+const stackBackdrop = computed(() => {
+  const x = stackX.value
+  if (Math.abs(x) < 0.001) return ''
+  const m = x < 0 ? topPart.value?.media : current.value?.media
+  if (!m) return ''
+  const t = x < 0 ? Math.floor(topT.value / 2) * 2 : (current.value.start || 0)
+  return api.thumb(m.folder, m.file, t, 320)
+})
 // Fit off: the top clip at normal speed sets the length; the parts are cut
 // where it ends, or the last one holds.
-const spare = computed(() => (isStack.value && topPart.value && !settings.fitTop
-  ? Math.max(topPart.value.length - underLength.value, 0) : 0))
-const pastEnd = (p) => isStack.value && topPart.value && !settings.fitTop
-  && offsetOf(kept.value.indexOf(p)) >= topPart.value.length
+const spare = computed(() => (isStack.value && topPart.value && !settings.fitTop && !moving.value
+  ? Math.max(topRun.value - underLength.value, 0) : 0))
+const pastEnd = (p) => isStack.value && topPart.value && !settings.fitTop && !moving.value
+  && offsetOf(kept.value.indexOf(p)) >= topRun.value
 const readout = computed(() => {
   const top = topPart.value.length
   const under = underLength.value
   let line = `Top ${fmtTime(top)} · Underneath ${fmtTime(under)} · `
+  const { pieces, rate } = topFill.value
+  if (moving.value || quietFit.value) {
+    line += `top on screen ${fmtTime(topShown.value)}`
+    if (pieces.length > 1) line += ` · ${pieces.length} pieces, ${fmtTime(top - pieces.reduce((a, [, l]) => a + l, 0))} of quiet taken out`
+    if (Math.abs(rate - 1) > 0.005) line += ` · at ${rate.toFixed(2)}×`
+    if (!settings.fitTop && topRun.value < topShown.value - 0.05) line += ` · holds its last frame for ${(topShown.value - topRun.value).toFixed(1)}s`
+    if (quietFit.value && !topPoints.value) line += ' · measuring movement…'
+    return line
+  }
+  const run = topRun.value
   if (settings.fitTop) line += `timelapse at ${(top / (under || 1)).toFixed(2)}×`
-  else if (under > top + 0.05) line += `underneath cut at ${fmtTime(top)}`
-  else if (under < top - 0.05) line += `last part holds ${(top - under).toFixed(1)}s`
+  else if (topSpeed.value !== 1) line += `at ${topSpeed.value}× · `
+  if (settings.fitTop) { /* said */ } else if (under > run + 0.05) line += `underneath cut at ${fmtTime(run)}`
+  else if (under < run - 0.05) line += `last part holds ${(run - under).toFixed(1)}s`
   else line += 'same length'
   return line
 })
@@ -1286,6 +1416,59 @@ function dropTop() {
   makeTop(p)
 }
 const rowNumber = (p) => items.value.filter((q) => q !== topPart.value).indexOf(p) + 1
+function setPane(p, v) {
+  p.pane = v
+  saver.queue(p.id, { pane: v })
+}
+function setTopAfter(p, beats) {
+  p.topAfter = beats
+  saver.queue(p.id, { topAfter: beats })
+}
+
+// A long part with boring stretches in it: cut where nothing much happens
+// (the same measure and rule as the top clip's quiet cuts), into parts one
+// after another that can each be trimmed, moved or skipped like any other.
+const splitting = ref(false)
+const splitNote = ref('')
+async function splitQuiet(p) {
+  if (splitting.value) return
+  splitting.value = true
+  splitNote.value = ''
+  try {
+    const { points } = await api.activity(p.media.folder, p.media.file)
+    const pieces = quietCut(points || [], p.start, p.length)
+    if (pieces.length < 2) {
+      splitNote.value = 'Nothing quiet enough to take out of this part.'
+      return
+    }
+    await saver.flushAll()
+    const cut = p.length - pieces.reduce((a, [, l]) => a + l, 0)
+    const fields = { focusX: p.focusX, focusY: p.focusY, zoom: p.zoom, lighten: p.lighten, layout: p.layout,
+                     transition: p.transition, pane: p.pane }
+    const beatsFor = (l) => (synced.value ? snapBeats(l / period.value, false) : 0)
+    const [first, ...rest] = pieces
+    const r = { start: first[0], length: first[1], ...(synced.value ? { beats: beatsFor(first[1]) } : {}) }
+    Object.assign(p, r)
+    saver.queue(p.id, r)
+    let at = items.value.indexOf(p)
+    for (const [start, length] of rest) {
+      const item = await api.addItem(id, { mediaId: p.mediaId, start, length, ...fields,
+                                           ...(synced.value ? { beats: beatsFor(length) } : {}) })
+      items.value.splice(++at, 0, { ...item, media: p.media })
+    }
+    if (p.topAfter) {   // the top clip alone comes after the last piece now
+      const last = items.value[at]
+      setTopAfter(last, p.topAfter)
+      setTopAfter(p, 0)
+    }
+    await saveOrder()
+    splitNote.value = `${pieces.length} parts, ${cut.toFixed(1)}s of quiet taken out.`
+  } catch (e) {
+    splitNote.value = `Couldn't split it: ${e.message}`
+  } finally {
+    splitting.value = false
+  }
+}
 
 // What every ReelFrame showing the selected clip gets.
 const frameProps = computed(() => ({
@@ -1324,11 +1507,38 @@ function clearHold() {
   clearInterval(holdTick)
   holdT.value = null
 }
+// A Stack's "top alone" after part k (or before the first, k = -1): the part
+// underneath carries on out of sight until the next one comes in. gapFrom
+// is where it started on the reel's clock.
+const gapFrom = ref(null)
+const gapT = ref(0)
+let gapTimer, gapTick
+function clearGap() {
+  clearTimeout(gapTimer)
+  clearInterval(gapTick)
+  gapFrom.value = null
+  gapT.value = 0
+}
+function enterGap(k, from) {
+  clearGap()
+  reelIdx.value = k
+  gapFrom.value = from
+  if (clocked.value) return       // the song's clock moves us on
+  const t0 = performance.now()
+  gapTick = setInterval(() => { gapT.value = (performance.now() - t0) / 1000 }, 40)
+  gapTimer = setTimeout(() => startPart(k + 1), Math.max(0, partStart(k + 1) - from) * 1000)
+}
+// Part k has played: on to the next, through the top clip alone if it's there.
+function afterPart(k) {
+  if (partStart(k + 1) > partEnd(k) + 0.01) enterGap(k, partEnd(k))
+  else startPart(k + 1)
+}
 
-const offsetOf = (k) => bounds.value[k] || 0
+const offsetOf = (k) => partStart(k)
 const reelTime = computed(() => {
   if (reelOn.value && clocked.value) return songClock.value
-  if (reelOn.value && holdT.value !== null) return (bounds.value[kept.value.length] || 0) + holdT.value
+  if (reelOn.value && holdT.value !== null) return partsEnd.value + holdT.value
+  if (reelOn.value && gapFrom.value !== null) return gapFrom.value + gapT.value
   const k = kept.value.indexOf(current.value)
   if (k < 0) return null
   const p = current.value
@@ -1353,6 +1563,7 @@ function clearPhoto() {
 
 function startPart(k) {
   clearPhoto()
+  clearGap()
   const list = kept.value
   if (k >= list.length) {       // end of the reel (or of its parts, while the voice finishes)
     if (holdT.value !== null) return
@@ -1374,7 +1585,7 @@ function startPart(k) {
     photoT.value = 0
     const t0 = performance.now()
     photoTick = setInterval(() => { photoT.value = Math.min(len(p), (performance.now() - t0) / 1000) }, 50)
-    photoTimer = setTimeout(() => startPart(k + 1), len(p) * 1000)
+    photoTimer = setTimeout(() => afterPart(k), len(p) * 1000)
   } else if (sameClip && v && v.readyState > 0) {
     player.seek(p.start)
     v.play().catch(() => {})
@@ -1388,11 +1599,11 @@ function onFrameLoaded() {
 
 // Move on when the playing part reaches its end.
 watch(() => player.playhead.value, (t) => {
-  if (!reelOn.value || clocked.value) return
+  if (!reelOn.value || clocked.value || gapFrom.value !== null) return
   const p = kept.value[reelIdx.value]
   const v = player.video.value
   if (p && p === current.value && p.media.kind === 'video' && v && !v.paused && t >= p.start + len(p)) {
-    startPart(reelIdx.value + 1)
+    afterPart(reelIdx.value)
   }
 })
 
@@ -1400,14 +1611,14 @@ watch(() => player.playhead.value, (t) => {
 // its measured duration): move on rather than freeze on the last frame.
 function onFrameEnded() {
   player.events.onEnded()
-  if (!reelOn.value || clocked.value) return
+  if (!reelOn.value || clocked.value || gapFrom.value !== null) return
   const p = kept.value[reelIdx.value]
-  if (p && p === current.value && p.media.kind === 'video') startPart(reelIdx.value + 1)
+  if (p && p === current.value && p.media.kind === 'video') afterPart(reelIdx.value)
 }
 
 // A Stack reel with fit off ends when its top clip does.
 watch(() => reelTime.value, (t) => {
-  if (reelOn.value && topPart.value && !settings.fitTop && t >= reelLength.value) {
+  if (reelOn.value && topPart.value && !settings.fitTop && !moving.value && t >= reelLength.value) {
     stopReel()
     restart = true
   }
@@ -1426,9 +1637,14 @@ function playReel() {
   reelOn.value = true
   stopListening()
   clearHold()
-  if (voiceTl.value.pieces.length) voicePlayer.play(voiceTl.value.pieces, offsetOf(k))
-  if (clocked.value) startSong(offsetOf(k))
-  startPart(k)
+  // From the top of a Stack that opens on its top clip alone: that first.
+  const from = k === 0 ? 0 : offsetOf(k)
+  if (voiceTl.value.pieces.length) voicePlayer.play(voiceTl.value.pieces, from)
+  if (clocked.value) startSong(from)
+  if (partStart(k) > from + 0.01) {
+    select(items.value.indexOf(kept.value[k]), true)
+    enterGap(k - 1, from)
+  } else startPart(k)
 }
 
 function stopReel() {
@@ -1436,6 +1652,7 @@ function stopReel() {
   reelOn.value = false
   clearPhoto()
   clearHold()
+  clearGap()
   voicePlayer.stop()
   player.video.value?.pause()
   audioEl.value?.pause()
@@ -1465,7 +1682,7 @@ function playThisPart() {
   stopReel()
   player.playPart()
 }
-onBeforeUnmount(() => { clearPhoto(); clearHold(); voicePlayer.stop() })
+onBeforeUnmount(() => { clearPhoto(); clearHold(); clearGap(); voicePlayer.stop() })
 
 // ---------------------------------------------------------------- render
 
@@ -1642,6 +1859,8 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .toptrack { height: 22px; }
 .toptrack .topseg { flex: 1; text-align: left; padding-left: 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .toptrack-empty { font-size: 12px; padding: 4px 10px; }
+.seg.gap { background: repeating-linear-gradient(45deg, var(--panel-2, #0002) 0 6px, transparent 6px 12px); color: var(--muted); display: grid; place-items: center; font-size: 11px; }
+.seg.solo { box-shadow: inset 0 -3px 0 var(--sage); }
 .seg.spare { background: repeating-linear-gradient(45deg, transparent 0 6px, rgb(128 128 128 / 25%) 6px 12px); pointer-events: none; }
 .seg[data-past] { opacity: 0.35; }
 .readout { margin: -26px 0 14px; font-size: 12px; }

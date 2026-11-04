@@ -1,12 +1,13 @@
 <template>
   <div class="stack-stage" ref="stage" :style="{ height: `${size.h}px` }">
     <div class="stackbox" :style="{ width: `${size.w}px`, height: `${size.h}px` }">
-      <div class="pane" :class="{ editing: editing === 'top' }" :style="{ height: `${px.top}px` }">
-        <slot name="top" :max-h="px.top" :out="geom.topOut" :bind-top="bindTop" />
+      <img v-if="alone && backdrop" class="blurbg" :src="backdrop" alt="" />
+      <div class="pane" :class="{ editing: editing === 'top' }" :style="paneStyle(pos.a, g.top)">
+        <slot name="top" :max-h="box(g.top).h" :out="out(g.top)" :bind-top="bindTop" />
       </div>
-      <div v-if="px.divider" class="divider" :style="{ height: `${px.divider}px`, background: dividerColor }"></div>
-      <div class="pane" :class="{ editing: editing === 'under' }" :style="{ height: `${px.under}px` }">
-        <slot name="under" :max-h="px.under" :out="geom.underOut" />
+      <div v-if="g.divider" class="divider" :style="{ ...paneStyle(pos.d, g.divider), background: dividerColor }"></div>
+      <div class="pane" :class="{ editing: editing === 'under' }" :style="paneStyle(pos.b, g.under)">
+        <slot name="under" :max-h="box(g.under).h" :out="out(g.under)" />
       </div>
       <div v-if="guides" class="guides">
         <div class="g-caption">caption</div>
@@ -19,16 +20,24 @@
 </template>
 
 <script setup>
-// A Stack reel's frame: the top clip in the top pane for the whole reel, a
-// divider, and the parts one after another underneath. Each pane holds a
-// ReelFrame shaped to it (slots); the top clip is kept at the reel's time.
+// A Stack reel's frame: the top clip in one pane (the left one, in a wide
+// reel), a divider, and the parts one after another in the other. Each pane
+// holds a ReelFrame shaped to it (slots); the top clip is kept at the reel's
+// time. x moves the panes as the render does (see stack.js): -1 the top clip
+// alone in the middle, 0 split, 1 the part alone; a pane on its own sits
+// over a blurred backdrop.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { clamp } from '../time'
+import { panePositions, stackGeometry } from '../stack'
 
 const props = defineProps({
   split: { type: Number, default: 0.5 },          // the top pane's share, as the engine
-  dividerPx: { type: Number, default: 4 },        // at 1080×1920
+  dividerPx: { type: Number, default: 4 },        // at the render's size
   dividerColor: { type: String, default: '#f7f1e3' },
+  frameW: { type: Number, default: 1080 },        // the render's size
+  frameH: { type: Number, default: 1920 },
+  x: { type: Number, default: 0 },
+  backdrop: { type: String, default: '' },        // an image of the pane that's alone, blurred behind it
   editing: { type: String, default: 'under' },    // which pane holds the selected clip
   topT: { type: Number, default: 0 },             // where in the top clip the reel is
   topRate: { type: Number, default: 1 },
@@ -37,12 +46,9 @@ const props = defineProps({
 })
 
 // Same arithmetic as the engine's load_top, so panes match the render.
-const geom = computed(() => {
-  const d = Math.max(0, Math.round(props.dividerPx / 2) * 2)
-  const top = Math.round(((1920 - d) * props.split) / 2) * 2
-  const under = 1920 - d - top
-  return { d, top, under, topOut: 1080 / top, underOut: 1080 / under }
-})
+const g = computed(() => stackGeometry(props.frameW, props.frameH, props.split, props.dividerPx))
+const pos = computed(() => panePositions(Math.max(-1, Math.min(1, props.x)), g.value))
+const alone = computed(() => Math.abs(props.x) > 0.001)
 
 const stage = ref(null)
 const width = ref(0)
@@ -60,15 +66,22 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', measureCap)
 })
 const size = computed(() => {
-  const w = Math.round(Math.min(width.value, cap.value * (9 / 16)))
-  return { w, h: Math.round((w * 16) / 9) }
+  const r = props.frameW / props.frameH
+  const w = Math.round(Math.min(width.value, cap.value * r))
+  return { w, h: Math.round(w / r) }
 })
-const px = computed(() => {
-  const k = size.value.h / 1920
-  const divider = geom.value.d ? Math.max(1, Math.round(geom.value.d * k)) : 0
-  const top = Math.round(geom.value.top * k)
-  return { top, divider, under: size.value.h - top - divider }
-})
+const k = computed(() => size.value.h / props.frameH)
+// A pane `along` render pixels long, in screen pixels.
+function box(along) {
+  const n = Math.round(along * k.value)
+  return g.value.axis === 'x' ? { w: n, h: size.value.h } : { w: size.value.w, h: n }
+}
+const out = (along) => (g.value.axis === 'x' ? along / props.frameH : props.frameW / along)
+function paneStyle(at, along) {
+  const b = box(along)
+  const p = `${Math.round(at * k.value)}px`
+  return { width: `${b.w}px`, height: `${b.h}px`, ...(g.value.axis === 'x' ? { left: p, top: 0 } : { top: p, left: 0 }) }
+}
 
 // The top clip, when it isn't the one being edited: follow the reel's clock.
 let topVideo = null
@@ -95,14 +108,15 @@ watch(() => [props.topT, props.topPlaying, props.topRate], syncTop)
   position: relative; display: grid; place-items: center;
   background: var(--stage); border-radius: var(--radius); overflow: hidden;
 }
-.stackbox { position: relative; display: flex; flex-direction: column; overflow: hidden; background: #000; }
-.pane { position: relative; flex: none; }
+.stackbox { position: relative; overflow: hidden; background: #000; }
+.pane { position: absolute; }
+.blurbg { position: absolute; inset: -8%; width: 116%; height: 116%; object-fit: cover; filter: blur(18px) brightness(0.85); }
 .pane::after {
   content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 4;
   box-shadow: inset 0 0 0 2px transparent; transition: box-shadow 0.15s;
 }
 .pane.editing::after { box-shadow: inset 0 0 0 2px var(--sage); }
-.divider { flex: none; }
+.divider { position: absolute; }
 .guides { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
 .g-caption, .g-buttons {
   position: absolute; display: grid; place-items: center; font-size: 10px; letter-spacing: 0.06em;

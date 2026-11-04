@@ -69,7 +69,9 @@ CREATE TABLE IF NOT EXISTS reel_items (
     lighten  REAL NOT NULL DEFAULT 0,       -- 0..1, lifts shadows and midtones
     beats    INTEGER NOT NULL DEFAULT 0,    -- with beat sync: beats long (½, ¼ too); 0 = reel default
     zoom     REAL NOT NULL DEFAULT 1,       -- >1 crops tighter than the full 9:16 window
-    layout   TEXT NOT NULL DEFAULT ''       -- fill | blur; '' = the reel's framing
+    layout   TEXT NOT NULL DEFAULT '',      -- fill | blur; '' = the reel's framing
+    pane     TEXT NOT NULL DEFAULT '',      -- Stack: solo = fills the frame on its own; '' = split
+    top_after REAL NOT NULL DEFAULT 0       -- Stack: then the top clip alone for this many beats
 );
 CREATE INDEX IF NOT EXISTS items_reel ON reel_items(reel_id, position);
 CREATE INDEX IF NOT EXISTS items_media ON reel_items(media_id);
@@ -111,7 +113,7 @@ DEFAULT_SETTINGS = {
     "beatSync": False,      # when on, parts are whole beats long
     "beatsPerCut": 4,       # default beats per part
     "fit": "fill",
-    "shape": "tall",        # tall (9:16) | wide (16:9, YouTube) | portrait (4:5) | square (1:1); Stack is always tall
+    "shape": "tall",        # tall (9:16) | wide (16:9, YouTube) | portrait (4:5) | square (1:1); a wide Stack is side by side
     "transition": "cut",    # between parts, unless a part picks its own
     "originalAudio": False,  # glasses audio off unless a reel turns it on
     "originalVolume": 0.35,
@@ -122,7 +124,13 @@ DEFAULT_SETTINGS = {
     "stackSplit": 0.5,      # the top pane's share of the height
     "dividerPx": 4,         # the line between the panes (0 = none)
     "dividerColor": "#f7f1e3",
-    "fitTop": True,         # speed the top clip to end with the parts underneath
+    "fitTop": True,         # make the top clip end with the parts underneath...
+    "fitTopBy": "speed",    # ... by speeding it up or slowing it down | by cutting out its quiet stretches (quiet)
+    "topSpeed": 1.0,        # with fit off: the top clip's own speed (2 = twice as fast)
+    "stackIntro": 0,        # beats the top clip plays alone before the parts come in (0 = split from the start)
+    # A part can fill the frame on its own (pane: solo) and be followed by the
+    # top clip alone for a few beats (top_after); the panes slide between.
+    # In a wide (16:9) reel the panes are side by side.
     # A reel made with Weave: the shoot it came from, its clips in order and the
     # pace, so the wizard can reopen it ({folder, clips, splitOver, between, ...}).
     "weave": None,
@@ -285,7 +293,9 @@ def migrate(db):
                              ("reel_items", "lighten", "REAL NOT NULL DEFAULT 0"),
                              ("reel_items", "beats", "INTEGER NOT NULL DEFAULT 0"),
                              ("reel_items", "zoom", "REAL NOT NULL DEFAULT 1"),
-                             ("reel_items", "layout", "TEXT NOT NULL DEFAULT ''")]:
+                             ("reel_items", "layout", "TEXT NOT NULL DEFAULT ''"),
+                             ("reel_items", "pane", "TEXT NOT NULL DEFAULT ''"),
+                             ("reel_items", "top_after", "REAL NOT NULL DEFAULT 0")]:
         if col not in have[table]:
             db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
     # v1: photo sizes now honour EXIF rotation; re-measure photos once.
