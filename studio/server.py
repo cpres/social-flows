@@ -56,6 +56,7 @@ sys.path.insert(0, str(HERE))
 import looks  # noqa: E402
 from db import DEFAULT_SETTINGS, Library, default_start, now, settings_of  # noqa: E402
 import audio  # noqa: E402
+import beats as beats_mod  # noqa: E402
 import compose  # noqa: E402
 import scenes as scenes_mod  # noqa: E402
 import montage  # noqa: E402
@@ -189,6 +190,8 @@ def clean_settings(db, reel_id, s):
         s["glassesAudio"] = glasses_of(s)
         s["originalAudio"] = s["glassesAudio"] != "off"   # what older code reads
     s["duckMusic"] = bool(s.get("duckMusic", True))
+    if "beat" in s:
+        s["beat"] = beats_mod.clean(s["beat"])
     return s
 
 
@@ -1492,6 +1495,30 @@ def compose_plan(reel_id, body):
             "words": words, "model": model, "sections": sections,
             "refs": [{k: r[k] for k in ("name", "title", "bpm", "key", "words")} for r in refs],
             "prompt": compose.prompt(asked, bpm, key, genre, words, body.get("notes") or "", sections)}
+
+
+@app.get("/api/reels/{reel_id}/beat/length")
+def beat_length(reel_id: int, bpm: float = 100):
+    """How long the reel runs with a beat at this tempo (its parts are whole
+    beats when cutting on the beat): {seconds, synced}."""
+    if not beats_mod.TEMPO_RANGE[0] <= bpm <= beats_mod.TEMPO_RANGE[1]:
+        raise HTTPException(400, "Pick a tempo between 60 and 180 bpm.")
+    seconds, synced = reel_length(reel_id, bpm)
+    return {"seconds": seconds, "synced": synced, "bpm": bpm}
+
+
+@app.get("/api/music/{name}/style")
+def music_style(name: str):
+    """What a song sounds like, for the beat builder's Start from: {bpm, key,
+    words}, or {measured: false} without beat detection installed."""
+    try:
+        refs, _ = reference([name])
+    except HTTPException as e:
+        if e.status_code == 400:
+            return {"measured": False, "why": e.detail}
+        raise
+    r = refs[0]
+    return {"measured": True, "bpm": r["bpm"], "key": r["key"], "words": r["words"]}
 
 
 @app.post("/api/reels/{reel_id}/compose/plan")

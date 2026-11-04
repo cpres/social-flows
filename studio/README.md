@@ -127,6 +127,27 @@ python3 studio/server.py --open
   OpenRouter's replies are kept in `~/Footage/.studio/music/ai/`. To try
   prompts without the studio: `python3 studio/compose.py --seconds 30 --ref
   song.mp3 --dry-run`.
+- **Generate a beat** (the second tab under *Settings → Music*, next to
+  *Library*) plans a beat made for this reel. *Start from* a song category
+  (its first song, or pick one), a song with no category, or *From
+  scratch*: the song only sets the groove and sound (measured here: tempo,
+  key, tone; needs `--beat`), it's never copied. *Energy over the reel* is
+  a curve from calm to peak across the reel's exact length, with your
+  scenes under it and dashed lines at the scene changes: *Follow my scenes*
+  (low while A plays alone, building through splits, peaking on Solo B,
+  cooling at the end), *Arc*, *Slow build*, *Two peaks* or *Steady*; drag a
+  point, click the curve to add one, double-click (or `Delete`) to remove
+  one, arrow keys to nudge. *Hits on scene changes* puts a fill, riser or
+  drop on each; *End on the last frame* resolves the last bar exactly at
+  the end (else it fades out). Ten *vibe levers* (Funky … Earthy, 0–5;
+  click a notch, click the top one again to lower it) and four presets
+  (Garden morning, Ecstatic dance, Street grit, Lo-fi chill) set the
+  sound; the tempo (88 + 7·Upbeat − 5·Chill + 3·Ecstatic + Funky) and key
+  (major from Happy 3, dorian at 1–2, minor at 0, on the song's tonic)
+  follow from them unless you type your own. When cutting on the beat, the
+  reel's length is worked out at that tempo. *What gets asked for* shows
+  the prompt, which you can edit. It's all kept with the reel. Making the
+  takes comes next (ElevenLabs).
 - **Song names and categories:** songs show by name and artist, read from the
   file's tags or, for Pixabay downloads (`artist-title-words-123456.mp3`), from
   the file name. ✎ next to the song gives it your own name and categories (a

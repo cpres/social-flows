@@ -76,7 +76,14 @@
 
     <section v-if="showSettings" class="panel settings">
       <div class="sgroup music">
-        <h3>Music</h3>
+        <div class="musichead">
+          <h3>Music</h3>
+          <div class="musictabs" role="tablist">
+            <button role="tab" class="btn small" :class="{ primary: musicTab === 'library' }" :aria-selected="musicTab === 'library'" @click="musicTab = 'library'">Library · {{ shelf.tracks.length }} song{{ shelf.tracks.length === 1 ? '' : 's' }}</button>
+            <button role="tab" class="btn small" :class="{ primary: musicTab === 'generate' }" :aria-selected="musicTab === 'generate'" @click="openBeat">Generate a beat</button>
+          </div>
+        </div>
+        <template v-if="musicTab === 'library'">
         <div class="musicrow">
           <div class="field song">
             <label for="reel-song">Song</label>
@@ -121,6 +128,12 @@
             <small v-else>Cut to the song, but leave it out, to add the same song in Instagram (which licenses it).</small>
           </label>
         </div>
+        </template>
+        <BeatBuilder
+          v-else-if="settings.beat" v-model="settings.beat" :reel-id="id" :reel-name="reel.name" :shelf="shelf"
+          :scenes="sceneList.map((sc, k) => ({ layout: sc.layout, start: sceneTimes[k].start, end: sceneTimes[k].end }))"
+          :reel-length="reelLength"
+        />
       </div>
       <div class="sgroup cards">
         <h3>Title &amp; end card</h3>
@@ -821,6 +834,8 @@ import ClipCard from '../components/ClipCard.vue'
 import SendToPhone from '../components/SendToPhone.vue'
 import SongPicker from '../components/SongPicker.vue'
 import ComposePanel from '../components/ComposePanel.vue'
+import BeatBuilder from '../components/BeatBuilder.vue'
+import { newBeat, sceneFractions } from '../beat'
 import ReelFrame from '../components/ReelFrame.vue'
 import { SHAPES, shapeOf, shapeRatio } from '../shapes'
 import { quietCut, topSource } from '../stack'
@@ -846,6 +861,14 @@ const loading = ref(true)
 const error = ref('')
 const saveState = ref('')
 const showSettings = ref(false)
+// Settings › Music: the songs on the shelf, or the beat builder.
+const musicTab = ref('library')
+function openBeat() {
+  if (!settings.beat) {
+    settings.beat = newBeat(sceneFractions(sceneList.value.map((sc, k) => ({ layout: sc.layout, ...sceneTimes.value[k] })), reelLength.value))
+  }
+  musicTab.value = 'generate'
+}
 const showVoice = ref(false)
 const LOGO_CHOICES = [{ v: '', label: 'None' }, { v: 'oufp', label: 'OUFP' },
   { v: 'garden-steward', label: 'Garden Steward' }, { v: 'both', label: 'Both' }]
@@ -2397,6 +2420,9 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .total { color: var(--forest); }
 .save { font-size: 12px; }
 .settings { display: block; }
+.musichead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.musichead h3 { margin: 0; }
+.musictabs { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 10px; }
 .settings .wide { grid-column: span 2; }
 .field.check span { display: flex; gap: 6px; align-items: center; color: var(--ink); font-size: 14px; }
 .field.check small { font-size: 12px; }
@@ -2607,7 +2633,7 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .glyph.g-swap i:first-child { background: #e9b27a; } .glyph.g-swap i:last-child { background: #b8cfa8; }
 .glyph.big { width: 20px; height: 32px; margin-bottom: 4px; }
 .glyph.big.side { flex-direction: row; width: 32px; height: 20px; }
-.aseg, .off {
+.aseg, .lanebody .off {
   position: absolute; top: 2px; bottom: 2px; display: flex; align-items: center; justify-content: center; overflow: hidden;
   white-space: nowrap; font-size: 11px; border-radius: 6px; padding: 0 6px;
 }
@@ -2615,7 +2641,7 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .aseg.current { box-shadow: inset 0 0 0 2px #344a34; }
 .aseg.warn { background: #e8c27a; }
 .warnchip { margin-left: 6px; padding: 0 5px; border-radius: 4px; background: #b3412f; color: #fff; font-size: 10px; }
-.off, .seg.gap { background: repeating-linear-gradient(45deg, rgb(128 128 128 / 16%) 0 6px, transparent 6px 12px); color: var(--muted); font-size: 11px; }
+.lanebody .off, .seg.gap { background: repeating-linear-gradient(45deg, rgb(128 128 128 / 16%) 0 6px, transparent 6px 12px); color: var(--muted); font-size: 11px; }
 .seg.gap { display: grid; place-items: center; overflow: hidden; white-space: nowrap; }
 .laneempty { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); font-size: 12px; }
 .inspector { display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: var(--radius); background: var(--panel); }

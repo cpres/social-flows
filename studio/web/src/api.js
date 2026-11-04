@@ -70,6 +70,9 @@ export const api = {
   envelopes: (mediaIds) => send('POST', '/api/envelopes', { mediaIds }),
   musicEnvelope: (name) => fetch(`/api/music/${enc(name)}/envelope`).then(json),
   voiceEnvelope: (folder, file) => fetch(`/api/voice/envelope/${enc(folder)}/${enc(file)}`).then(json),
+  // The beat builder: the reel's length at a tempo, and a song's measured style.
+  beatLength: (reelId, bpm) => fetch(`/api/reels/${reelId}/beat/length?bpm=${bpm}`).then(json),
+  musicStyle: (name) => fetch(`/api/music/${enc(name)}/style`).then(json),
   // Weave's draft for a shoot ({ folder }) or a reel being re-woven ({ reel }).
   weaveDraft: (q) => fetch(`/api/weave/draft?${new URLSearchParams(q)}`).then(json),
   // keepalive: a save sent as the page closes still arrives.
