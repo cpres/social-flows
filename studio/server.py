@@ -75,6 +75,8 @@ ITEM_COLUMNS = ("media_id", "position", "start", "length", "keep", "focus_x", "f
                 "transition", "lighten", "beats", "zoom", "layout")
 LAYOUTS = ("", "fill", "blur")   # per part; '' = the reel's framing
 FORMATS = ("standard", "stack")
+# The reel's shape: the size it renders at. Stack splits a tall frame, so it stays tall.
+SHAPES = {"tall": (1080, 1920), "wide": (1920, 1080), "portrait": (1080, 1350), "square": (1080, 1080)}
 LOGOS = {"oufp": ["oufp.png"], "garden-steward": ["garden-steward.png"],
          "both": ["oufp.png", "garden-steward.png"]}
 app = FastAPI(title="Footage Studio")
@@ -126,10 +128,17 @@ def top_item(db, reel_id, s):
                       (s["topItemId"], reel_id)).fetchone()
 
 
+def frame_size(s):
+    """Width and height a reel renders at."""
+    return SHAPES["tall"] if s.get("format") == "stack" else SHAPES.get(s.get("shape"), SHAPES["tall"])
+
+
 def clean_settings(db, reel_id, s):
     """Keep the Stack settings in range."""
     if s.get("format") not in FORMATS:
         raise HTTPException(400, f"Unknown format: {s.get('format')}")
+    if s.get("shape") not in SHAPES:
+        raise HTTPException(400, f"Unknown shape: {s.get('shape')}")
     s["stackSplit"] = round(min(max(float(s.get("stackSplit") or 0.5), 0.3), 0.7), 3)
     s["dividerPx"] = min(max(int(round(float(s.get("dividerPx") or 0) / 2)) * 2, 0), 20)
     if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(s.get("dividerColor") or "")):
@@ -954,7 +963,9 @@ def build_config(reel, rows, grid_bpm=None):
             entry["transition"] = row["transition"] or s.get("transition") or "cut"
         sources.append(entry)
 
-    cfg = {"output": str(RENDERS / f"{slug(reel['name'])}.mp4"), "rounds": 1, "sources": sources}
+    w, h = frame_size(s)
+    cfg = {"output": str(RENDERS / f"{slug(reel['name'])}.mp4"), "rounds": 1, "sources": sources,
+           "width": w, "height": h}
     if top:
         cfg["top"] = {"file": str(ROOT / top["path"]), "start": round(top["start"], 2),
                       "length": round(top["length"], 2)}
@@ -1127,16 +1138,16 @@ def card_preview(reel_id: int, kind: str):
     if not kept:
         raise HTTPException(400, "Nothing is kept in this reel yet.")
     row = kept[0] if kind == "title" else kept[-1]
-    cfg.update(width=1080, height=1920)
+    w, h = cfg["width"], cfg["height"]
     card = next(c for c in montage.load_cards(cfg, ENGINE.parent) if c["kind"] == kind)
     CACHE.mkdir(parents=True, exist_ok=True)
     png = montage.render_card(card, cfg, ENGINE.parent, CACHE / f"card-{reel_id}-{kind}.png")
     t = row["start"] + (0 if kind == "title" else row["length"] / 2)
     frame = Image.open(thumb_file(ROOT / row["path"], t, 1280)).convert("RGBA")
-    frame = ImageOps.fit(frame, (1080, 1920), centering=(row["focus_x"], row["focus_y"]))
+    frame = ImageOps.fit(frame, (w, h), centering=(row["focus_x"], row["focus_y"]))
     frame.alpha_composite(Image.open(png))
     out = CACHE / f"card-{reel_id}-{kind}.jpg"
-    frame.convert("RGB").resize((540, 960), Image.LANCZOS).save(out, quality=88)
+    frame.convert("RGB").resize((w // 2, h // 2), Image.LANCZOS).save(out, quality=88)
     return FileResponse(out, headers={"Cache-Control": "no-store"})
 
 
@@ -1154,9 +1165,10 @@ def caption_preview(reel_id: int, item: int, src: float = 0.0, t: float = 0.0):
     row = next((r for r in rows if r["id"] == item), None)
     if not row or row["missing"]:
         raise HTTPException(404, "No such part")
-    cfg.update(width=1080, height=1920, fps=30)
+    cfg.update(fps=30)
+    w, h = cfg["width"], cfg["height"]
     frame = Image.open(thumb_file(ROOT / row["path"], src, 1280)).convert("RGBA")
-    frame = ImageOps.fit(frame, (1080, 1920), centering=(row["focus_x"], row["focus_y"]))
+    frame = ImageOps.fit(frame, (w, h), centering=(row["focus_x"], row["focus_y"]))
     cap = cfg["captions"]
     with tempfile.TemporaryDirectory() as tmp:
         for l in montage.caption_layers(cap["lines"], cap, cfg, ENGINE.parent, Path(tmp), 1e9):
@@ -1189,7 +1201,7 @@ def caption_preview(reel_id: int, item: int, src: float = 0.0, t: float = 0.0):
             layer.paste(im, (round(x), round(y)))
             frame = Image.alpha_composite(frame, layer)
     out = CACHE / f"captions-{reel_id}.jpg"
-    frame.convert("RGB").resize((540, 960), Image.LANCZOS).save(out, quality=88)
+    frame.convert("RGB").resize((w // 2, h // 2), Image.LANCZOS).save(out, quality=88)
     return FileResponse(out, headers={"Cache-Control": "no-store"})
 
 
@@ -1232,7 +1244,7 @@ def reel_length(reel_id, bpm):
     cfg = build_config(reel, rows, grid_bpm=bpm)
     if not cfg["sources"]:
         raise HTTPException(400, "Nothing is kept in this reel yet.")
-    cfg.update({"width": 1080, "height": 1920, "fps": 30})
+    cfg.update({"fps": 30})
     try:
         top = engine.load_top(cfg, ROOT)
         voice = engine.load_voice(cfg, ROOT)

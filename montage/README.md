@@ -94,4 +94,4 @@ A caption line's `fx` shows a voice effect on its words while it plays (copies u
 
 If a cut would run past the end of a clip, the script slides it earlier so it stays on the beat. The dry run tells you when that happens.
 
-Output is 1080×1920 at 30fps. Photos should be JPG or PNG; convert HEIC files first.
+Output is 1080×1920 at 30fps (`width:` and `height:` change it, e.g. 1920 and 1080 for YouTube or 1080 and 1080 for a square; `focus: [0.5, 1]` then keeps the bottom of a 3:4 clip at full width). Photos should be JPG or PNG; convert HEIC files first.

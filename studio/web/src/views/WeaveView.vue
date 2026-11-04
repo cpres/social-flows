@@ -116,7 +116,7 @@
         </div>
         <label class="field" v-else>
           Average part length <b class="mono">{{ pace.len.toFixed(1) }}s</b>
-          <input type="range" min="1" max="4" step="0.1" v-model.number="pace.len" />
+          <input type="range" min="1" max="8" step="0.1" v-model.number="pace.len" />
         </label>
         <div class="field">
           Or aim for a reel about
@@ -216,7 +216,7 @@
       <section class="editor moments">
         <div class="preview-col">
           <ReelFrame
-            :key="moment.mediaId" :media="moment.media" fit="fill" muted
+            :key="moment.mediaId" :media="moment.media" fit="fill" muted :out="shapeRatio(pace.shape)"
             :focus-x="moment.focusX" :focus-y="moment.focusY" :zoom="moment.zoom || 1"
             :poster-time="active ? active.start : 0" :bind-video="(el) => (player.video.value = el)"
             @loaded="onLoaded" @play="player.events.onPlay" @pause="player.events.onPause"
@@ -228,6 +228,31 @@
             </p>
           </ReelFrame>
           <p class="muted small">Drag the window to frame this {{ moment.kind === 'video' ? 'clip; every part of it uses the same framing' : 'photo' }}.</p>
+          <div class="framing">
+            <div class="chips">
+              <span class="muted small">Shape</span>
+              <button
+                v-for="sh in SHAPES" :key="sh.v" class="btn small" :class="{ active: pace.shape === sh.v }"
+                :title="sh.hint" @click="pace.shape = sh.v"
+              >{{ sh.label }}</button>
+            </div>
+            <small v-if="pace.shape === 'wide' && tallSource" class="muted">
+              Wide keeps a strip of tall footage like this; Top / Middle / Bottom picks which. To show the
+              whole frame with blurred sides instead, pick <i>Blurred background</i> in the reel's Settings after saving.
+            </small>
+            <div class="chips">
+              <span class="muted small">Frame</span>
+              <button
+                v-for="f in FRAMINGS" :key="f.v" class="btn small"
+                :class="{ active: Math.abs(moment.focusY - f.v) < 0.01 && (moment.zoom || 1) <= 1.001 }"
+                :title="f.hint" @click="setFocus({ x: moment.focusX, y: f.v, zoom: 1 })"
+              >{{ f.label }}</button>
+              <button class="btn small" :disabled="included.length < 2" title="Frame every clip and photo the way this one is" @click="framingAll(moment)">Use on every clip</button>
+            </div>
+            <button class="link" @click="squareBottom" title="Square, with every clip framed to the bottom of its shot, where the hands are">
+              Square, every clip framed to the bottom
+            </button>
+          </div>
         </div>
 
         <div class="edit-col">
@@ -286,7 +311,8 @@
                   :title="b * period > room(moment, sel) + 0.01 ? 'Longer than this clip has room for' : ''"
                   @click="sizePart(moment, sel, b)"
                 >{{ b }}♩ ≈ {{ (b * period).toFixed(2) }}s<template v-if="b === pace.beatsPerCut"> · pace</template></button>
-                <button v-if="moment.parts.length > 1" class="btn small" :disabled="!fitsAll(moment)" @click="sizeAll(moment)">Use on every part</button>
+                <button v-if="moment.parts.length > 1" class="btn small" :disabled="!fitsAll(moment)" :title="allTitle" @click="sizeAll(moment)">{{ allLabel }}</button>
+                <button v-if="partCount > 1" class="btn small" :title="everyTitle" @click="paceAll">Every clip</button>
               </div>
               <div class="lenrow" v-else>
                 <input
@@ -294,7 +320,8 @@
                   aria-label="Length of this part" @input="sizePart(moment, sel, Number($event.target.value))"
                 />
                 <button class="btn small" :disabled="!own(active)" @click="sizePart(moment, sel)">Pace · {{ pace.len.toFixed(1) }}s</button>
-                <button v-if="moment.parts.length > 1" class="btn small" :disabled="!fitsAll(moment)" @click="sizeAll(moment)">Use on every part</button>
+                <button v-if="moment.parts.length > 1" class="btn small" :disabled="!fitsAll(moment)" :title="allTitle" @click="sizeAll(moment)">{{ allLabel }}</button>
+                <button v-if="partCount > 1" class="btn small" :title="everyTitle" @click="paceAll">Every clip</button>
               </div>
             </div>
             <p class="muted small">
@@ -425,6 +452,7 @@ import ReelFrame from '../components/ReelFrame.vue'
 import SongPicker from '../components/SongPicker.vue'
 import { songTitle } from '../songs'
 import SplitBar from '../components/SplitBar.vue'
+import { SHAPES, shapeRatio } from '../shapes'
 
 const props = defineProps({ folder: { type: String, required: true } })
 const route = useRoute()
@@ -460,7 +488,7 @@ const clips = ref([])
 const existingName = ref('')
 const newName = ref(`${props.folder} weave`)
 const PACE = { len: 2, splitOver: 15, between: 'dissolve', music: '', musicStart: 0, beatSync: false, beatsPerCut: 4,
-               hold: 'smart' }   // hold: how photos hold, smart | even
+               hold: 'smart', shape: 'tall' }   // hold: how photos hold, smart | even; shape: see shapes.js
 const pace = reactive({ ...PACE })
 const order = ref(null)          // the keys in the order dragged in Stitch; null = woven
 const overrides = reactive({})   // key -> transition clicked in Stitch (or the reel's, re-weaving)
@@ -629,6 +657,22 @@ function sizeAll(c) {
   const p = c.parts[sel.value]
   const v = synced.value ? p.beats : p.length
   for (let j = 0; j < c.parts.length; j++) sizePart(c, j, v)
+}
+const lenText = (p) => (synced.value ? `${beatsOf(p)} beats` : `${partLen(p).toFixed(1)}s`)
+const allLabel = computed(() => `All of a–${letter(moment.value.parts.length - 1)}`)
+const allTitle = computed(() => active.value && `Make every part of this clip ${lenText(active.value)}`)
+const everyTitle = computed(() => active.value && `Make every part of every clip ${lenText(active.value)}: it becomes the pace`)
+// This part's length for every part of every clip: it becomes the pace, and
+// lengths given to single parts go, so they all follow it.
+function paceAll() {
+  const p = active.value
+  if (!p) return
+  if (synced.value) pace.beatsPerCut = beatsOf(p)
+  else pace.len = Math.round(clamp(partLen(p), 1, 8) * 10) / 10
+  for (const c of videos.value) {
+    c.parts = c.parts.map((q) => ({ id: q.id, start: q.start }))
+    refit(c)
+  }
 }
 // [ and ]: the next beat choice that fits, or half a second off the beat.
 function stepLength(c, dir) {
@@ -1006,12 +1050,26 @@ function putBack() {
   pick(included.value.indexOf(clip))
 }
 
-function setFocus({ x, y, zoom }) {
-  const c = moment.value
+function setFocus({ x, y, zoom }, c = moment.value) {
   c.focusX = x
   c.focusY = y
   if (zoom !== undefined) c.zoom = zoom
   c.framed = true
+}
+const tallSource = computed(() => moment.value && moment.value.media.height > moment.value.media.width)
+// Quick framings: the whole width (zoom 1), at the top, middle or bottom.
+const FRAMINGS = [
+  { v: 0, label: 'Top', hint: 'Keep the top of the shot' },
+  { v: 0.5, label: 'Middle', hint: 'Keep the middle of the shot' },
+  { v: 1, label: 'Bottom', hint: 'Keep the bottom of the shot, where the hands are' },
+]
+function framingAll(from) {
+  for (const c of included.value) setFocus({ x: from.focusX, y: from.focusY, zoom: from.zoom || 1 }, c)
+}
+// Square, every clip and photo showing the bottom of its shot at full width.
+function squareBottom() {
+  pace.shape = 'square'
+  for (const c of included.value) setFocus({ x: c.focusX, y: 1, zoom: 1 }, c)
 }
 
 function go(i) {
@@ -1087,7 +1145,7 @@ function startFresh(imported) {
   Object.assign(pace, {
     len: Number(w.pace || s.defaultLength) || 2, splitOver: w.splitOver ?? 60, between: w.between || 'dissolve',
     music: s.music || '', musicStart: Number(s.musicStart) || 0, beatSync: !!s.beatSync,
-    beatsPerCut: Number(s.beatsPerCut) || 4, hold: w.hold || 'smart',
+    beatsPerCut: Number(s.beatsPerCut) || 4, hold: w.hold || 'smart', shape: s.shape || 'tall',
   })
   Object.assign(chosen, w.styles || {})
   const back = fromReel(reelData.items.filter(managed), w,
@@ -1277,6 +1335,7 @@ async function save() {
   const settings = {
     music: pace.music, musicStart: pace.musicStart, beatSync: !!(pace.music && pace.beatSync),
     beatsPerCut: pace.beatsPerCut, defaultLength: pace.len, defaultHold: holdLengths(pace.len).medium.seconds,
+    shape: pace.shape,
     weave: { folder: props.folder, clips: included.value.map((c) => c.mediaId), splitOver: pace.splitOver,
              between: pace.between, pace: pace.len, hold: pace.hold,
              styles: Object.fromEntries(photos.value.filter((c) => chosen[c.mediaId]).map((c) => [c.mediaId, chosen[c.mediaId]])),
@@ -1324,6 +1383,8 @@ async function save() {
 
 <style scoped>
 .total { color: var(--forest); }
+.framing { display: grid; gap: 6px; margin-top: 6px; }
+.framing .link { justify-self: start; }
 .steps { display: flex; gap: 4px; padding: 3px; border-radius: 999px; background: rgb(128 128 128 / 14%); }
 .stepchip {
   display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; cursor: pointer;

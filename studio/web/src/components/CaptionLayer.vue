@@ -2,8 +2,9 @@
   <!-- The captions over a 9:16 frame at reel time t, laid out like the render
        (sizes in % of the frame's width, as the engine's). -->
   <div class="caplayer" aria-hidden="true">
+    <div v-if="group && bg === 'scrim'" class="scrim" :style="{ opacity: shown }"></div>
+    <div class="column" :style="columnStyle">
     <template v-if="group">
-      <div v-if="bg === 'scrim'" class="scrim" :style="{ opacity: shown }"></div>
       <div class="block" :class="[`st-${variant}`, `bg-${bg}`]" :style="blockStyle">
         <div v-if="bg !== 'scrim' && bg !== 'shadow'" class="fill" :style="{ opacity: shown }"></div>
         <span v-if="variant === 'page' && title" class="ttl" :style="{ opacity: 0.75 * shown }">{{ title }}</span>
@@ -13,6 +14,7 @@
         ><span v-for="(r, k) in runs(l)" :key="k" :style="r.fx ? { textShadow: shadowFor(r.fx) } : null">{{ r.text }}</span></span>
       </div>
     </template>
+    </div>
   </div>
 </template>
 
@@ -31,6 +33,12 @@ const props = defineProps({
   title: { type: String, default: '' },
   t: { type: Number, default: 0 },
   fx: { type: Boolean, default: true },          // show voice effects on their words
+  ratio: { type: Number, default: 9 / 16 },      // the frame's width / height
+})
+// The words sit in a centred column no wider than the frame is tall (as the render).
+const columnStyle = computed(() => {
+  const w = 100 / Math.max(1, props.ratio)
+  return { left: `${(100 - w) / 2}%`, width: `${w}%` }
 })
 addCaptionFonts()
 
@@ -80,7 +88,8 @@ const blockStyle = computed(() => {
 </script>
 
 <style scoped>
-.caplayer { position: absolute; inset: 0; pointer-events: none; container-type: inline-size; z-index: 2; overflow: hidden; }
+.caplayer { position: absolute; inset: 0; pointer-events: none; z-index: 2; overflow: hidden; }
+.column { position: absolute; top: 0; bottom: 0; container-type: inline-size; }
 .scrim { position: absolute; inset: 0; background: rgb(45 62 38 / 48%); }
 .block { position: absolute; bottom: 25%; color: #f7f1e3; text-align: center; line-height: 1.32; }
 .block.st-breath { bottom: auto; top: 50%; }

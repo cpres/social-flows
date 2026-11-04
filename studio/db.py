@@ -111,6 +111,7 @@ DEFAULT_SETTINGS = {
     "beatSync": False,      # when on, parts are whole beats long
     "beatsPerCut": 4,       # default beats per part
     "fit": "fill",
+    "shape": "tall",        # tall (9:16) | wide (16:9, YouTube) | portrait (4:5) | square (1:1); Stack is always tall
     "transition": "cut",    # between parts, unless a part picks its own
     "originalAudio": False,  # glasses audio off unless a reel turns it on
     "originalVolume": 0.35,

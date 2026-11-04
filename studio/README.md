@@ -148,9 +148,23 @@ python3 studio/server.py --open
   `~/Movies/Footage Studio/` (set `RENDER_DIR` to change). *Preview cut list*
   shows the engine's dry run first if you want to check timings.
 
-**Portrait & framing.** Reels are 1080×1920 (9:16). The preview shows each clip
-as it will appear in the reel. When a clip isn't exactly 9:16 (glasses footage
-is often 3:4), the part the reel keeps is outlined and the rest dimmed. Drag
+**Shape & framing.** Pick the reel's *Shape* under *Settings → Look & timing*
+(or in Weave's Moments, under the preview). The two main ones are *Reels 9:16*
+(1080×1920, Instagram Reels, TikTok, Shorts; the default) and *YouTube 16:9*
+(1920×1080); there's also *4:5* (1080×1350, the Instagram feed) and *Square*
+(1080×1080). The preview switches as you click, so you can see how a reel
+reads in each; *Duplicate this reel* first to keep one of each. A 16:9 frame
+keeps a strip of tall footage (*Blurred background* shows all of it with
+blurred sides), and captions keep to a centred column so they stay the size
+they'd be on a square. Glasses footage is 3:4, so a square keeps its whole
+width; *Square, framed to the bottom* there (also in Weave's Moments) picks
+square and frames every part on the bottom of its shot, where the hands are,
+at full width. A Stack reel is always 9:16. The preview shows each clip
+as it will appear in the reel. When a clip isn't exactly the reel's shape,
+the part the reel keeps is outlined and the rest dimmed. *Framing* in the part
+editor puts the window at the *Top*, *Middle* or *Bottom* at full width, and
+*Use on every part* frames every part like the one you're on (*Length → Use on
+every part* does the same for its length). Drag
 that window to keep the subject in frame; it's saved per part, so the same clip
 can be framed differently in different reels. Drag a corner of the window to zoom in (up to 3×; also works on clips that are already 9:16), then drag the window to place it; double-click it to zoom back out. Press `G` to see where Instagram's
 caption and buttons will cover the picture. Files stored sideways with a
@@ -242,7 +256,7 @@ at once. It's a four-step wizard that makes a normal reel:
 1. **Order**: the shoot's clips and photos in the order they were shot (what you
    just imported is picked). Drag to reorder, click to leave one out. Each round
    goes through the clips in this order.
-2. **Pace**: the length of every part (1–4s, or *Aim for* 15/30/45/60s), and a
+2. **Pace**: the length of every part (1–8s, or *Aim for* 15/30/45/60s), and a
    song: *Listen* plays it (drag along it to hear more, or pick another song and
    that one plays). With a song and beat detection, every part is a whole
    number of beats (1, 2, 4 or 8). *Photo hold* is *Smart* (below) or *Even*,
@@ -254,9 +268,13 @@ at once. It's a four-step wizard that makes a normal reel:
    changes how many. The lane under the filmstrip shows how much is moving where
    (measured once from the keyframes, cached), and *Suggest busy moments* starts
    each part on the liveliest stretch of its share of the clip. Framing set here
-   applies to every part of the clip. Each part runs for the pace unless you give
+   applies to every part of the clip; under the preview, pick the reel's *Shape*
+   (Reels 9:16, YouTube 16:9, 4:5, Square), put the window at the *Top*, *Middle* or *Bottom*, and
+   *Use on every clip* to frame them all alike. Each part runs for the pace unless you give
    it a **length** of its own: on the beat, 1, 2, 4 or 8 beats (the pace's is
-   marked), else a length in seconds; `[`/`]` makes it shorter or longer. For a
+   marked), else a length in seconds; `[`/`]` makes it shorter or longer.
+   *All of a–f* gives that length to every part of this clip; *Every clip* makes
+   it the pace, so every part of every clip runs that long. For a
    photo, pick its hold (Medium, Small or Burst); it says why it got the one it
    has. **Leave it out** (`X`) takes the clip or photo out of the reel right
    there, and *Put it back* undoes it. The song is here too (♪, *Change* to

@@ -983,7 +983,7 @@ def render_card(card, cfg, base_dir, out):
     the text, centred in the safe area."""
     from PIL import Image, ImageDraw, ImageFilter
     w, h = cfg["width"], cfg["height"]
-    k = w / 1080
+    k = min(w / 1080, h / 1350)   # a square or 4:5 frame gets a smaller card, so it fits
     spec, kind = card["spec"], card["kind"]
     fonts = cfg.get("fonts") or {}
     display = find_font(fonts.get("display"), DISPLAY_FONTS, base_dir)
@@ -1218,15 +1218,19 @@ def caption_layout(cap, cfg, base_dir):
     bg = cap.get("background") if cap.get("background") in CAPTION_BGS else "shadow"
     name = cap.get("font") if cap.get("font") in CAPTION_FONTS else "playfair"
     _, weight, scale = CAPTION_FONTS[name]
-    size = CAPTION_SIZE[style] * scale * float(cap.get("size", 1) or 1) * w / 100
+    # The words sit in a centred column no wider than the frame is tall, so a
+    # wide (16:9) frame gets captions sized as on a square one.
+    cw = min(w, h)
+    ox = (w - cw) / 2
+    size = CAPTION_SIZE[style] * scale * float(cap.get("size", 1) or 1) * cw / 100
     font = load_caption_font(caption_font_path(name, base_dir), max(8, round(size)), weight)
-    side, pad_x, pad_y = (v * w / 100 for v in CAPTION_BOX[bg])
-    lay = {"w": w, "h": h, "style": style, "bg": bg, "font": font, "size": size,
-           "lead": size * CAPTION_LEADING, "x0": side, "x1": w - side, "pad_x": pad_x, "pad_y": pad_y,
+    side, pad_x, pad_y = (v * cw / 100 for v in CAPTION_BOX[bg])
+    lay = {"w": w, "h": h, "cw": cw, "style": style, "bg": bg, "font": font, "size": size,
+           "lead": size * CAPTION_LEADING, "x0": ox + side, "x1": ox + cw - side, "pad_x": pad_x, "pad_y": pad_y,
            "ink": PAPER_INK if bg == "paper" else CARD_INK, "title": "", "base_dir": base_dir,
            "fps": cfg["fps"]}
-    lay["text_x"] = side + pad_x
-    lay["text_w"] = w - 2 * (side + pad_x)
+    lay["text_x"] = ox + side + pad_x
+    lay["text_w"] = cw - 2 * (side + pad_x)
     if style == "page" and str(cap.get("title") or "").strip():
         lay["title"] = str(cap["title"]).strip().upper()
         lay["title_font"] = load_caption_font(caption_font_path(name, base_dir),
@@ -1275,7 +1279,7 @@ def caption_line_image(lay, rows, alpha, out):
     """One line (wrapped to one or more rows) as a transparent PNG, with room
     around it for its shadow. Returns (path, margin)."""
     from PIL import Image, ImageDraw, ImageFilter
-    k = lay["w"] / 1080
+    k = lay["cw"] / 1080
     m = round(40 * k)
     lead, font = lay["lead"], lay["font"]
     ascent, descent = font.getmetrics()
@@ -1317,7 +1321,7 @@ def caption_title_image(lay, out):
 def caption_panel_image(lay, width, height, out):
     """The paper background: a cream panel with soft corners and a shadow."""
     from PIL import Image, ImageDraw, ImageFilter
-    k = lay["w"] / 1080
+    k = lay["cw"] / 1080
     sigma = 21.6 * k
     m = round(3 * sigma)
     im = Image.new("RGBA", (round(width) + 2 * m, round(height) + 2 * m + round(11 * k)), (0, 0, 0, 0))
@@ -1377,7 +1381,7 @@ def phrase_image(lay, rows, words, e, out):
     they sit in it, in the ink (or a warm glow), blurred as asked. Returns
     (path, margin)."""
     from PIL import Image, ImageDraw, ImageFilter
-    k = lay["w"] / 1080
+    k = lay["cw"] / 1080
     m = round(80 * k)
     lead, font = lay["lead"], lay["font"]
     ascent, descent = font.getmetrics()
@@ -1397,7 +1401,7 @@ def phrase_image(lay, rows, words, e, out):
     mask = im.getchannel("A")
     if e["blur"]:   # a CSS shadow's blur radius is two standard deviations; blur only
         # the coverage, so the glow keeps its colour instead of fading to black
-        mask = mask.filter(ImageFilter.GaussianBlur(e["blur"] * lay["w"] / 100 / 2))
+        mask = mask.filter(ImageFilter.GaussianBlur(e["blur"] * lay["cw"] / 100 / 2))
     im = Image.new("RGBA", im.size, (*color, 0))
     im.putalpha(mask.point(lambda v: v * e["alpha"]))
     im.save(out)
@@ -1408,7 +1412,7 @@ def caption_layers(lines, cap, cfg, base_dir, workdir, total):
     """Everything to lay over the picture for the captions, in order:
     {kind: png | color | blur, t0, t1, fi, fo, x, y, ...}."""
     lay = caption_layout(cap, cfg, base_dir)
-    w, k = lay["w"], lay["w"] / 1080
+    w, k = lay["cw"], lay["cw"] / 1080   # sizes go by the column's width
     layers, n = [], 0
     for gi, g in enumerate(caption_groups(lines, lay["style"])):
         if g["a"] >= total:
@@ -1419,9 +1423,9 @@ def caption_layers(lines, cap, cfg, base_dir, workdir, total):
         top, bh = round(geo["y0"]), round(geo["y1"] - geo["y0"])
         x0, x1 = round(lay["x0"]), round(lay["x1"])
         if lay["bg"] == "scrim":
-            layers.append({"kind": "color", "color": "0x2d3e26@0.48", "x": 0, "y": 0, "size": (w, lay["h"]), **span})
+            layers.append({"kind": "color", "color": "0x2d3e26@0.48", "x": 0, "y": 0, "size": (lay["w"], lay["h"]), **span})
         elif lay["bg"] == "band":
-            layers.append({"kind": "color", "color": "0x2d3e26@0.64", "x": 0, "y": top, "size": (w, bh), **span})
+            layers.append({"kind": "color", "color": "0x2d3e26@0.64", "x": 0, "y": top, "size": (lay["w"], bh), **span})
         elif lay["bg"] == "blur":
             layers.append({"kind": "blur", "x": x0, "y": top, "size": (x1 - x0, bh), "sigma": 26 * k, **span})
             layers.append({"kind": "color", "color": "0x121812@0.26", "x": x0, "y": top, "size": (x1 - x0, bh), **span})

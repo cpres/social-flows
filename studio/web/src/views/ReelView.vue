@@ -201,10 +201,20 @@
                 : 'The reel runs as long as the top clip at normal speed.' }}</small>
             </label>
           </template>
+          <div class="field" v-if="!isStack">
+            Shape
+            <div class="shapes">
+              <button
+                v-for="sh in SHAPES" :key="sh.v" class="btn small" :class="{ active: (settings.shape || 'tall') === sh.v }"
+                :title="sh.hint" @click="settings.shape = sh.v"
+              >{{ sh.label }}</button>
+            </div>
+            <button class="link" @click="squareBottom" title="Square, with every part framed to the bottom of its shot, where the hands are">Square, framed to the bottom</button>
+          </div>
           <label class="field">
             {{ isStack ? 'Underneath framing' : 'Framing' }}
             <select v-model="settings.fit">
-              <option value="fill">Fill (crop to 9:16)</option>
+              <option value="fill">Fill (crop to {{ isStack ? '9:16' : shapeOf(settings.shape).short }})</option>
               <option value="blur">Blurred background</option>
               <option value="pad">Brand colour bars</option>
             </select>
@@ -413,14 +423,14 @@
             </p>
             <template #overlay><CaptionLayer v-if="showCaptions" v-bind="captionProps" /></template>
           </StackFrame>
-          <ReelFrame v-else :key="current.mediaId" v-bind="frameProps" v-on="frameOn" :guides="guides">
+          <ReelFrame v-else :key="current.mediaId" v-bind="frameProps" v-on="frameOn" :guides="tall && guides">
             <p v-if="player.failed.value" class="unplayable">
               This browser can't play this file's codec (HEVC often won't play in Chrome — try Safari).
               Thumbnails and trimming still work.
             </p>
             <template #overlay><CaptionLayer v-if="showCaptions" v-bind="captionProps" /></template>
           </ReelFrame>
-          <label class="guides-toggle muted"><input type="checkbox" v-model="guides" /> Show Instagram overlays <kbd>G</kbd></label>
+          <label class="guides-toggle muted" v-if="isStack || tall"><input type="checkbox" v-model="guides" /> Show Instagram overlays <kbd>G</kbd></label>
           <audio ref="audioEl" v-if="musicUrl" :src="musicUrl" preload="auto" @ended="onSongEnded"></audio>
           <video
             v-if="reelOn && nextMedia" class="preload" muted preload="auto"
@@ -469,6 +479,12 @@
               <button class="btn small" @click="beatsAll(beatsOf(current))" :title="`Make every part ${fmtBeats(beatsOf(current))} beats`">Use on every part</button>
             </div>
           </div>
+          <div class="tpick" v-if="!synced && current !== topPart && current.media.kind === 'video'">
+            <span class="muted">Length {{ len(current).toFixed(1) }}s</span>
+            <div>
+              <button class="btn small" @click="lengthAll(len(current))" :title="`Make every kept clip part ${len(current).toFixed(1)}s (as far as each clip runs)`">Use on every part</button>
+            </div>
+          </div>
           <div class="tpick">
             <span class="muted">Lighten <kbd>L</kbd></span>
             <div>
@@ -477,6 +493,16 @@
                 @click="setLighten(current, l.v)"
               >{{ l.label }}</button>
               <button class="btn small" @click="lightenAll(current.lighten)" :title="`Set every part to ${lightenLabel(current.lighten)}`">Use on every part</button>
+            </div>
+          </div>
+          <div class="tpick" v-if="current !== topPart && layoutOf(current) === 'fill'">
+            <span class="muted">Framing</span>
+            <div>
+              <button
+                v-for="f in FRAMINGS" :key="f.v" class="btn small" :class="{ active: Math.abs(current.focusY - f.v) < 0.01 && (current.zoom || 1) <= 1.001 }"
+                @click="setFocus({ x: current.focusX, y: f.v, zoom: 1 })" :title="f.hint"
+              >{{ f.label }}</button>
+              <button class="btn small" @click="framingAll(current)" title="Frame every part the way this one is">Use on every part</button>
             </div>
           </div>
           <div class="tpick" v-if="current !== topPart">
@@ -546,6 +572,7 @@ import SendToPhone from '../components/SendToPhone.vue'
 import SongPicker from '../components/SongPicker.vue'
 import ComposePanel from '../components/ComposePanel.vue'
 import ReelFrame from '../components/ReelFrame.vue'
+import { SHAPES, shapeOf, shapeRatio } from '../shapes'
 import StackFrame from '../components/StackFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
 import TrimBar from '../components/TrimBar.vue'
@@ -751,16 +778,39 @@ function setFocus({ x, y, zoom }) {
   saver.queue(p.id, patch)
 }
 
+// Quick framings: the whole width (zoom 1), at the top, middle or bottom.
+const FRAMINGS = [
+  { v: 0, label: 'Top', hint: 'Keep the top of the shot' },
+  { v: 0.5, label: 'Middle', hint: 'Keep the middle of the shot' },
+  { v: 1, label: 'Bottom', hint: 'Keep the bottom of the shot, where the hands are' },
+]
+function frame(p, patch) {
+  Object.assign(p, patch)
+  saver.queue(p.id, patch)
+}
+// Every part framed like this one (the top clip of a Stack keeps its own).
+function framingAll(from) {
+  const patch = { focusX: from.focusX, focusY: from.focusY, zoom: from.zoom || 1 }
+  for (const p of items.value) if (p !== from && p !== topPart.value) frame(p, patch)
+}
+// Square, every part showing the bottom of its shot at full width.
+function squareBottom() {
+  settings.shape = 'square'
+  for (const p of items.value) if (p !== topPart.value) frame(p, { focusY: 1, zoom: 1 })
+}
+
 function setKeep(p, keep) {
   p.keep = keep
   saver.queue(p.id, { keep })
 }
 
 function applyLengthToAll() {
-  const len = Number(settings.defaultLength)
+  lengthAll(Number(settings.defaultLength))
+}
+function lengthAll(len) {
   if (!(len > 0)) return
   for (const p of items.value) {
-    if (!p.keep || p.media.kind !== 'video') continue
+    if (!p.keep || p.media.kind !== 'video' || p === topPart.value) continue
     const r = fitRange(p.start, len, p.media.duration)
     Object.assign(p, r)
     saver.queue(p.id, r)
@@ -1063,7 +1113,7 @@ const showCaptions = computed(() => reelOn.value && settings.captions !== false 
 const captionProps = computed(() => ({
   lines: voiceTl.value.lines, variant: settings.captionStyle, font: settings.captionFont, bg: settings.captionBg,
   size: Number(settings.captionSize) || 1, title: settings.captionTitle || '', t: reelTime.value ?? 0,
-  fx: settings.captionFx !== false,
+  fx: settings.captionFx !== false, ratio: isStack.value ? 9 / 16 : shapeRatio(settings.shape),
 }))
 const laneStyle = (at, length) => ({
   left: `${(at / (reelLength.value || 1)) * 100}%`, width: `${(length / (reelLength.value || 1)) * 100}%`,
@@ -1164,6 +1214,7 @@ const FORMATS = [
   { v: 'stack', label: 'Stack', hint: 'A clip on top for the whole reel, the parts underneath' },
 ]
 const isStack = computed(() => settings.format === 'stack')
+const tall = computed(() => (settings.shape || 'tall') === 'tall')   // Instagram's overlays only cover a tall reel
 const underLength = computed(() => bounds.value[bounds.value.length - 1] || 0)
 const topRate = computed(() => (topPart.value && settings.fitTop
   ? topPart.value.length / (underLength.value || 1) : 1))
@@ -1238,7 +1289,8 @@ const rowNumber = (p) => items.value.filter((q) => q !== topPart.value).indexOf(
 
 // What every ReelFrame showing the selected clip gets.
 const frameProps = computed(() => ({
-  media: current.value.media, fit: layoutOf(current.value), guides: !isStack.value && guides.value,
+  media: current.value.media, fit: layoutOf(current.value), guides: !isStack.value && tall.value && guides.value,
+  out: shapeRatio(settings.shape),
   muted: !settings.originalAudio, cropped: reelOn.value, effect: effect.value, lighten: current.value.lighten,
   focusX: current.value.focusX, focusY: current.value.focusY, zoom: current.value.zoom || 1,
   posterTime: current.value.start, bindVideo: (el) => { player.video.value = el },
@@ -1626,10 +1678,11 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .render .fill { height: 100%; background: var(--forest); transition: width 0.4s; }
 .render p { margin: 8px 0 0; }
 .result { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
-.result video { height: 360px; aspect-ratio: 9 / 16; background: var(--stage); border-radius: 8px; }
+.result video { height: 360px; max-width: 100%; background: var(--stage); border-radius: 8px; }
 .result .path { word-break: break-all; }
 .log { background: var(--cream); padding: 12px; border-radius: 8px; font-size: 12px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
 .legend { font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
 .lg { display: inline-flex; align-items: center; gap: 4px; }
 .lg .sw { width: 10px; height: 10px; border-radius: 50%; }
+.shapes { display: flex; flex-wrap: wrap; gap: 6px; }
 </style>

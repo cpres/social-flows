@@ -258,13 +258,13 @@
       </div>
 
       <div class="cpreview">
-        <div class="pframe">
+        <div class="pframe" :style="{ aspectRatio: frameRatio }">
           <img v-if="previewThumb" :src="previewThumb" alt="" />
           <img v-if="rendered" class="rendered" :src="rendered" alt="As rendered" />
           <CaptionLayer
             v-if="settings.captions && !rendered" :lines="tl.lines" :variant="settings.captionStyle" :font="settings.captionFont"
             :bg="settings.captionBg" :size="Number(settings.captionSize) || 1" :title="settings.captionTitle || ''" :t="pt"
-            :fx="settings.captionFx !== false"
+            :fx="settings.captionFx !== false" :ratio="ratio"
           />
         </div>
         <div class="pctl">
@@ -297,6 +297,7 @@ import {
   CAPTION_BGS, CAPTION_FONTS, CAPTION_SIZES, CAPTION_STYLES, FX_AMOUNTS, fxInfo, fxTail, styleOf, VOICE_FX, voiceTimeline,
 } from '../captions'
 import { useVoicePlayer } from '../voicePlayer'
+import { shapeOf } from '../shapes'
 import CaptionLayer from './CaptionLayer.vue'
 
 const props = defineProps({
@@ -307,6 +308,10 @@ const props = defineProps({
   flush: { type: Function, default: () => Promise.resolve() },
 })
 const settings = props.settings
+// The preview frame takes the reel's shape (a Stack reel is always tall).
+const frameShape = computed(() => shapeOf(settings.format === 'stack' ? 'tall' : settings.shape))
+const frameRatio = computed(() => `${frameShape.value.w} / ${frameShape.value.h}`)
+const ratio = computed(() => frameShape.value.w / frameShape.value.h)
 if (!Array.isArray(settings.voice)) settings.voice = []
 const pieces = computed(() => settings.voice)
 const tl = computed(() => voiceTimeline(settings.voice))
