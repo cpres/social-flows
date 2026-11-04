@@ -307,7 +307,7 @@
               :style="laneStyle(sceneTimes[k].start, sceneTimes[k].end - sceneTimes[k].start)"
               @click="select(items.indexOf(byId.get(sc.a.item)))"
               :title="`${byId.get(sc.a.item)?.media.file}: ${fmtTime(aRanges[k][0])} → ${fmtTime(aRanges[k][1])} of the clip`"
-            >{{ byId.get(sc.a.item)?.media.file }} · {{ aPlans[k].pieces.length > 1 ? `${aPlans[k].pieces.length} pieces · ` : '' }}{{ rateText(k) }}{{ sc.layout !== 'soloA' && sc.a.timing === 'fit' ? ' fit to scene' : '' }}<span v-if="aPlans[k].rate > 4.001" class="warnchip">over 4×</span></button>
+            >{{ byId.get(sc.a.item)?.media.file }} · {{ aPlans[k].pieces.length > 1 ? `${aPlans[k].pieces.length} pieces · ` : '' }}{{ rateText(k) }}{{ aTiming(sc) === 'fit' ? ' sped to fit' : '' }}<span v-if="aPlans[k].rate > 4.001" class="warnchip">over 4×</span></button>
             <div v-else class="off" :style="laneStyle(sceneTimes[k].start, sceneTimes[k].end - sceneTimes[k].start)">{{ aIds.length ? 'A off-screen' : '' }}</div>
           </template>
           <span v-if="!aIds.length" class="muted laneempty">No clip in lane A: ⤒ on a part puts it here</span>
@@ -527,14 +527,14 @@
             </template>
             <div v-else class="timings">
               <button
-                v-for="tm in TIMINGS" :key="tm.v" class="timing" :class="{ active: (selSc.a.timing || 'fit') === tm.v }"
-                @click="editA(selK, { timing: tm.v, ...(tm.v === 'range' ? { speed: 1 } : {}) })"
+                v-for="tm in TIMINGS" :key="tm.v" class="timing" :class="{ active: aTiming(selSc) === tm.v, speedy: tm.speed }"
+                @click="editA(selK, { timing: tm.v, ...(tm.v === 'fit' ? {} : { out: null }) })"
               >
-                <b>{{ tm.label }}{{ (selSc.a.timing || 'fit') === tm.v && aPlans[selK] ? ` · ${rateText(selK)}` : '' }}</b>
+                <b>{{ tm.label }}{{ aTiming(selSc) === tm.v && aPlans[selK] && tm.speed ? ` · ${rateText(selK)}` : '' }}</b>
                 <small>{{ tm.hint }}</small>
               </button>
             </div>
-            <div class="tbtns" v-if="selSc.layout === 'soloA' || selSc.a.timing === 'hold'">
+            <div class="tbtns" v-if="aTiming(selSc) === 'hold'">
               <span class="muted">Speed</span>
               <button
                 v-for="r in [0.5, 1, 1.5, 2, 4]" :key="r" class="btn small" :class="{ active: (selSc.a.speed || 1) === r }"
@@ -547,7 +547,8 @@
                 <input class="mono" :value="fmtTime(aRanges[selK][0])" @change="setAIn(selK, $event)" />
                 <button v-if="selSc.a.in != null" class="link" @click="editA(selK, { in: null })">carry on from the last scene</button>
               </span>
-              <small class="muted">Plays {{ fmtTime(aRanges[selK][0]) }} → {{ fmtTime(aRanges[selK][1]) }} of {{ byId.get(selSc.a.item)?.media.file }}{{ aPlans[selK].pieces.length > 1 ? `, in ${aPlans[selK].pieces.length} pieces` : '' }}.
+              <small class="muted">Plays {{ fmtTime(aRanges[selK][0]) }} → {{ fmtTime(aRanges[selK][1]) }} of {{ byId.get(selSc.a.item)?.media.file }}{{ aPlans[selK].pieces.length > 1 ? `, in ${aPlans[selK].pieces.length} pieces` : '' }}{{ aPlans[selK].rate !== 1 ? ` at ${rateText(selK)}` : ' at real speed' }}.
+                <b v-if="aShort(aPlans[selK], sceneSecs[selK]) > 0.05" class="warn">The clip runs out: its last frame holds {{ aShort(aPlans[selK], sceneSecs[selK]).toFixed(1) }}s.</b>
                 <b v-if="aPlans[selK].rate > 4.001" class="warn">Over 4×: think about a shorter stretch of A, or Cut quiet moments.</b></small>
             </label>
           </template>
@@ -596,8 +597,15 @@
           :duration="current.media.duration" @update="setRange"
         >
           <p v-if="isA(current)" class="topnote muted">
-            A lane: the main footage. {{ fmtTime(current.start) }} → {{ fmtTime(current.start + current.length) }} is what the scenes can use;
-            each scene with A on screen plays a stretch of it (pick a scene to set its timing). Drag the window above to reframe it
+            <template v-for="n in aNeeds.filter((x) => x.part === current)" :key="n.part.id">
+              <template v-if="n.used">
+                Lane A starts at {{ fmtTime(current.start) }} and plays at real speed for as long as its scenes need:
+                <b>{{ fmtTime(n.from) }} → {{ fmtTime(n.to) }}</b> of the clip ({{ (n.to - n.from).toFixed(1) }}s).
+                <b v-if="n.short > 0.05" class="warn">The clip runs out {{ n.short.toFixed(1) }}s early: its last frame holds. Start it earlier, or skip quiet moments less.</b>
+              </template>
+              <template v-else>No scene shows this clip yet: pick it under a split scene's A lane.</template>
+            </template>
+            Start sets where A begins (the length only matters for <i>Speed up to fit its range</i>). Drag the window above to reframe it
             {{ editShape === 'full' ? 'full frame' : `in its ${editShape} slot` }}.
           </p>
           <label class="field check" v-if="!isA(current)">
@@ -723,7 +731,7 @@ import ComposePanel from '../components/ComposePanel.vue'
 import ReelFrame from '../components/ReelFrame.vue'
 import { SHAPES, shapeOf, shapeRatio } from '../shapes'
 import { quietCut, topSource } from '../stack'
-import { INTOS, LAYOUTS as SCENE_LAYOUTS, SCENE_IN, SOLO_A_MIN, TIMINGS, fitted, frameFor, layoutLabel, newId, normalize,
+import { INTOS, LAYOUTS as SCENE_LAYOUTS, SCENE_IN, SOLO_A_MIN, TIMINGS, aShort, aTiming, fitted, frameFor, layoutLabel, newId, normalize,
   resolveA, sceneAPlan, sceneSlots, showsA, showsB, slotShape, soloSeconds } from '../scenes'
 import SceneFrame from '../components/SceneFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
@@ -1444,16 +1452,25 @@ const editShape = computed(() => {
 
 // Lane A in each scene: its stretch of the clip, and how fast it plays.
 const aPoints = ref({})   // movement measures, for scenes that cut A's quiet moments
-watch(() => sceneList.value.filter((sc) => showsA(sc) && sc.a?.timing === 'quiet').map((sc) => sc.a.item).join(','), async (ids) => {
+watch(() => sceneList.value.filter((sc) => showsA(sc) && aTiming(sc) === 'quiet').map((sc) => sc.a.item).join(','), async (ids) => {
   for (const i of new Set(ids ? ids.split(',').map(Number) : [])) {
     const p = byId.value.get(i)
     if (!p || aPoints.value[i]) continue
     try { aPoints.value = { ...aPoints.value, [i]: (await api.activity(p.media.folder, p.media.file)).points } } catch { /* measured at render */ }
   }
 }, { immediate: true })
-const aRanges = computed(() => resolveA(sceneList.value, sceneSecs.value, byId.value))
+const aRanges = computed(() => resolveA(sceneList.value, sceneSecs.value, byId.value, (i) => aPoints.value[i]))
 const aPlans = computed(() => sceneList.value.map((sc, k) => (aRanges.value[k]
-  ? sceneAPlan(sc, aRanges.value[k], sceneSecs.value[k], aPoints.value[sc.a.item]) : null)))
+  ? sceneAPlan(sc, aRanges.value[k], sceneSecs.value[k], aPoints.value[sc.a.item], byId.value.get(sc.a.item)?.media.duration) : null)))
+// How much footage lane A needs, clip by clip: from where it starts to where the last scene on it stops.
+const aNeeds = computed(() => aParts.value.map((p) => {
+  const used = sceneList.value.map((sc, k) => (sc.a?.item === p.id ? aRanges.value[k] : null)).filter(Boolean)
+  if (!used.length) return { part: p, used: false }
+  const from = Math.min(...used.map((r) => r[0]))
+  const to = Math.max(...used.map((r) => r[1]))
+  const short = sceneList.value.reduce((t, sc, k) => t + (sc.a?.item === p.id && aPlans.value[k] ? aShort(aPlans.value[k], sceneSecs.value[k]) : 0), 0)
+  return { part: p, used: true, from, to, short }
+}))
 // What the A slot shows now: which clip, where in it and how fast.
 const aNow = computed(() => {
   const k = shownScene.value
@@ -1495,7 +1512,7 @@ function commit(list) {
 const sceneCopy = () => sceneList.value.map((sc) => ({ ...sc, a: sc.a ? { ...sc.a } : sc.a, parts: [...sc.parts] }))
 const lastSplit = () => [...sceneList.value].reverse().find((sc) => sc.layout === 'stack' || sc.layout === 'swap')
 function newA(itemFrom) {
-  return { item: itemFrom ?? aIds.value[0], in: null, out: null, timing: 'fit', speed: 1 }
+  return { item: itemFrom ?? aIds.value[0], in: null, out: null, timing: 'real', speed: 1 }
 }
 function selectScene(k) {
   const sc = sceneList.value[k]
@@ -2310,4 +2327,5 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .link.danger { color: #c0583f; }
 .warn { color: #b3412f; }
 .overruled .btn { opacity: 0.45; }
+.timing.speedy b::after { content: ' · changes speed'; font-weight: 400; font-size: 11px; color: var(--muted); }
 </style>

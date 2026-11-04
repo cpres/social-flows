@@ -1007,7 +1007,8 @@ def build_config(reel, rows, grid_bpm=None):
             fx, fy, zoom = scenes_mod.frame_for(row, scenes_mod.slot_shape(sc, "A"), "A")
             entry_sc["a"] = {"item": row["id"], "file": str(ROOT / row["path"]), "start": round(row["start"], 3),
                              "end": round(row["start"] + row["length"], 3), "in": a.get("in"), "out": a.get("out"),
-                             "timing": a.get("timing", "fit"), "speed": a.get("speed", 1),
+                             "duration": round(row["duration"], 3),
+                             "timing": a.get("timing", "real"), "speed": a.get("speed", 1),
                              "focus": [round(fx, 3), round(fy, 3)], "zoom": round(zoom, 3)}
             if row["lighten"]:
                 entry_sc["a"]["lighten"] = round(row["lighten"], 2)
@@ -1176,7 +1177,7 @@ def logo_files(choice):
 def reel_and_rows(reel_id):
     with lib.connect() as db:
         reel = reel_row(db, reel_id)
-        rows = db.execute("""SELECT i.*, m.path, m.name, m.kind, m.missing FROM reel_items i
+        rows = db.execute("""SELECT i.*, m.path, m.name, m.kind, m.missing, m.duration FROM reel_items i
                              JOIN media m ON m.id = i.media_id
                              WHERE i.reel_id = ? ORDER BY i.position, i.id""",
                           (reel_id,)).fetchall()

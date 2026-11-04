@@ -319,6 +319,21 @@ def migrate(db):
             db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), row["reel_id"]))
         db.execute("UPDATE reel_items SET layout = '' WHERE layout = 'stack'")
         db.execute("PRAGMA user_version = 2")
+    # v3: lane A plays at real speed unless a speed is picked; scenes that
+    # were fitted by speed (the default until now) play at real speed.
+    if db.execute("PRAGMA user_version").fetchone()[0] < 3:
+        for row in db.execute("SELECT id, settings FROM reels").fetchall():
+            s = json.loads(row["settings"] or "{}")
+            changed = False
+            for sc in s.get("scenes") or []:
+                a = sc.get("a") if isinstance(sc, dict) else None
+                if isinstance(a, dict) and a.get("timing") in ("fit", "range", None):
+                    a["timing"] = "real"
+                    a["out"] = None
+                    changed = True
+            if changed:
+                db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), row["id"]))
+        db.execute("PRAGMA user_version = 3")
 
 
 def photo_rotation(path):

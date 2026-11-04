@@ -196,7 +196,7 @@ over them. Lanes say what's playing; scenes say what's on screen.
   lane A is all Solo B, which is just a normal reel.
 - **Who sets the length:** when B is on screen, the scene runs as long as its
   parts, so trimming a part moves the scene's edge and A re-fits (a note says
-  "A now 1.81×"). In Solo A, A plays alone for the scene's length (or its
+  "A now 1.81×" when A's speed depends on it). In Solo A, A plays alone for the scene's length (or its
   range), and B waits. A lane that's off screen is hatched, and it pauses: it
   picks up where it left off.
 - **Click a scene** to edit it on the right: its layout (or `1`–`4`), the
@@ -205,14 +205,18 @@ over them. Lanes say what's playing; scenes say what's on screen.
   Slide, Push or Dissolve, 0.4s), and how a lane alone fills the frame (16:9
   defaults to a blurred fill). *Use this split on every stacked scene* and
   *Merge into previous scene* are at the bottom.
-- **How A plays in a scene:** *Fit to scene* speeds it up or slows it down to
-  span the scene (a warning chip shows over 4×). *Cut quiet moments to fit*
-  keeps real speed and cuts out where nothing much happens (the same
-  movement measure as Weave's), the quietest first, no piece under 3s.
-  *Its own speed, then hold* plays it at ½× to 4× and holds its last frame
-  if it runs out. *Real speed, pick a range* plays it 1× from where you say.
-  A scene that doesn't say where A starts carries on from the scene before.
-  Fitted scenes share what's left of the clip by their lengths.
+- **How A plays in a scene:** at **real speed**, always, unless you pick a
+  speed. A plays 1× for as long as the scene lasts, carrying on from the
+  scene before. So lane A works out how much footage it needs: its *Start*
+  is where it begins, and it runs on into the clip as far as the scenes need
+  (the A clip's editor says how far, e.g. "0:54 → 2:12 of the clip"). If the
+  clip runs out first, its last frame holds, and you're told by how much.
+  *Real speed, skip quiet moments* is still 1×, but it jumps over stretches
+  where nothing much happens (the same movement measure as Weave's), so more
+  of A gets in. Only two choices change speed, and they say so: *Pick a
+  speed* (½× to 4×) and *Speed up to fit its range* (A's start → end
+  squeezed into the scene, a timelapse; a chip warns over 4×). *A starts at*
+  sets where A begins in any scene.
 - **Starting a split:** `S` (*Split scene at playhead*) starts a new scene at
   the nearest cut with the last split you used, and A carries on from the
   same point. *Show A above this* in a part's editor starts one at that part.
@@ -230,7 +234,7 @@ over them. Lanes say what's playing; scenes say what's on screen.
   when a lane is alone), so a swap moves the sound with it. A sped-up A is
   silent. Music and voice sit over both lanes, as before.
 - **Reels from before:** a Standard reel becomes one Solo B scene. A Stack
-  reel's top clip becomes lane A, with one *A over B* scene fitted as before.
+  reel's top clip becomes lane A, with one *A over B* scene at real speed.
   The top-alone and on-its-own parts from the first moving-stack version
   become Solo A and Solo B scenes. Nothing changes until you edit it.
 

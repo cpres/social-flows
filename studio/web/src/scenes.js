@@ -20,18 +20,25 @@ export const INTOS = [
   { v: 'push', label: 'Push', hint: 'The new layout pushes the old one out of the frame. 0.4s.' },
   { v: 'dissolve', label: 'Dissolve', hint: 'A soft crossfade between the layouts. 0.4s.' },
 ]
+// How A plays in a scene. Real speed unless a speed is asked for.
 export const TIMINGS = [
-  { v: 'fit', label: 'Fit to scene', hint: 'Speed A up (or slow it down) so it spans the whole scene' },
-  { v: 'quiet', label: 'Cut quiet moments to fit', hint: 'Real speed; where nothing much happens is cut out until it spans the scene' },
-  { v: 'hold', label: 'Its own speed, then hold', hint: 'A plays at the speed you pick; its last frame holds if it runs out' },
-  { v: 'range', label: 'Real speed, pick a range', hint: 'Choose where A starts (I in the A clip); it plays 1× for the scene' },
+  { v: 'real', label: 'Real speed', hint: 'A plays 1× for as long as the scene lasts, carrying on from the scene before' },
+  { v: 'quiet', label: 'Real speed, skip quiet moments', hint: 'Still 1×, but it jumps over stretches where nothing much happens, so more of A gets in' },
+  { v: 'hold', label: 'Pick a speed', hint: 'A plays at the speed you pick (½× to 4×)', speed: true },
+  { v: 'fit', label: 'Speed up to fit its range', hint: 'A\'s start → end squeezed into the scene: a timelapse', speed: true },
 ]
+// The timing a scene uses: Solo A plays at its own speed (1× unless picked).
+export function aTiming(sc) {
+  if (sc.layout === 'soloA') return 'hold'
+  const t = sc.a?.timing || 'real'
+  return t === 'range' ? 'real' : ['real', 'quiet', 'hold', 'fit'].includes(t) ? t : 'real'
+}
 export const SCENE_IN = 0.4
 export const SOLO_A_DEFAULT = 4
 export const SOLO_A_MIN = 1
 export const showsA = (sc) => sc.layout !== 'soloB'
 export const showsB = (sc) => sc.layout !== 'soloA'
-export const fitted = (sc) => sc.layout !== 'soloA' && ['fit', 'quiet'].includes(sc.a?.timing)
+export const fitted = (sc) => aTiming(sc) === 'fit'
 export const newId = () => Math.random().toString(16).slice(2, 10)
 
 // The scenes as they play: each B scene with its parts (ids), in order;
@@ -117,21 +124,45 @@ export function sceneSlots(sc, w, h, dividerPx) {
            divider: d ? { w: d, h, x: first, y: 0 } : null, axis, first, second, d, full }
 }
 
-// Each scene's stretch of its A clip, [in, out] (or null). items: id → part.
-export function resolveA(scenes, secs, items) {
+// seconds of the clip from ain at real speed, skipping its lulls: pieces.
+// Shorter than asked when the clip runs out. As montage.py quiet_fill.
+export function quietFill(points, ain, end, seconds) {
+  const pieces = end - ain > seconds ? quietCut(points || [], ain, end - ain) : [[ain, end - ain]]
+  const out = []
+  let got = 0
+  for (const [st, l] of pieces) {
+    const take = Math.min(l, seconds - got)
+    if (take <= 0.04) break
+    out.push([round3(st), round3(take)])
+    got += take
+  }
+  return out.length ? out : [[ain, Math.min(seconds, Math.max(end - ain, 0.2))]]
+}
+
+// Each scene's stretch of its A clip, [in, out] (or null). items: id → part;
+// pointsOf(id): its movement measure (for skipping quiet moments). At real
+// speed a scene takes as much of the clip as it lasts, carrying on from the
+// scene before, up to the clip's end; only fit squeezes A's range in. As
+// montage.py resolve_a.
+export function resolveA(scenes, secs, items, pointsOf = () => null) {
   const out = scenes.map(() => null)
   const cursor = new Map()
   const shows = scenes.map((sc, i) => i).filter((i) => showsA(scenes[i]) && scenes[i].a && items.get(scenes[i].a.item))
   shows.forEach((i, n) => {
     const a = scenes[i].a
+    const timing = aTiming(scenes[i])
     const it = items.get(a.item)
     const start = it.start
-    const end = it.start + it.length
+    const end = timing === 'fit' ? it.start + it.length : (it.media.duration || it.start + it.length)
     const speed = a.speed || 1
     let ain = a.in != null ? a.in : (cursor.has(a.item) ? cursor.get(a.item) : start)
     ain = Math.min(Math.max(ain, start), end - 0.2)
     let aout
-    if (!fitted(scenes[i])) aout = Math.min(end, ain + secs[i] * speed)
+    if (timing === 'quiet') {
+      const pieces = quietFill(pointsOf(a.item), ain, end, secs[i])
+      const [ls, ll] = pieces[pieces.length - 1]
+      aout = ls + ll
+    } else if (timing !== 'fit') aout = Math.min(end, ain + secs[i] * (timing === 'hold' ? speed : 1))
     else if (a.out != null) aout = Math.min(Math.max(a.out, ain + 0.2), end)
     else {
       let stop = end
@@ -141,10 +172,10 @@ export function resolveA(scenes, secs, items) {
         const b = scenes[j].a
         if (b.item !== a.item) continue
         if (b.in != null) { stop = Math.min(stop, b.in); break }
-        if (fitted(scenes[j])) {
+        if (aTiming(scenes[j]) === 'fit') {
           if (b.out != null) { stop = Math.min(stop, b.out); break }
           share += secs[j]
-        } else need += secs[j] * (b.speed || 1)
+        } else need += secs[j] * (aTiming(scenes[j]) === 'hold' ? (b.speed || 1) : 1)
       }
       const room = Math.max(stop - ain - need, 0.2)
       aout = Math.min(end, ain + (room * secs[i]) / Math.max(share, 1e-6))
@@ -156,18 +187,19 @@ export function resolveA(scenes, secs, items) {
 }
 const round3 = (v) => Math.round(v * 1000) / 1000
 
-// The pieces of the A clip a scene plays, and how fast.
-export function sceneAPlan(sc, range, seconds, points) {
+// The pieces of the A clip a scene plays, and how fast (1× unless a speed
+// was asked for). It holds its last frame if they run out before the scene.
+export function sceneAPlan(sc, range, seconds, points, duration) {
   const [ain, aout] = range
   const length = aout - ain
-  const timing = sc.a?.timing || 'fit'
-  if (sc.layout === 'soloA' || timing === 'hold' || timing === 'range') return { pieces: [[ain, length]], rate: sc.a?.speed || 1 }
-  if (timing === 'quiet' && points) {
-    const pieces = quietCut(points, ain, length, seconds)
-    return { pieces, rate: Math.max(1, pieces.reduce((s, [, l]) => s + l, 0) / seconds) }
-  }
-  return { pieces: [[ain, length]], rate: length / Math.max(seconds, 0.04) }
+  const timing = aTiming(sc)
+  if (timing === 'hold') return { pieces: [[ain, length]], rate: sc.a?.speed || 1 }
+  if (timing === 'quiet') return { pieces: quietFill(points, ain, duration || aout, seconds), rate: 1 }
+  if (timing === 'fit') return { pieces: [[ain, length]], rate: length / Math.max(seconds, 0.04) }
+  return { pieces: [[ain, length]], rate: 1 }
 }
+// How long a scene's A runs short of the scene (holding its last frame).
+export const aShort = (plan, seconds) => Math.max(0, seconds - plan.pieces.reduce((s, [, l]) => s + l, 0) / plan.rate)
 
 export function layoutLabel(v, wide) {
   const l = LAYOUTS.find((x) => x.v === v)

@@ -1032,23 +1032,54 @@ def scene_slots(scene, w, h, divider):
     return slots, div
 
 
+def a_timing(scene):
+    """How A plays in a scene: real (1x, the default), quiet (1x, skipping
+    lulls), hold (the speed you picked), or fit (sped up or slowed down to
+    fit its range: only when asked for). Solo A plays at its own speed."""
+    t = (scene.get("a") or {}).get("timing") or "real"
+    if scene.get("layout") == "soloA":
+        return "hold"
+    return {"range": "real"}.get(t, t) if t in ("real", "range", "quiet", "hold", "fit") else "real"
+
+
+def quiet_fill(points, ain, end, seconds):
+    """`seconds` of the clip from ain at real speed, skipping its lulls:
+    pieces [(start, length)]. Shorter than asked when the clip runs out."""
+    pieces = quiet_cut(points, ain, end - ain) if end - ain > seconds else [(ain, end - ain)]
+    out, got = [], 0.0
+    for s, l in pieces:
+        take = min(l, seconds - got)
+        if take <= 0.04:
+            break
+        out.append((round(s, 3), round(take, 3)))
+        got += take
+    return out or [(ain, min(seconds, max(end - ain, 0.2)))]
+
+
 def resolve_a(scenes, secs):
     """Each scene's stretch of its A clip: (in, out) in the clip. A scene
-    that doesn't say carries on where the last scene on that clip stopped;
-    fitted scenes share what's left of the clip by their lengths, after what
-    the scenes at their own speed need. As stack.js resolveA."""
+    that doesn't say where A starts carries on where the last scene on that
+    clip stopped. At real speed (and skipping lulls) a scene takes as much
+    of the clip as it lasts, up to the clip's end (`duration`); at its own
+    speed, that times the speed. Only `fit` scenes squeeze A's range into
+    the scene, sharing what's left of the range by their lengths. As
+    scenes.js resolveA."""
     out = [None] * len(scenes)
     cursor = {}
     shows = [i for i, sc in enumerate(scenes) if sc.get("layout") != "soloB" and sc.get("a")]
     for n, i in enumerate(shows):
         a = scenes[i]["a"]
-        item, start, end = a.get("item"), float(a["start"]), float(a["end"])
+        timing = a_timing(scenes[i])
+        item, start = a.get("item"), float(a["start"])
+        end = float(a["end"]) if timing == "fit" else float(a.get("duration") or a["end"])
         speed = float(a.get("speed") or 1)
         ain = a.get("in")
         ain = min(max(float(ain) if ain is not None else cursor.get(item, start), start), end - 0.2)
-        fitted = a.get("timing") in ("fit", "quiet") and scenes[i].get("layout") != "soloA"
-        if not fitted:
-            aout = min(end, ain + secs[i] * speed)
+        if timing == "quiet":
+            pieces = quiet_fill([(float(t), float(v)) for t, v in a.get("activity") or []], ain, end, secs[i])
+            aout = pieces[-1][0] + pieces[-1][1]
+        elif timing != "fit":
+            aout = min(end, ain + secs[i] * (speed if timing == "hold" else 1.0))
         elif a.get("out") is not None:
             aout = min(max(float(a["out"]), ain + 0.2), end)
         else:
@@ -1060,13 +1091,13 @@ def resolve_a(scenes, secs):
                 if b.get("in") is not None:
                     stop = min(stop, float(b["in"]))
                     break
-                if b.get("timing") in ("fit", "quiet") and scenes[j].get("layout") != "soloA":
+                if a_timing(scenes[j]) == "fit":
                     if b.get("out") is not None:
                         stop = min(stop, float(b["out"]))   # (it starts where we stop)
                         break
                     share += secs[j]
                 else:
-                    need += secs[j] * float(b.get("speed") or 1)
+                    need += secs[j] * (float(b.get("speed") or 1) if a_timing(scenes[j]) == "hold" else 1.0)
             room = max(stop - ain - need, 0.2)
             aout = min(end, ain + room * secs[i] / max(share, 1e-6))
         cursor[item] = aout
@@ -1074,16 +1105,19 @@ def resolve_a(scenes, secs):
     return out
 
 
-def scene_a_plan(a, ain, aout, seconds):
-    """The pieces of the A clip a scene plays, and how fast."""
+def scene_a_plan(a, ain, aout, seconds, scene=None):
+    """The pieces of the A clip a scene plays, and how fast. Only `fit` and
+    a picked speed change it; it holds its last frame if it runs out."""
+    timing = a_timing(scene or {"a": a, "layout": "soloA" if a.get("_solo") else "stack"})
     length = aout - ain
-    timing = a.get("timing", "fit")
-    if a.get("_solo") or timing in ("hold", "range"):   # range: real speed from a picked start
+    if timing == "hold":
         return [(ain, length)], float(a.get("speed") or 1)
     if timing == "quiet":
-        pieces = quiet_cut([(float(t), float(v)) for t, v in a.get("activity") or []], ain, length, seconds)
-        return pieces, max(1.0, sum(l for _, l in pieces) / seconds)
-    return [(ain, length)], length / seconds
+        end = float(a.get("duration") or a["end"])
+        return quiet_fill([(float(t), float(v)) for t, v in a.get("activity") or []], ain, end, seconds), 1.0
+    if timing == "fit":
+        return [(ain, length)], length / seconds
+    return [(ain, length)], 1.0
 
 
 def render_scene_a(a, path, pieces, rate, size, frames, cfg, keep_audio, workdir, k):
@@ -1223,10 +1257,13 @@ def scene_report(cfg, plan, base_dir):
             line += f"  (in: {sc['into']})"
         if ranges[k]:
             a = sc["a"]
-            pieces, rate = scene_a_plan({**a, "_solo": sc.get("layout") == "soloA"}, *ranges[k], max(secs[k], 0.04))
+            pieces, rate = scene_a_plan(a, *ranges[k], max(secs[k], 0.04), sc)
             line += f"  · A {Path(a['file']).name} {fmt(ranges[k][0])} -> {fmt(ranges[k][1])} at {rate:.2f}x"
             if len(pieces) > 1:
                 line += f", {len(pieces)} pieces"
+            short = secs[k] - sum(l for _, l in pieces) / rate
+            if short > 0.05:
+                line += f", runs out: holds its last frame {short:.1f}s"
             if rate > 4.001:
                 line += "  ! over 4x"
         lines.append(line)
@@ -1259,7 +1296,7 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
                 a["_solo"] = True
                 a.setdefault("fit", solo_fill)
             ain, aout = ranges[k]
-            pieces, rate = scene_a_plan(a, ain, aout, max(frames[k] / fps, 0.04))
+            pieces, rate = scene_a_plan(a, ain, aout, max(frames[k] / fps, 0.04), sc)
             path = (base_dir / a["file"]).expanduser()
             lane_files["A"] = render_scene_a(a, path, pieces, rate, slots["A"][:2], frames[k], cfg,
                                              keep_audio, workdir, k)

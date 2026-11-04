@@ -13,7 +13,13 @@ visible, one after another (the reel's `scenes`):
      into: cut | slide | push | dissolve (how it comes in),
      fill: "" | fill | blur (a lane alone in a wide frame),
      a: {item, in, out (null: carry on / share what's left),
-         timing: fit | quiet | hold | range, speed}}
+         timing: real | quiet | hold | fit, speed}}
+
+A plays at real speed unless a speed is asked for: `real` takes as much of
+its clip as the scene lasts (carrying on from the scene before, up to the
+clip's end, then holding its last frame), `quiet` does the same skipping
+lulls, `hold` plays at the speed picked, and only `fit` speeds it up or
+slows it down to fit its range into the scene.
 
 A B scene holds the kept B parts from its `from` up to the next B scene's;
 its length is theirs. A soloA scene holds none (B waits). The same rules
@@ -24,7 +30,7 @@ import uuid
 
 LAYOUTS = ("soloA", "stack", "soloB", "swap")
 INTOS = ("cut", "slide", "push", "dissolve")
-TIMINGS = ("fit", "quiet", "hold", "range")
+TIMINGS = ("real", "quiet", "hold", "fit", "range")   # range: real, from before
 SOLO_A_DEFAULT = 4.0   # seconds a new Solo A scene runs
 SOLO_A_MIN = 1.0
 
@@ -51,10 +57,10 @@ def migrated(s, rows):
     kept = [r for r in rows if r["keep"] and not r["missing"] and r["id"] not in a_ids]
     if not a_ids:
         return [{"id": new_id(), "layout": "soloB", "from": kept[0]["id"] if kept else None, "into": "cut"}]
-    if not s.get("fitTop", True):
-        timing, speed = "hold", float(s.get("topSpeed") or 1)
+    if not s.get("fitTop", True) and abs(float(s.get("topSpeed") or 1) - 1) > 0.001:
+        timing, speed = "hold", float(s.get("topSpeed"))   # a speed that was picked
     else:
-        timing, speed = ("quiet" if s.get("fitTopBy") == "quiet" else "fit"), 1.0
+        timing, speed = ("quiet" if s.get("fitTopBy") == "quiet" else "real"), 1.0
     split = float(s.get("stackSplit") or 0.5)
 
     def a(solo=False):
@@ -166,7 +172,7 @@ def clean(scenes, s):
             c["a"] = {"item": int(a["item"]) if a.get("item") is not None else None,
                       "in": None if a.get("in") is None else round(float(a["in"]), 3),
                       "out": None if a.get("out") is None else round(float(a["out"]), 3),
-                      "timing": a.get("timing") if a.get("timing") in TIMINGS else "fit",
+                      "timing": {"range": "real"}.get(a.get("timing"), a.get("timing")) if a.get("timing") in TIMINGS else "real",
                       "speed": round(min(max(float(a.get("speed") or 1), 0.25), 16.0), 3)}
         out.append(c)
     return out
