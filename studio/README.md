@@ -287,6 +287,13 @@ over them. Lanes say what's playing; scenes say what's on screen.
   each for A glasses, B glasses, the music and the voice, at their own
   level: bright where it's heard, dim where it isn't (the lane whose sound
   isn't kept, a sped-up A, the song where it ducks).
+- **Quiet moments:** a ◆ on the audio strip by each scene edge marks the
+  quietest moment of what you hear within 1s of it, where a change of
+  scene goes by least noticed. Dragging the edge within 0.3s of its ◆
+  snaps it there (the edge turns orange); clicking the ◆ moves it there.
+  After a Solo A the edge can go anywhere; between B scenes it only goes
+  on a cut, so there the ◆ is the quietest cut nearby. A dim ◆ means the
+  edge is already as quiet as anywhere near it (nothing is 3dB quieter).
 - **Reels from before:** a Standard reel becomes one Solo B scene. A Stack
   reel's top clip becomes lane A, with one *A over B* scene at real speed.
   The top-alone and on-its-own parts from the first moving-stack version

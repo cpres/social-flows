@@ -305,7 +305,7 @@
             <small class="mono">{{ fmtTime(sceneTimes[k].start) }} → {{ fmtTime(sceneTimes[k].end) }}</small>
           </button>
           <span
-            v-for="k in sceneList.length - 1" :key="`e${k}`" class="edge"
+            v-for="k in sceneList.length - 1" :key="`e${k}`" class="edge" :class="{ snapped: dragEdge?.k === k && dragEdge.snapped }"
             :style="{ left: `${((dragEdge?.k === k ? dragEdge.t : sceneTimes[k].start) / (reelLength || 1)) * 100}%` }"
             @pointerdown.stop="edgeDown($event, k)" title="Drag to move where the scene changes"
           ></span>
@@ -372,6 +372,10 @@
         </div>
         <div class="lanebody mixstrip" :title="mixHeard ? '' : 'Nothing is heard yet: glasses audio is off and there\'s no song or voice'">
           <div v-for="(b, i) in bands" :key="`band${i}`" class="band" :style="laneStyle(b.start, b.end - b.start)"></div>
+          <button
+            v-for="m in quietMarks" :key="`q${m.k}`" class="quiet" :class="{ at: Math.abs(m.t - sceneTimes[m.k].start) < 0.02, hot: dragEdge?.k === m.k }"
+            :style="{ left: `${(m.t / (reelLength || 1)) * 100}%` }" :title="markTitle(m)" :aria-label="markTitle(m)" @click="toQuiet(m)"
+          >◆</button>
           <svg class="bars" :viewBox="`0 0 ${mix.length || 1} 1`" preserveAspectRatio="none" aria-hidden="true">
             <rect
               v-for="(b, i) in mix" :key="i" :class="`s-${b.src}`" :x="i + 0.14" :width="0.72"
@@ -823,7 +827,7 @@ import { quietCut, topSource } from '../stack'
 import { HANDOFF_DEFAULT, INTOS, isRelay, LAYOUTS as SCENE_LAYOUTS, SCENE_IN, SOLO_A_MIN, TIMINGS, aShort, aTiming, fitted, handoffSecs, frameFor, layoutLabel, newId, normalize,
   resolveA, sceneAPlan, sceneSlots, showsA, showsB, slotShape, soloSeconds } from '../scenes'
 import SceneFrame from '../components/SceneFrame.vue'
-import { DUCK_DB, GLASSES, audioSegments, glassesMode, mixBars, musicBars, trackBars, transitionBands, withDucking } from '../audioMix'
+import { DUCK_DB, GLASSES, QUIET_SNAP, audioSegments, glassesMode, mixBars, musicBars, quietMarker, trackBars, transitionBands, withDucking } from '../audioMix'
 import TimingFields from '../components/TimingFields.vue'
 import TrimBar from '../components/TrimBar.vue'
 
@@ -1831,23 +1835,64 @@ function mergeIntoPrevious(k) {
   commit(list)
   selScene.value = list[k - 1].id
 }
+// Quiet markers (◆ on the audio strip): the quietest moment of what you hear
+// within 1s of each scene edge, where a change of scene (and of sound) is
+// least jarring. After a Solo A the edge can go anywhere; between B scenes
+// only on a cut, so there the marker is the quietest cut nearby.
+function edgeCuts(k) {
+  const list = sceneList.value
+  if (!k || !list[k]) return undefined
+  if (list[k - 1].layout === 'soloA') return null           // anywhere
+  if (list[k].layout === 'soloA') return undefined          // not draggable here
+  const pStart = sceneTimes.value[k - 1].start
+  const end = sceneTimes.value[k].end
+  return stretches.value
+    .filter((st) => (st.scene === k - 1 || st.scene === k) && st.kind === 'part')
+    .map((st) => st.start).filter((t) => t - pStart >= SOLO_A_MIN && end - t >= SOLO_A_MIN)
+}
+const quietMarks = computed(() => {
+  if (envWaiting.value) return []
+  const out = []
+  for (let k = 1; k < sceneList.value.length; k++) {
+    const cuts = edgeCuts(k)
+    if (cuts === undefined) continue
+    const m = quietMarker(audioSegs.value, envsForMix.value, sceneTimes.value[k].start, reelLength.value, cuts)
+    if (m) out.push({ ...m, k })
+  }
+  return out
+})
+const markTitle = (m) => (Math.abs(m.t - sceneTimes.value[m.k].start) < 0.02
+  ? `Scene ${m.k + 1} already starts at the quietest moment nearby`
+  : `Quietest moment near scene ${m.k + 1}'s start: ${fmtTime(m.t)}, ${Math.max(0, m.edgeDb - m.db).toFixed(0)}dB quieter than where it is. Click to move the edge here, or drag the edge near it.`)
+
 // Scene edges: drag the start of scene k. Between two B scenes it snaps to a
 // cut; the end of a Solo A scene sets its length. Under 1s, the scenes merge.
+// Near the edge's quiet marker, it snaps to that.
 const dragEdge = ref(null)
 function edgeDown(e, k) {
   e.currentTarget.setPointerCapture(e.pointerId)
-  dragEdge.value = { k, row: e.currentTarget.parentElement.getBoundingClientRect(), t: sceneTimes.value[k].start }
+  dragEdge.value = { k, row: e.currentTarget.parentElement.getBoundingClientRect(), t: sceneTimes.value[k].start, snapped: false }
 }
 function edgeMove(e) {
   const d = dragEdge.value
   if (!d) return
   d.t = Math.max(0, Math.min(reelLength.value, ((e.clientX - d.row.left) / d.row.width) * reelLength.value))
+  const m = quietMarks.value.find((x) => x.k === d.k)
+  d.snapped = !!m && Math.abs(d.t - m.t) < QUIET_SNAP
+  if (d.snapped) d.t = m.t
 }
 function edgeUp() {
   const d = dragEdge.value
   dragEdge.value = null
   if (!d) return
-  const { k, t } = d
+  setEdge(d.k, d.t)
+}
+function toQuiet(m) {
+  stopReel()
+  setEdge(m.k, m.t)
+  say(`Scene ${m.k + 1} starts at ${fmtTime(m.t)}, the quiet moment`)
+}
+function setEdge(k, t) {
   const list = sceneCopy()
   const prev = list[k - 1]
   const sc = list[k]
@@ -2511,6 +2556,13 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .trackrow .lanename b.t-music { color: var(--au-music); } .trackrow .lanename b.t-voice { color: var(--au-voice); }
 .trackctl { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 0; }
 .duckbox { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; }
+.quiet {
+  position: absolute; top: -7px; z-index: 2; transform: translateX(-50%); padding: 0 2px; border: 0; background: none;
+  font-size: 11px; line-height: 1; color: var(--ink); opacity: 0.75; cursor: pointer;
+}
+.quiet:hover, .quiet.hot { opacity: 1; color: #e08038; }
+.quiet.at { opacity: 0.4; }
+.edge.snapped::after { opacity: 1; background: #e08038; width: 3px; left: 3.5px; }
 .band { position: absolute; top: 0; bottom: 0; min-width: 3px; background: rgb(224 128 56 / 28%); border-left: 1px solid rgb(224 128 56 / 55%); border-right: 1px solid rgb(224 128 56 / 55%); pointer-events: none; }
 
 /* lanes & scenes */

@@ -277,3 +277,46 @@ export function musicBars(segs, envs, reelLength, step = BAR) {
   const bars = trackBars(segs.music, envs, reelLength, step)
   return bars.map((b) => ({ ...b, on: b.on && duckAt(segs.duck, b.t + step / 2) > 0.85 }))
 }
+
+// ---------------------------------------------------------------- quiet moments
+
+// Everything heard at t (power): the mix strip's sum, at one moment.
+export function heardPower(segs, envs, t) {
+  let p = 0
+  for (const s of SOURCES) for (const seg of segs[s]) if (seg.audible) p += segPower(seg, envs[seg.key], t)
+  return p
+}
+// How loud it is around t: power over ±0.1s (five 40ms windows), in dBFS.
+export function levelAround(segs, envs, t) {
+  let p = 0
+  for (let j = -2; j <= 2; j++) p += heardPower(segs, envs, t + j * WIN)
+  p /= 5
+  return p > 0 ? 10 * Math.log10(p) : FLOOR
+}
+export const QUIET_REACH = 1.0   // a marker is the quietest moment within this of its edge
+export const QUIET_SNAP = 0.3    // a dragged edge this close to its marker snaps to it
+const QUIET_GAIN = 3             // dB quieter than the edge, for a marker to move off it
+
+// The quiet marker for a scene edge at `at`: { t, db, edgeDb }, or null if
+// it's silent all around (nothing to choose). `cuts` are the only places the
+// edge can go (between B scenes), else it can go anywhere (after Solo A).
+export function quietMarker(segs, envs, at, reelLength, cuts = null) {
+  const lo = Math.max(0.1, at - QUIET_REACH)
+  const hi = Math.min(reelLength - 0.1, at + QUIET_REACH)
+  const places = cuts ? cuts.filter((t) => t >= lo - 1e-6 && t <= hi + 1e-6) : []
+  if (!cuts) for (let t = lo; t <= hi + 1e-6; t += WIN) places.push(t)
+  if (!places.length) return null
+  let best = null
+  let loudest = FLOOR
+  for (const t of places) {
+    const db = levelAround(segs, envs, t)
+    loudest = Math.max(loudest, db)
+    // Ties go to the place nearest the edge, so a flat stretch doesn't move it.
+    if (!best || db < best.db - 0.5 || (Math.abs(db - best.db) <= 0.5 && Math.abs(t - at) < Math.abs(best.t - at))) best = { t, db }
+  }
+  if (loudest <= FLOOR + 1) return null
+  // Only somewhere clearly quieter is worth moving to; else the edge is fine where it is.
+  const edgeDb = levelAround(segs, envs, at)
+  if (edgeDb - best.db < QUIET_GAIN) return { t: at, db: edgeDb, edgeDb }
+  return { t: Math.round(best.t * 1000) / 1000, db: best.db, edgeDb }
+}
