@@ -236,11 +236,18 @@
             >{{ timingPhotos ? 'Looking at the photos…' : '✦ Smart photo holds' }}</button>
             <small v-if="smartNote">{{ smartNote }}</small>
           </div>
-          <label class="field check">
-            <span><input type="checkbox" v-model="settings.originalAudio" /> Keep glasses audio</span>
-            <small>{{ settings.originalAudio ? 'Mixed under any music.' : 'Off: music only, or silent.' }}</small>
+          <div class="field">
+            Glasses audio
+            <div class="tbtns">
+              <button v-for="g in GLASSES" :key="g.v" class="btn small" :class="{ primary: glasses === g.v }" :title="g.hint" @click="glasses = g.v">{{ g.label }}</button>
+            </div>
+            <small>{{ GLASSES.find((g) => g.v === glasses).hint }}</small>
+          </div>
+          <label class="field check" v-if="settings.music">
+            <span><input type="checkbox" :checked="settings.duckMusic !== false" @change="settings.duckMusic = $event.target.checked" /> Duck music under glasses + voice</span>
+            <small>The song drops about {{ DUCK_DB }}dB while the glasses audio is loud or the voice speaks.</small>
           </label>
-          <label class="field" v-if="settings.originalAudio">
+          <label class="field" v-if="glasses !== 'off'">
             Glasses audio volume
             <input type="number" min="0" max="1" step="0.05" v-model.number="settings.originalVolume" />
           </label>
@@ -359,7 +366,10 @@
       </div>
       <!-- what will be heard: the mix of glasses audio, song and voice (audioMix.js) -->
       <div class="lanerow audiorow">
-        <div class="lanename"><b>Audio</b><small>{{ envWaiting ? 'measuring…' : 'what you hear' }}</small></div>
+        <div class="lanename">
+          <b>Audio</b><small>{{ envWaiting ? 'measuring…' : 'what you hear' }}</small>
+          <button class="tracksbtn" @click="showTracks = !showTracks" :aria-expanded="showTracks">{{ showTracks ? 'Hide tracks' : 'Show tracks' }}</button>
+        </div>
         <div class="lanebody mixstrip" :title="mixHeard ? '' : 'Nothing is heard yet: glasses audio is off and there\'s no song or voice'">
           <div v-for="(b, i) in bands" :key="`band${i}`" class="band" :style="laneStyle(b.start, b.end - b.start)"></div>
           <svg class="bars" :viewBox="`0 0 ${mix.length || 1} 1`" preserveAspectRatio="none" aria-hidden="true">
@@ -372,6 +382,31 @@
           <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
         </div>
       </div>
+      <template v-if="showTracks">
+        <div v-for="tr in tracks" :key="tr.id" class="lanerow audiorow trackrow">
+          <div class="lanename"><b :class="`t-${tr.id}`">{{ tr.name }}</b><small>{{ tr.sub }}</small></div>
+          <div class="lanebody track">
+            <div v-for="(b, i) in bands" :key="`band${i}`" class="band" :style="laneStyle(b.start, b.end - b.start)"></div>
+            <svg class="bars" :viewBox="`0 0 ${tr.bars.length || 1} 1`" preserveAspectRatio="none" aria-hidden="true">
+              <rect
+                v-for="(b, i) in tr.bars" :key="i" :class="[`s-${tr.id}`, { dim: !b.on }]" :x="i + 0.14" :width="0.72"
+                :y="(1 - Math.max(b.h, 0.02)) / 2" :height="Math.max(b.h, 0.02)"
+              />
+            </svg>
+            <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
+          </div>
+        </div>
+        <div class="lanerow audiorow">
+          <div class="lanename"></div>
+          <div class="trackctl">
+            <span class="muted small">Glasses audio</span>
+            <button v-for="g in GLASSES" :key="g.v" class="btn small" :class="{ primary: glasses === g.v }" :title="g.hint" @click="glasses = g.v">{{ g.label }}</button>
+            <label v-if="settings.music" class="small duckbox" :title="`The song drops about ${DUCK_DB}dB while the glasses audio is loud or the voice speaks`">
+              <input type="checkbox" :checked="settings.duckMusic !== false" @change="settings.duckMusic = $event.target.checked" /> Duck music under glasses + voice
+            </label>
+          </div>
+        </div>
+      </template>
       <!-- the voice track and its captions, on the same clock -->
       <div v-if="voiceTl.pieces.length" class="lane vlane" @click="seekLane" title="The voice: click to play from there">
         <div
@@ -788,7 +823,7 @@ import { quietCut, topSource } from '../stack'
 import { HANDOFF_DEFAULT, INTOS, isRelay, LAYOUTS as SCENE_LAYOUTS, SCENE_IN, SOLO_A_MIN, TIMINGS, aShort, aTiming, fitted, handoffSecs, frameFor, layoutLabel, newId, normalize,
   resolveA, sceneAPlan, sceneSlots, showsA, showsB, slotShape, soloSeconds } from '../scenes'
 import SceneFrame from '../components/SceneFrame.vue'
-import { audioSegments, mixBars, transitionBands } from '../audioMix'
+import { DUCK_DB, GLASSES, audioSegments, glassesMode, mixBars, musicBars, trackBars, transitionBands, withDucking } from '../audioMix'
 import TimingFields from '../components/TimingFields.vue'
 import TrimBar from '../components/TrimBar.vue'
 
@@ -1623,11 +1658,33 @@ const envWanted = computed(() => {
 watch(() => envWanted.value.map((k) => k.key).join('|'), () => fetchEnvs(envWanted.value), { immediate: true })
 // The song's envelope is kept under its name; the mix reads it as 'music'.
 const envsForMix = computed(() => ({ ...envs.value, music: envs.value[`music:${settings.music}`] }))
-const audioSegs = computed(() => audioSegments({
+const audioSegs = computed(() => withDucking(audioSegments({
   sceneList: sceneList.value, sceneTimes: sceneTimes.value, stretches: stretches.value, aPlans: aPlans.value,
   aSecs: aSecs.value, handoffs: handoffs.value, byId: byId.value, reelLength: reelLength.value, settings,
   voicePieces: voiceTl.value.pieces, songVolume,
-}))
+}), envsForMix.value, reelLength.value, settings))
+// The rows per source (Show tracks): each at its own level, dim where it isn't heard.
+const TRACKS_KEY = 'footage-studio-audio-tracks'
+const showTracks = ref((() => { try { return localStorage.getItem(TRACKS_KEY) === '1' } catch { return false } })())
+watch(showTracks, (v) => { try { localStorage.setItem(TRACKS_KEY, v ? '1' : '0') } catch { /* storage unavailable */ } })
+const tracks = computed(() => {
+  if (!showTracks.value) return []
+  const segs = audioSegs.value
+  const env = envsForMix.value
+  const L = reelLength.value
+  const rows = [
+    { id: 'A', name: 'A glasses', sub: 'mic', bars: trackBars(segs.A, env, L), show: aIds.value.length > 0 },
+    { id: 'B', name: 'B glasses', sub: 'mic', bars: trackBars(segs.B, env, L), show: true },
+    { id: 'music', name: 'Music', sub: segs.duck.length ? 'ducked under glasses' : 'the song', bars: musicBars(segs, env, L), show: !!settings.music },
+    { id: 'voice', name: 'Voice', sub: 'voiceover', bars: trackBars(segs.voice, env, L), show: segs.voice.length > 0 },
+  ]
+  return rows.filter((r) => r.show)
+})
+// Glasses audio: follows the primary slot, lane A only, or off (older reels: Keep glasses audio).
+const glasses = computed({
+  get: () => glassesMode(settings),
+  set: (v) => { settings.glassesAudio = v; settings.originalAudio = v !== 'off' },
+})
 const mix = computed(() => mixBars(audioSegs.value, envsForMix.value, reelLength.value))
 const mixHeard = computed(() => mix.value.some((b) => b.h > 0))
 const bands = computed(() => transitionBands({
@@ -1984,7 +2041,7 @@ const frameProps = computed(() => {
     media: current.value.media,
     fit: editShape.value !== 'full' ? 'fill' : (!isA(current.value) && current.value.layout) || (aIds.value.length ? soloFitOf(shownSc.value || {}) : layoutOf(current.value)),
     guides: !aIds.value.length && tall.value && guides.value, out: shapeRatio(settings.shape),
-    muted: !settings.originalAudio, cropped: reelOn.value, effect: effect.value, lighten: current.value.lighten,
+    muted: glassesMode(settings) !== 'primary', cropped: reelOn.value, effect: effect.value, lighten: current.value.lighten,
     focusX: f.x, focusY: f.y, zoom: f.zoom,
     posterTime: current.value.start, bindVideo: (el) => { player.video.value = el },
   }
@@ -2442,6 +2499,18 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .bars rect.s-B { fill: var(--au-b); }
 .bars rect.s-music { fill: var(--au-music); }
 .bars rect.s-voice { fill: var(--au-voice); }
+.lanename .tracksbtn {
+  align-self: flex-start; margin-top: 3px; padding: 1px 7px; border-radius: 6px; font: inherit; font-size: 10px; cursor: pointer;
+  border: 1px solid var(--line); background: transparent; color: var(--muted);
+}
+.lanename .tracksbtn:hover { color: var(--ink); border-color: var(--sage); }
+.track { min-height: 36px; border-radius: 6px; background: rgb(128 128 128 / 5%); }
+.track .bars { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.bars rect.dim { opacity: 0.22; }
+.trackrow .lanename b.t-A { color: var(--au-a); } .trackrow .lanename b.t-B { color: var(--au-b); }
+.trackrow .lanename b.t-music { color: var(--au-music); } .trackrow .lanename b.t-voice { color: var(--au-voice); }
+.trackctl { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 0; }
+.duckbox { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; }
 .band { position: absolute; top: 0; bottom: 0; min-width: 3px; background: rgb(224 128 56 / 28%); border-left: 1px solid rgb(224 128 56 / 55%); border-right: 1px solid rgb(224 128 56 / 55%); pointer-events: none; }
 
 /* lanes & scenes */

@@ -259,9 +259,16 @@ over them. Lanes say what's playing; scenes say what's on screen.
 - **Transitions:** inside a scene, parts keep their own *Into next part*.
   Where a scene starts, the scene's transition wins, and the part's picker
   says so.
-- **Sound:** *Keep glasses audio* follows the primary slot (the full frame
-  when a lane is alone), so a swap moves the sound with it. A sped-up A is
-  silent. Music and voice sit over both lanes, as before.
+- **Sound:** *Glasses audio* (under the audio tracks, or in *Settings*) is
+  *Follows primary slot* (the lane top or left, or the one alone; a swap
+  moves the sound with it), *A only* (lane A whenever it's on screen, never
+  B) or *Off*. Reels that had *Keep glasses audio* on start on *Follows
+  primary slot*. A sped-up A is silent. Where a scene's sound comes from
+  somewhere else, it switches over 80ms (out 40ms, in 40ms) so it never
+  clicks; where the same A clip carries straight on, it doesn't dip.
+  *Duck music under glasses + voice* (on) drops the song about 9dB (in
+  0.15s, back over 0.4s) wherever the kept glasses audio is loud, as well
+  as under the voice; off, the song stays at its level throughout.
 - **Audio strip:** under the lanes, *Audio* shows what you'll actually
   hear, on the same clock: the glasses audio that's kept, the song at its
   level (lower under the voice, fading at the end) and the voice, added up
@@ -271,7 +278,10 @@ over them. Lanes say what's playing; scenes say what's on screen.
   next with anything but a cut). Each file's loudness is measured once
   (`audio.py`, cached in `~/.cache/footage-studio`); the first look at a
   reel says *measuring…* while that happens. The strip follows the
-  render's own levels, to within about half a dB.
+  render's own levels, to within about half a dB. *Show tracks* opens a row
+  each for A glasses, B glasses, the music and the voice, at their own
+  level: bright where it's heard, dim where it isn't (the lane whose sound
+  isn't kept, a sped-up A, the song where it ducks).
 - **Reels from before:** a Standard reel becomes one Solo B scene. A Stack
   reel's top clip becomes lane A, with one *A over B* scene at real speed.
   The top-alone and on-its-own parts from the first moving-stack version

@@ -151,6 +151,14 @@ def frame_size(s):
     return SHAPES.get(s.get("shape"), SHAPES["tall"])
 
 
+def glasses_of(s):
+    """Which glasses audio a reel keeps: primary (the primary slot's lane), A
+    (lane A only) or off. Reels from before say originalAudio true/false."""
+    if s.get("glassesAudio") in ("primary", "A", "off"):
+        return s["glassesAudio"]
+    return "primary" if s.get("originalAudio") else "off"
+
+
 def clean_settings(db, reel_id, s):
     """Keep the Stack settings in range."""
     if s.get("format") not in FORMATS:
@@ -176,6 +184,10 @@ def clean_settings(db, reel_id, s):
         s["topItemId"] = int(s["topItemId"])
         if not top_item(db, reel_id, {**s, "format": "stack"}):
             s["topItemId"] = None   # removed, or not a video in this reel
+    if "glassesAudio" in s:
+        s["glassesAudio"] = glasses_of(s)
+        s["originalAudio"] = s["glassesAudio"] != "off"   # what older code reads
+    s["duckMusic"] = bool(s.get("duckMusic", True))
     return s
 
 
@@ -1192,7 +1204,9 @@ def build_config(reel, rows, grid_bpm=None):
         "transitions": {"within_round": "cut", "between_rounds": "dissolve",
                         "into_image": "dissolve", "out_of_image": "dissolve",
                         "duration": 0.3},
-        "original_audio": bool(s.get("originalAudio")),
+        "original_audio": glasses_of(s) != "off",
+        "glasses_audio": glasses_of(s),
+        "duck_music": bool(s.get("duckMusic", True)),
         "original_volume": s.get("originalVolume", 0.35),
         "fit": s.get("fit", "fill"),
         "photo_motion": "push",

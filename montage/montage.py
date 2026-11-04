@@ -31,7 +31,9 @@ without it, set bpm: in the config instead.
 """
 
 import argparse
+import array
 import json
+import math
 import shutil
 import subprocess
 import sys
@@ -60,8 +62,38 @@ LIGHTEN_GAMMA = 0.6   # per-source `lighten:` 0..1; 1 = gamma 1.6
 
 EDGE_FADE = 0.03  # tiny audio fade on every cut so hard cuts never click
 
+# Glasses audio (the clips' own sound): `glasses_audio:` primary (the lane in
+# the primary slot: top/left, or the one alone), A (lane A whenever it's on
+# screen, never B) or off. Older configs say `original_audio: true/false`.
+GLASSES_MODES = ("primary", "A", "off")
+SWITCH_FADE = 0.04   # where a scene's sound comes from somewhere else: out 40ms, in 40ms
+# The song ducks under loud glasses audio (`duck_music:`, on by default), as
+# it does under the voice. The same numbers are in studio/web/src/audioMix.js.
+DUCK_DB = 9.0          # how far the song drops
+DUCK_ATTACK = 0.15     # seconds to drop
+DUCK_RELEASE = 0.4     # seconds to come back
+DUCK_THRESHOLD = -38.0  # dBFS of the kept glasses audio (over 0.2s) that counts as loud
+DUCK_GAP = 0.5         # quieter gaps shorter than this stay ducked
+DUCK_MIN = 0.15        # loud moments shorter than this don't duck
+
 
 # ---------------------------------------------------------------- helpers
+
+def glasses_mode(cfg):
+    mode = cfg.get("glasses_audio")
+    if mode in GLASSES_MODES:
+        return mode
+    return "primary" if cfg.get("original_audio") else "off"
+
+
+def scene_sound(scene, lanes, mode):
+    """Which lane's sound a scene keeps, or None for none."""
+    if mode == "off":
+        return None
+    if mode == "A":
+        return "A" if "A" in lanes else None
+    primary = "A" if scene.get("layout") in ("soloA", "stack") else "B"
+    return primary if primary in lanes else lanes[0]
 
 def parse_time(value):
     """Accept 75, 75.5, '1:15', '0:01:15.5' -> seconds (float)."""
@@ -1186,7 +1218,8 @@ def render_scene_a(a, path, pieces, rate, size, frames, cfg, keep_audio, workdir
 def compose_scene(scene, slots, div, files, frames, tail, cfg, workdir, k):
     """One scene's frame: each lane in its slot (and the divider), held on
     its last frame for `tail` more frames so the next scene can come in over
-    it. The sound is the primary lane's: A in soloA and stack, B otherwise."""
+    it. The sound is the primary lane's (A in soloA and stack, B otherwise),
+    lane A's in `glasses_audio: A`, or none."""
     fps, w, h = cfg["fps"], cfg["width"], cfg["height"]
     color = str((cfg.get("stack") or {}).get("divider_color", "#f7f1e3")).replace("#", "0x")
     lanes = [lane for lane in ("A", "B") if lane in slots]
@@ -1208,18 +1241,20 @@ def compose_scene(scene, slots, div, files, frames, tail, cfg, workdir, k):
         graph.append(f"color=c={color}:s={dw}x{dh}:r={fps},format=yuv420p,trim=end_frame={frames + tail}[div]")
         graph.append(f"{cur}[div]overlay=x={x}:y={y}[cd]")
         cur = "[cd]"
-    primary = "A" if scene.get("layout") in ("soloA", "stack") else "B"
-    if primary not in lanes:
-        primary = lanes[0]
+    sound = scene_sound(scene, lanes, glasses_mode(cfg))
     graph.append(f"{cur}format=yuv420p,trim=end_frame={frames + tail},setpts=PTS-STARTPTS[v]")
-    graph.append(f"[{lanes.index(primary)}:a]apad,atrim=0:{frames / fps:.4f},asetpts=PTS-STARTPTS[a]")
+    if sound:
+        graph.append(f"[{lanes.index(sound)}:a]apad,atrim=0:{frames / fps:.4f},asetpts=PTS-STARTPTS[a]")
+    else:
+        cmd += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
+        graph.append(f"[{len(lanes)}:a]atrim=0:{frames / fps:.4f},asetpts=PTS-STARTPTS[a]")
     out = workdir / f"scene{k:02d}.mkv"
     run(cmd + ["-filter_complex", ";".join(graph), "-map", "[v]", "-map", "[a]",
                *video_codec(cfg), "-r", str(fps), "-c:a", "pcm_s16le", str(out)])
     return out
 
 
-def join_scenes(files, scenes, frames, tails, cfg, workdir, slots=None, hand_f=None):
+def join_scenes(files, scenes, frames, tails, cfg, workdir, slots=None, hand_f=None, switches=None):
     """The scenes one after another. A scene comes in over the last frame of
     the one before: cut, slide (it slides in from the bottom, or the right
     in a wide frame), push (it pushes the last one out) or dissolve."""
@@ -1305,7 +1340,17 @@ def join_scenes(files, scenes, frames, tails, cfg, workdir, slots=None, hand_f=N
         graph.append(f"{labels[k]['body']}trim=start_frame={head}:end_frame={frames[k]},setpts=PTS-STARTPTS[b{k}]")
         pieces.append(f"[b{k}]")
     graph.append("".join(pieces) + f"concat=n={len(pieces)}:v=1:a=0,format=yuv420p[v]")
-    graph.append("".join(f"[{k}:a]" for k in range(n)) + f"concat=n={n}:v=0:a=1[a]")
+    # The sound, scene after scene: where it switches source, the one going
+    # fades over its last SWITCH_FADE and the one coming over its first.
+    switches = switches or [False] * n
+    for k in range(n):
+        fades = []
+        if switches[k]:
+            fades.append(f"afade=t=in:d={SWITCH_FADE}:curve=qsin")
+        if k + 1 < n and switches[k + 1]:
+            fades.append(f"afade=t=out:st={max(frames[k] / fps - SWITCH_FADE, 0):.4f}:d={SWITCH_FADE}:curve=qsin")
+        graph.append(f"[{k}:a]{','.join(fades) or 'anull'}[sa{k}]")
+    graph.append("".join(f"[sa{k}]" for k in range(n)) + f"concat=n={n}:v=0:a=1[a]")
     out = workdir / "scenes.mkv"
     run(cmd + ["-filter_complex", ";".join(graph), "-map", "[v]", "-map", "[a]",
                *video_codec(cfg), "-r", str(fps), "-c:a", "pcm_s16le", str(out)])
@@ -1369,7 +1414,8 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
     hand_f = [round(x * fps) for x in hands]
     tails = [min(round((HANDOFF_MOVE if moves_in(scenes, k + 1) else SCENE_IN) * fps), frames[k], frames[k + 1])
              if k + 1 < len(scenes) and scenes[k + 1].get("into", "cut") != "cut" else 0 for k in range(len(scenes))]
-    files, all_slots = [], []
+    files, all_slots, sources = [], [], []
+    mode = glasses_mode(cfg)
     for k, sc in enumerate(scenes):
         print(f"  scene {k + 1}/{len(scenes)}...                     ", end="\r")
         slots, div = scene_slots(sc, w, h, divider)
@@ -1401,9 +1447,21 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
                                              cfg, workdir, k)
         all_slots.append(slots)
         files.append(compose_scene(sc, slots, div, lane_files, frames[k], tails[k], cfg, workdir, k))
+        # Where its sound comes from: lane A's clip from where to where (and how fast), or the B parts.
+        lane = scene_sound(sc, [x for x in ("A", "B") if x in slots], mode)
+        if lane == "A":
+            sources.append(("A", sc["a"]["file"], ranges[k][0], ranges[k][1], round(rate, 3), hand_f[k]))
+        else:
+            sources.append((lane,))
     if len(files) == 1:
         return files[0]
-    return join_scenes(files, scenes, frames, tails, cfg, workdir, all_slots, hand_f)
+    # A short switch where the sound comes from somewhere else; none where
+    # the same A clip carries straight on at real speed.
+    switches = [k > 0 and not (sources[k][0] == "A" and sources[k - 1][0] == "A"
+                               and sources[k][1] == sources[k - 1][1] and not sources[k][5]
+                               and abs(sources[k][2] - sources[k - 1][3]) < 0.05)
+                for k in range(len(files))]
+    return join_scenes(files, scenes, frames, tails, cfg, workdir, all_slots, hand_f, switches)
 
 
 def render_carry(carry, frames, cfg, base_dir, keep_audio, workdir, k, fill):
@@ -1487,8 +1545,17 @@ def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output,
     if music:
         inputs += ["-ss", f"{music_start:.3f}", "-i", str(music_path(cfg, base_dir))]
         fade = min(float(cfg.get("music_fade_out", 2.0)), total_len / 3)
-        level = (f"volume='{song_level(voice)}':eval=frame" if voice
-                 else f"volume={float(cfg.get('music_volume', 1.0))}")
+        duck = bool(cfg.get("duck_music", True))
+        if voice:
+            base = song_level(voice) if duck else f"{voice['between']:.3f}"
+        else:
+            base = f"{float(cfg.get('music_volume', 1.0)):.3f}"
+        runs = loud_runs(assembled, bed) if duck and bed > 0 else []
+        if runs:
+            print(f"  ducking the song under the glasses audio in {len(runs)} place{'s' if len(runs) != 1 else ''}"
+                  "                ")
+            base = f"({base})*({duck_level(runs)})"
+        level = f"volume='{base}':eval=frame"
         graph.append(f"[1:a]aformat=sample_rates=48000:channel_layouts=stereo,{level},"
                      f"afade=t=out:st={max(total_len - fade, 0):.3f}:d={fade:.3f}[m]")
         mix.append("[m]")
@@ -1627,6 +1694,48 @@ def fx_graph(f, src, out, key):
     # doubled: a second and third voice just behind, drifting (chorus)
     decays = "|".join(f"{min(0.9, d * a):.2f}" for d in (0.5, 0.45, 0.4))
     return [f"[{src}]chorus=0.7:0.9:40|60|80:{decays}:0.3|0.4|0.3:1.5|2|1.2,volume=0.75[{out}]"]
+
+
+def loud_runs(path, gain):
+    """Where the kept glasses audio (at `gain`) is loud enough to duck the
+    song under: [(start, end)]. Its level every 40ms, averaged over 0.2s,
+    above DUCK_THRESHOLD; quieter gaps under DUCK_GAP joined, and moments
+    under DUCK_MIN dropped. audioMix.js finds the same from the envelopes."""
+    raw = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-vn",
+                          "-ac", "1", "-ar", "8000", "-f", "s16le", "-"], capture_output=True).stdout
+    samples = array.array("h")
+    samples.frombytes(raw[: len(raw) // 2 * 2])
+    step = 320   # 40ms at 8kHz
+    powers = [sum(x * x for x in samples[i:i + step]) / (max(len(samples[i:i + step]), 1) * 32768.0 ** 2) * gain * gain
+              for i in range(0, len(samples), step)]
+    return runs_from_powers(powers, 0.04)
+
+
+def runs_from_powers(powers, step):
+    on = []
+    for i in range(len(powers)):
+        near = powers[max(0, i - 2):i + 3]
+        p = sum(near) / len(near)
+        on.append(p > 0 and 10 * math.log10(p) > DUCK_THRESHOLD)
+    runs = []
+    for i, x in enumerate(on):
+        if not x:
+            continue
+        t = i * step
+        if runs and t - runs[-1][1] < DUCK_GAP:
+            runs[-1][1] = t + step
+        else:
+            runs.append([t, t + step])
+    return [(round(a, 3), round(b, 3)) for a, b in runs if b - a >= DUCK_MIN]
+
+
+def duck_level(runs):
+    """1, dropping DUCK_DB over DUCK_ATTACK into each loud run and coming
+    back over DUCK_RELEASE after it: an ffmpeg expression."""
+    depth = 1 - 10 ** (-DUCK_DB / 20)
+    env = "+".join(f"clip((t-{a:.3f})/{DUCK_ATTACK},0,1)*clip(({b + DUCK_RELEASE:.3f}-t)/{DUCK_RELEASE},0,1)"
+                   for a, b in runs)   # a sum, not nested max(): flat however many runs
+    return f"1-{depth:.4f}*min(1,{env})"
 
 
 def song_level(voice):
@@ -2445,7 +2554,9 @@ def main():
     if args.dry_run:
         return
 
-    keep_audio = bool(cfg.get("original_audio", False))
+    mode = glasses_mode(cfg)
+    # Lane A only exists in scenes: without them, "A only" keeps nothing.
+    keep_audio = mode == "primary" or (mode == "A" and bool(cfg.get("scenes")))
     output = (base_dir / cfg.get("output", "montage.mp4")).expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
 

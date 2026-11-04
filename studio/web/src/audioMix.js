@@ -17,6 +17,14 @@ export const BAR = 0.4          // seconds per bar in the drawn rows
 export const SOURCES = ['A', 'B', 'music', 'voice']
 const VOICE_LUFS = -16          // finish(): each voice piece is loudnorm'd to this
 const MUSIC_FADE = 2.0          // finish(): the song fades out over the last 2s
+// The song ducks under loud glasses audio: the same numbers as montage.py's.
+export const DUCK_DB = 9
+const DUCK_ATTACK = 0.15
+const DUCK_RELEASE = 0.4
+const DUCK_THRESHOLD = -38      // dBFS of the kept glasses audio, over 0.2s
+const DUCK_GAP = 0.5
+const DUCK_MIN = 0.15
+const WIN = 0.04                // the render measures in 40ms windows
 
 const power = (db) => 10 ** (db / 10)
 const isVideo = (p) => p?.media?.kind === 'video'
@@ -27,6 +35,17 @@ export function primaryLane(sc) {
   return sc.layout === 'soloA' || sc.layout === 'stack' ? 'A' : 'B'
 }
 
+// Which glasses audio a reel keeps: primary | A | off (older reels: originalAudio).
+export const GLASSES = [
+  { v: 'primary', label: 'Follows primary slot', hint: 'The sound of whichever lane is top / left, or the one on its own. Swapping moves the sound with it.' },
+  { v: 'A', label: 'A only', hint: 'Lane A\'s sound whenever it\'s on screen at real speed; never B\'s' },
+  { v: 'off', label: 'Off', hint: 'No glasses audio: the song and voice only' },
+]
+export function glassesMode(settings) {
+  if (GLASSES.some((g) => g.v === settings.glassesAudio)) return settings.glassesAudio
+  return settings.originalAudio ? 'primary' : 'off'
+}
+
 // Every segment of every source: { A: [...], B: [...], music: [...], voice: [...] }.
 // A segment: { key (which envelope), at, len (reel seconds), from (file
 // seconds), rate, gain (a number or t => number), audible, loudnorm? }.
@@ -34,14 +53,15 @@ export function audioSegments(r) {
   const { sceneList, sceneTimes, stretches, aPlans, aSecs, handoffs, byId, reelLength, settings } = r
   const out = { A: [], B: [], music: [], voice: [] }
   const withSong = !!settings.music && settings.musicInVideo !== false
-  const glasses = settings.originalAudio ? (withSong ? Number(settings.originalVolume ?? 0.35) : 1) : 0
+  const mode = glassesMode(settings)
+  const glasses = mode !== 'off' ? (withSong ? Number(settings.originalVolume ?? 0.35) : 1) : 0
 
   sceneList.forEach((sc, k) => {
     const plan = aPlans[k]
     if (!plan) return
     const item = byId.get(sc.a.item)
     if (!isVideo(item)) return
-    const audible = glasses > 0 && primaryLane(sc) === 'A' && Math.abs(plan.rate - 1) < 0.01
+    const audible = glasses > 0 && (mode === 'A' || primaryLane(sc) === 'A') && Math.abs(plan.rate - 1) < 0.01
     let t = sceneTimes[k].start + (handoffs[k] || 0)
     let left = aSecs[k]
     for (const [from, length] of plan.pieces) {
@@ -59,19 +79,23 @@ export function audioSegments(r) {
     const sc = sceneList[st.scene]
     // The last part plays on to the end of the reel (held for the voice or the end card).
     const end = i === parts.length - 1 && st.scene === sceneList.length - 1 ? Math.max(st.end, reelLength) : st.end
-    const audible = glasses > 0 && (primaryLane(sc) === 'B' || !aPlans[st.scene])
+    const audible = glasses > 0 && mode === 'primary' && (primaryLane(sc) === 'B' || !aPlans[st.scene])
     out.B.push({ key: st.part.media.id, at: st.start, len: end - st.start, from: st.part.start, rate: 1,
                  gain: glasses, audible, scene: st.scene })
   })
 
   if (withSong && reelLength > 0) {
     const fade = Math.min(MUSIC_FADE, reelLength / 3)
-    const level = r.songVolume || (() => Number(settings.musicVolume ?? 0.8))
+    // Without ducking, the song stays at its level, even through the voice.
+    const level = settings.duckMusic === false && r.voicePieces?.length
+      ? () => Number(settings.voiceSongBetween ?? 0.3)
+      : r.songVolume || (() => Number(settings.musicVolume ?? 0.8))
     out.music.push({
       key: 'music', at: 0, len: reelLength, from: Number(settings.musicStart) || 0, rate: 1, audible: true,
-      gain: (t) => level(t) * Math.min(1, Math.max(0, (reelLength - t) / fade)),
+      gain: (t) => level(t) * Math.min(1, Math.max(0, (reelLength - t) / fade)) * duckAt(out.duck, t),
     })
   }
+  out.duck = []   // filled by withDucking(), once the envelopes are in
 
   // The voice is evened out in mono, then made stereo (3dB down a side).
   for (const p of r.voicePieces || []) {
@@ -134,7 +158,7 @@ export function mixBars(segs, envs, reelLength, step = BAR) {
     for (const s of SOURCES) {
       let p = 0
       for (const seg of segs[s]) {
-        if (!seg.audible || seg.at >= t1 || seg.at + seg.len <= t0) continue
+        if (!seg.audible || seg.at >= t1 - 1e-3 || seg.at + seg.len <= t0 + 1e-3) continue
         for (let j = 0; j < samples; j++) p += segPower(seg, envs[seg.key], t0 + ((j + 0.5) * (t1 - t0)) / samples)
       }
       by[s] = p / samples
@@ -155,7 +179,7 @@ export function trackBars(list, envs, reelLength, step = BAR) {
     let on = false
     let any = false
     for (const seg of list) {
-      if (seg.at >= t1 || seg.at + seg.len <= t0) continue
+      if (seg.at >= t1 - 1e-3 || seg.at + seg.len <= t0 + 1e-3) continue
       any = true
       on = on || seg.audible
       const raw = { ...seg, gain: 1, loudnorm: 0, mono: true }
@@ -187,4 +211,60 @@ export function transitionBands({ sceneList, sceneTimes, stretches, handoffs, se
     if (tr !== 'cut') out.push({ start: st.end - 0.15, end: st.end + 0.15, k: i + 1 })
   })
   return out
+}
+
+// ---------------------------------------------------------------- ducking
+
+// How far the song is turned down at t, by the loud glasses runs: 1, dropping
+// DUCK_DB over DUCK_ATTACK into a run and back over DUCK_RELEASE after
+// (montage.py's duck_level).
+const DUCK_DEPTH = 1 - 10 ** (-DUCK_DB / 20)
+export function duckAt(runs, t) {
+  if (!runs?.length) return 1
+  let e = 0
+  for (const [a, b] of runs) {
+    if (t < a || t > b + DUCK_RELEASE) continue
+    e += Math.min(1, Math.max(0, (t - a) / DUCK_ATTACK)) * Math.min(1, Math.max(0, (b + DUCK_RELEASE - t) / DUCK_RELEASE))
+  }
+  return 1 - DUCK_DEPTH * Math.min(1, e)
+}
+
+// Where the kept glasses audio is loud enough to duck the song: [[start,
+// end]], found as montage.py's loud_runs() finds them in the render (40ms
+// windows, averaged over 0.2s, over DUCK_THRESHOLD; short gaps joined, short
+// moments dropped). Sets segs.duck, which the song's gain reads.
+export function withDucking(segs, envs, reelLength, settings) {
+  segs.duck = []
+  if (settings.duckMusic === false || !segs.music.length) return segs
+  const glasses = [...segs.A, ...segs.B].filter((s) => s.audible)
+  if (!glasses.length) return segs
+  const n = Math.ceil(reelLength / WIN)
+  const powers = new Array(n).fill(0)
+  for (const seg of glasses) {
+    const env = envs[seg.key]
+    if (!env) continue
+    const i0 = Math.max(0, Math.floor(seg.at / WIN))
+    const i1 = Math.min(n, Math.ceil((seg.at + seg.len) / WIN))
+    for (let i = i0; i < i1; i++) powers[i] += segPower(seg, env, (i + 0.5) * WIN)
+  }
+  const on = powers.map((_, i) => {
+    const near = powers.slice(Math.max(0, i - 2), i + 3)
+    const p = near.reduce((a, b) => a + b, 0) / near.length
+    return p > 0 && 10 * Math.log10(p) > DUCK_THRESHOLD
+  })
+  const runs = []
+  on.forEach((x, i) => {
+    if (!x) return
+    const t = i * WIN
+    if (runs.length && t - runs[runs.length - 1][1] < DUCK_GAP) runs[runs.length - 1][1] = t + WIN
+    else runs.push([t, t + WIN])
+  })
+  segs.duck = runs.filter(([a, b]) => b - a >= DUCK_MIN)
+  return segs
+}
+
+// The song's own row: its level (before its gains), drawn dim where it's ducked.
+export function musicBars(segs, envs, reelLength, step = BAR) {
+  const bars = trackBars(segs.music, envs, reelLength, step)
+  return bars.map((b) => ({ ...b, on: b.on && duckAt(segs.duck, b.t + step / 2) > 0.85 }))
 }
