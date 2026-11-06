@@ -268,7 +268,12 @@ export function relayEstimate(clips, { overlap = 3, solo = 3, cap = 0, mix = 'si
       })
     }
     shared = shared.map((o) => Math.max(o, 0.5))
-    alones = clips.map((c, i) => (c.long ? Math.max(ALONE_MIN, times[i] - (i ? shared[i - 1] : 0) - (i < n - 1 ? shared[i] : 0)) : shortAlone))
+    // a long clip's time alone held to the mix (as scenes.py)
+    alones = clips.map((c, i) => {
+      if (!c.long) return shortAlone
+      const split = (i ? shared[i - 1] : 0) + (i < n - 1 ? shared[i] : 0)
+      return Math.max(ALONE_MIN, Math.min(times[i] - split, (split * (1 - f)) / f))
+    })
   }
   const split = shared.reduce((a, b) => a + b, 0)
   return { total: split + alones.reduce((a, b) => a + b, 0), split }

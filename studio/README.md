@@ -266,9 +266,11 @@ folder* (a shoot) ask for a name and a style:
   or *Mostly split* (short moments single, long stretches of two at once).
   For Even and Mostly split, each split's length comes from the long clips
   on either side, and a photo stays up as long as the splits beside it
-  need. How close a reel gets depends on its clips: the first and last
-  only share with one neighbour, and every clip keeps at least a second
-  alone.
+  need. A long clip's time alone is held to the mix too (about as long as
+  its splits for Even, a quarter of that for Mostly split), so the first
+  and last clips, which only share with one neighbour, stay split like the
+  rest: such a clip plays less of itself and ends sooner, with no jump.
+  Every clip keeps at least a second alone.
   The dialog shows about how long the reel will run, and how much of it is
   split. Every move is seamless:
   the shot moving up is exactly what was on screen, and B grows from its

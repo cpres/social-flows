@@ -246,10 +246,15 @@ def relay_overlaps(clips, overlap, solo, cap, mix):
                 if i < n - 1:
                     out[i] *= k
     out = [round(max(o, 0.5), 3) for o in out]
+    # A long clip's time alone is held to the mix: at most (1-f)/f of its time
+    # split. The first and last share with only one neighbour, so this is
+    # what keeps them split too; such a clip plays less of itself (it ends
+    # sooner, no jump).
     alone = []
     for i, c in enumerate(clips):
         if c["long"]:
-            alone.append(max(ALONE_MIN, times[i] - (out[i - 1] if i else 0) - (out[i] if i < n - 1 else 0)))
+            split = (out[i - 1] if i else 0) + (out[i] if i < n - 1 else 0)
+            alone.append(max(ALONE_MIN, min(times[i] - split, split * (1 - f) / f)))
         else:
             alone.append(short_alone)
     return out, alone
