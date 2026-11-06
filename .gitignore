@@ -5,3 +5,7 @@
 .DS_Store
 __pycache__/
 .venv/
+
+# API keys (ElevenLabs, Notion, OpenRouter): never commit them
+.env
+.env.*
