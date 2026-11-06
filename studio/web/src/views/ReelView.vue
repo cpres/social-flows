@@ -280,6 +280,8 @@
         {{ reelOn ? '❚❚ Pause' : '▶ Play reel' }} <kbd>Space</kbd>
       </button>
       <span class="mono clock">{{ fmtTime(reelTime ?? 0) }} / {{ fmtTime(reelLength) }}</span>
+      <button class="btn small" @click="jumpPart(-1)" title="The playhead back to where the last part starts, in either lane">◀ Part</button>
+      <button class="btn small" @click="jumpPart(1)" title="The playhead on to where the next part starts, in either lane">Part ▶</button>
       <span v-if="settings.music" class="songtag" :title="settings.music">
         ♪ {{ songTitle(shelf, settings.music) }}{{ beatData ? ` · ${Math.round(beatData.bpm)} bpm` : '' }}
       </span>
@@ -301,7 +303,7 @@
         <div class="lanename"><b>Layout</b><small>scenes</small></div>
         <div class="lanebody scenes" @pointermove="edgeMove" @pointerup="edgeUp">
           <button
-            v-for="(sc, k) in sceneList" :key="sc.id" class="scene" :class="[`l-${sc.layout}`, { sel: sc.id === selScene, now: k === shownScene }]"
+            v-for="(sc, k) in sceneList" :key="sc.id" class="scene" :class="[`l-${sc.layout}`, { sel: sc.id === selScene, now: k === shownScene, playing: reelTime !== null && reelTime >= sceneTimes[k].start - 1e-6 && reelTime < sceneTimes[k].end }]"
             :style="laneStyle(sceneTimes[k].start, sceneTimes[k].end - sceneTimes[k].start)" @click="selectScene(k)"
             :title="`Scene ${k + 1}: ${layoutLabel(sc.layout, wide)} · ${fmtTime(sceneTimes[k].start)} → ${fmtTime(sceneTimes[k].end)}`"
           >
@@ -326,13 +328,13 @@
         >
           <template v-for="(sc, k) in sceneList" :key="sc.id">
             <button
-              v-if="aPlans[k]" draggable="true" @dragstart="dragFrom = `A${sc.a.item}`" @dragend="dragOver = null" class="aseg" :class="{ current: isA(current) && current.id === sc.a.item, warn: aPlans[k].rate > 4.001 }"
+              v-if="aPlans[k]" draggable="true" @dragstart="dragFrom = `A${sc.a.item}`" @dragend="dragOver = null" class="aseg" :class="{ picked: pickedA === k, warn: aPlans[k].rate > 4.001 }"
               :style="laneStyle(sceneTimes[k].start, sceneTimes[k].end - sceneTimes[k].start)"
-              @click="select(items.indexOf(byId.get(sc.a.item)))"
+              @click="selectA(k)"
               :title="`${byId.get(sc.a.item)?.media.file}: ${fmtTime(aRanges[k][0])} → ${fmtTime(aRanges[k][1])} of the clip`"
             >{{ byId.get(sc.a.item)?.media.file }} · {{ aPlans[k].pieces.length > 1 ? `${aPlans[k].pieces.length} pieces · ` : '' }}{{ rateText(k) }}{{ aTiming(sc) === 'fit' ? ' sped to fit' : '' }}<span v-if="aPlans[k].rate > 4.001" class="warnchip">over 4×</span></button>
             <div
-              v-else-if="carryOf(k)" class="aseg relay" :style="laneStyle(sceneTimes[k].start, sceneTimes[k].end - sceneTimes[k].start)"
+              v-else-if="carryOf(k)" class="aseg relay" :class="{ picked: pickedA === k }" :style="laneStyle(sceneTimes[k].start, sceneTimes[k].end - sceneTimes[k].start)" @click="selectA(k)"
               :title="`Relay: ${carryOf(k).media.file} carries on in A's slot`"
             >↪ {{ carryOf(k).media.file }} carries on</div>
             <div v-else class="off" :style="laneStyle(sceneTimes[k].start, sceneTimes[k].end - sceneTimes[k].start)">{{ aIds.length || sceneList.some((x, i) => carryOf(i)) ? 'A off-screen' : '' }}</div>
@@ -356,9 +358,9 @@
             v-else class="seg abs" draggable="true"
             @dragstart="startDragB(items.indexOf(st.part))" @dragend="endDrag"
             @dragover.prevent.stop="dragOver = items.indexOf(st.part)" @drop.stop="drop(items.indexOf(st.part))"
-            :class="{ current: st.part === current, playing: reelOn && st.part === current, photo: st.part.media.kind === 'photo', over: dragOver === items.indexOf(st.part) }"
+            :class="{ picked: pickedB === st.part.id, playing: reelOn && st.part === current, photo: st.part.media.kind === 'photo', over: dragOver === items.indexOf(st.part) }"
             :style="laneStyle(st.start, st.end - st.start)" :title="`${st.part.media.file} · ${len(st.part).toFixed(1)}s`"
-            @click="jumpTo(st.part)"
+            @click="pickB(st.part)"
           >{{ synced ? `${fmtBeats(beatsOf(st.part))}♩` : len(st.part).toFixed(1) }}</button>
         </template>
         <div
@@ -455,59 +457,14 @@
 
     <div class="workspace" v-else>
       <aside class="cliplist" ref="listEl">
-        <!-- lane A: the main footage; then lane B, the cut list -->
-        <div class="slotlabel">A lane · {{ wide ? 'left' : 'top' }} / main</div>
-        <div
-          class="topslot" :class="{ over: dragOver === 'A', empty: !aParts.length }"
-          @dragover.prevent="dragOver = 'A'" @dragleave="dragOver = null" @drop="dropA"
-        >
-          <div
-            v-for="ap in aParts" :key="ap.id" class="row" :data-i="items.indexOf(ap)" draggable="true"
-            @dragstart="dragFrom = `A${ap.id}`" @dragend="dragOver = null"
-          >
-            <span class="num">A</span>
-            <ClipCard
-              :media="ap.media" :thumb-time="ap.start" :selected="ap === current"
-              :sub="folderTitle(ap.media.folder)"
-              :chip="`${fmtTime(ap.start)} → ${fmtTime(ap.start + ap.length)}  ${ap.length.toFixed(1)}s` + (ap.lighten ? '  ☀' : '')"
-              @select="select(items.indexOf(ap))"
-            />
-          </div>
-          <p v-if="!aParts.length" class="muted">Drop a clip here (or ⤒ on a part) for the main, continuous footage</p>
-        </div>
-        <div class="slotlabel">B lane · cut list</div>
-        <template v-for="(p, i) in items" :key="p.id">
-        <div
-          v-if="!isA(p)" class="row" :data-i="i"
-          :class="{ over: dragOver === i, playing: reelOn && i === selected }"
-          draggable="true" @dragstart="startDragB(i)" @dragover.prevent="dragOver = i"
-          @dragleave="dragOver = null" @drop="drop(i)" @dragend="dragOver = null"
-        >
-          <span class="num">{{ reelOn && i === selected ? '▶' : rowNumber(p) }}</span>
-          <ClipCard
-            :media="p.media" :thumb-time="p.start" :selected="i === selected" :dim="!p.keep"
-            :sub="folderTitle(p.media.folder)"
-            :chip="(p.media.kind === 'video'
-              ? `${fmtTime(p.start)} → ${fmtTime(p.start + len(p))}  ${len(p).toFixed(1)}s`
-              : `hold ${len(p).toFixed(1)}s`) + (synced ? `  ${fmtBeats(beatsOf(p))}♩` : '') + (p.lighten ? '  ☀' : '') + badge(p)"
-            @select="select(i)"
-          >
-            <button
-              class="keep" :class="{ on: p.keep }" @click.stop="setKeep(p, !p.keep)"
-              :title="p.keep ? 'In the cut — click to skip (X)' : 'Skipped — click to keep (X)'"
-            >{{ p.keep ? '✓' : '–' }}</button>
-            <button
-              v-if="p.media.kind === 'video'" class="maketop" @click.stop="addToA(p)"
-              title="Put this in lane A: the main, continuous footage"
-            >⤒</button>
-          </ClipCard>
-          <button
-            v-if="hasNext(p)" class="tpill" :class="`t-${effective(p)}`"
-            :title="`Transition into the next part: ${label(effective(p))}. Click to change (T).`"
-            @click.stop="cycle(p)"
-          >{{ icon(effective(p)) }} {{ label(effective(p)) }}</button>
-        </div>
-        </template>
+        <!-- the clip sheet: one row per scene, lane A beside lane B -->
+        <ClipSheet
+          :rows="sheetRows" :wide="wide" :reel-time="reelTime" :reel-on="reelOn"
+          :picked-a="pickedA" :picked-b="pickedB" :picked-clip="pickedClip" :spare-a="spareA" :skipped="skippedParts"
+          @seek="seekReel" @pick-a="selectA" @pick-b="(x) => pickB(x)" @pick-clip="(x) => select(items.indexOf(x))"
+          @keep="(x, on) => setKeep(x, on)" @cycle="cycle" @drag-b="(x) => startDragB(items.indexOf(x))"
+          @drop-on="(x) => drop(items.indexOf(x))" @drop-a="dropA"
+        />
       </aside>
 
       <section class="editor" v-if="current">
@@ -521,7 +478,7 @@
           <!-- lanes in their slots, as the scene on show has them -->
           <SceneFrame
             v-else-if="(aIds.length || hasRelay) && slots" :frame-w="frameW" :frame-h="frameH" :slots="slots"
-            :divider-color="settings.dividerColor" :editing="isA(current) ? 'A' : 'B'" :into="intoNow"
+            :divider-color="settings.dividerColor" :picked="pickedLane" :captions="slotCaptions" @pick="pickLane" :into="intoNow"
             :a-t="aNow?.t ?? 0" :a-rate="aNow?.rate ?? 1" :a-playing="reelOn && aNow?.playing !== false" :guides="tall && guides"
             @split="(v) => setSplit(shownScene, v)"
           >
@@ -560,6 +517,16 @@
             </p>
             <template #overlay><CaptionLayer v-if="showCaptions" v-bind="captionProps" /></template>
           </ReelFrame>
+          <div v-if="anyA" class="nowplaying">
+            <button
+              v-for="r in nowLanes" :key="r.lane" class="nowrow" :class="[`lane-${r.lane}`, { hidden: r.hidden, picked: !r.hidden && pickedLane === r.lane }]"
+              :disabled="r.hidden" @click="pickLane(r.lane)"
+            >
+              <i></i><b>{{ r.lane }} · {{ r.hidden ? 'hidden' : r.where }}</b>
+              <span v-if="r.hidden" class="muted">{{ r.note }}</span>
+              <span v-else class="mono">{{ short(r.name) }} — {{ fmtTime(r.t) }} in clip</span>
+            </button>
+          </div>
           <label class="guides-toggle muted" v-if="tall"><input type="checkbox" v-model="guides" /> Show Instagram overlays <kbd>G</kbd></label>
           <audio ref="audioEl" v-if="musicUrl" :src="musicUrl" preload="auto" @ended="onSongEnded"></audio>
           <video
@@ -676,6 +643,7 @@
           </div>
         </div>
 
+        <PartHeader v-if="!selSc && headerInfo && anyA" :info="headerInfo" :wide="wide" @lane="moveLane" />
         <template v-if="!selSc && current.media.kind === 'video' && !current.media.missing">
           <TrimBar
             :duration="current.media.duration" :start="current.start" :length="len(current)"
@@ -833,6 +801,8 @@ import { useVoicePlayer } from '../voicePlayer'
 import CaptionLayer from '../components/CaptionLayer.vue'
 import VoicePanel from '../components/VoicePanel.vue'
 import ClipCard from '../components/ClipCard.vue'
+import ClipSheet from '../components/ClipSheet.vue'
+import PartHeader from '../components/PartHeader.vue'
 import SendToPhone from '../components/SendToPhone.vue'
 import SongPicker from '../components/SongPicker.vue'
 import ReelFrame from '../components/ReelFrame.vue'
@@ -985,6 +955,8 @@ function select(i, fromReel = false) {
     stopReel()
     restart = false   // picking a cut means "play from here"
     selScene.value = null
+    selA.value = null
+    parkT.value = null
   }
   selected.value = i
   player.reset()
@@ -1554,6 +1526,7 @@ const shownScene = computed(() => {
   if (reelOn.value && reelTime.value !== null) return sceneIndexAt(reelTime.value)
   const sel = sceneList.value.findIndex((sc) => sc.id === selScene.value)
   if (sel >= 0) return sel
+  if (selAK.value >= 0) return selAK.value
   if (current.value && !isA(current.value)) {
     const k = sceneOfPart(current.value)
     if (k >= 0) return k
@@ -1599,6 +1572,227 @@ const aNeeds = computed(() => aParts.value.map((p) => {
   return { part: p, used: true, from, to, short }
 }))
 // What the A slot shows now: which clip, where in it and how fast.
+// ---------------------------------------------------------------- clip sheet & one selection
+
+// The A cards: each scene with A on screen (its stretch of a lane A clip, or
+// the shot a relay carries on), and where that sits on the reel.
+const aCards = computed(() => {
+  const out = []
+  sceneList.value.forEach((sc, k) => {
+    const t = sceneTimes.value[k]
+    const carry = carryOf(k)
+    if (carry) {
+      out.push({ k, part: carry, carry: true, start: t.start, len: t.end - t.start,
+                 inClip: carry.media.kind === 'video' ? carry.start + carry.length : 0 })
+    } else if (aPlans.value[k]) {
+      out.push({ k, part: byId.value.get(sc.a.item), carry: false, start: t.start + handoffs.value[k],
+                 len: Math.max(aSecs.value[k], 0.04), inClip: aRanges.value[k][0], outClip: aRanges.value[k][1],
+                 rate: aPlans.value[k].rate })
+    }
+  })
+  return out
+})
+const anyA = computed(() => aIds.value.length > 0 || hasRelay.value)
+// One row per scene for the clip sheet: its A card beside its B parts.
+const sheetRows = computed(() => sceneList.value.map((sc, k) => ({
+  k, sc, start: sceneTimes.value[k].start, end: sceneTimes.value[k].end,
+  a: aCards.value.find((c) => c.k === k) || null,
+  aOff: anyA.value ? 'A waits · off-screen' : 'nothing on lane A',
+  b: stretches.value.filter((st) => st.scene === k && st.kind === 'part').map((st) => ({
+    part: st.part, start: st.start, len: st.end - st.start, edge: !!sceneEdgeAfter(st.part),
+    next: hasNext(st.part) ? { label: label(effective(st.part)), icon: icon(effective(st.part)) } : null,
+  })),
+  bOff: 'B waits · off-screen',
+})))
+const spareA = computed(() => aParts.value.filter((ap) => !aCards.value.some((c) => !c.carry && c.part === ap)))
+const skippedParts = computed(() => items.value.filter((it) => !it.keep && !isA(it)))
+
+// One selection, shown on the timeline, in the sheet and in the preview: a B
+// part (selected), or a scene's A stretch (selA, its scene's id). parkT holds
+// the playhead where a selection put it when that isn't a B part's start.
+const selA = ref(null)
+const parkT = ref(null)
+const selAK = computed(() => sceneList.value.findIndex((sc) => sc.id === selA.value))
+const pickedA = computed(() => (selAK.value >= 0 ? selAK.value : null))
+const pickedB = computed(() => (selAK.value < 0 && current.value && !isA(current.value) ? current.value.id : null))
+const pickedClip = computed(() => (selAK.value < 0 && isA(current.value) ? current.value.id : null))
+function selectA(k) {
+  const card = aCards.value.find((c) => c.k === k)
+  if (!card) return
+  select(items.value.indexOf(card.part))
+  selA.value = sceneList.value[k].id
+  parkT.value = card.start
+  player.seek(card.inClip)
+}
+// A B part: the playhead stays where it is if it's inside the part, else goes to its start.
+function pickB(p, at = reelTime.value) {
+  if (reelOn.value && p.keep) return jumpTo(p)
+  select(items.value.indexOf(p))
+  const k = kept.value.indexOf(p)
+  if (k >= 0 && at !== null && at >= partStart(k) && at < partEnd(k) && p.media.kind === 'video') {
+    player.seek(p.start + (at - partStart(k)))
+  }
+}
+// Move the playhead to t (a scene's start, the next part…), selecting what's there.
+function seekReel(t) {
+  const st = stretches.value.find((x) => t >= x.start - 1e-6 && t < x.end) || stretches.value[stretches.value.length - 1]
+  if (!st) return
+  if (st.kind === 'part') {
+    if (reelOn.value) return jumpTo(st.part)
+    return pickB(st.part, t)
+  }
+  stopReel()
+  const card = aCards.value.find((c) => c.k === st.scene)
+  if (card) selectA(card.k)
+  parkT.value = t
+}
+// ◀ Part / Part ▶: the previous or next place a part starts, in either lane.
+const boundaries = computed(() => [...new Set([0, ...stretches.value.map((x) => +x.start.toFixed(3)),
+  ...aCards.value.map((c) => +c.start.toFixed(3))])].sort((x, y) => x - y))
+function jumpPart(dir) {
+  const t = reelTime.value ?? 0
+  const b = boundaries.value
+  const to = dir > 0 ? b.find((x) => x > t + 0.02) : [...b].reverse().find((x) => x < t - 0.02)
+  if (to !== undefined) seekReel(to)
+}
+
+// What's on screen now, lane by lane: for the preview's slot captions and the
+// Now playing rows under it.
+const short = (name) => (name.length > 20 ? `${name.slice(0, 18)}…` : name)
+const slotWhere = (lane) => {
+  const sl = slots.value
+  if (!sl?.[lane]) return null
+  if (!(sl.A && sl.B)) return 'full frame'
+  const first = sl[lane].x === 0 && sl[lane].y === 0
+  return wide.value ? (first ? 'left' : 'right') : (first ? 'top' : 'bottom')
+}
+const nowLanes = computed(() => {
+  const rows = []
+  const a = slotWhere('A') && aNow.value
+  if (a) rows.push({ lane: 'A', where: slotWhere('A'), name: a.part.media.file, t: a.t, part: a.part })
+  else rows.push({ lane: 'A', hidden: true, note: anyA.value ? 'waits · off-screen' : 'nothing on this lane' })
+  if (slotWhere('B')) {
+    const bp = !isA(current.value) && selAK.value < 0 ? current.value : shownPart.value
+    const t = bp === current.value && bp.media.kind === 'video' ? player.playhead.value : (bp?.start ?? 0)
+    if (bp) rows.push({ lane: 'B', where: slotWhere('B'), name: bp.media.file, t, part: bp })
+  } else rows.push({ lane: 'B', hidden: true, note: 'waits · off-screen' })
+  return rows
+})
+const slotCaptions = computed(() => Object.fromEntries(nowLanes.value.filter((r) => !r.hidden)
+  .map((r) => [r.lane, { name: short(r.name), t: fmtTime(r.t) }])))
+// Which slot holds the selected part, to outline it.
+const pickedLane = computed(() => {
+  if (selAK.value >= 0) return selAK.value === shownScene.value ? 'A' : ''
+  if (isA(current.value)) return aNow.value?.part === current.value ? 'A' : ''
+  return slotWhere('B') ? 'B' : ''
+})
+// Clicking a slot (or a Now playing row) selects what's in it.
+function pickLane(lane) {
+  const row = nowLanes.value.find((r) => r.lane === lane && !r.hidden)
+  if (!row) return
+  if (lane === 'A') {
+    const k = shownScene.value
+    if (aCards.value.some((c) => c.k === k)) return selectA(k)
+    return select(items.value.indexOf(row.part))
+  }
+  pickB(row.part)
+}
+
+// The inspector's header: lane, where the part sits, whether it's seen.
+const headerInfo = computed(() => {
+  const w = wide.value
+  const word = (sc, lane) => {
+    if (!sc || (lane === 'A' ? !showsA(sc) : !showsB(sc))) return null
+    if (sc.layout === 'soloA' || sc.layout === 'soloB') return 'FULL FRAME'
+    const primary = (sc.layout === 'stack') === (lane === 'A')
+    return w ? (primary ? 'LEFT' : 'RIGHT') : (primary ? 'TOP' : 'BOTTOM')
+  }
+  const seen = (sc, lane) => {
+    const x = word(sc, lane)
+    if (!x) return { shows: `Not visible: this scene is ${layoutLabel(sc?.layout, w)}. Lane ${lane} waits until it's on screen again.`, hidden: true }
+    return { shows: x === 'FULL FRAME' ? 'Shows <b>FULL FRAME</b>' : `Shows in the <b>${x}</b> ${w ? 'side' : 'slot'}`, hidden: false }
+  }
+  const at = (a, b) => `on the reel ${fmtTime(a)} → ${fmtTime(b)}`
+  if (selAK.value >= 0) {
+    const card = aCards.value.find((c) => c.k === selAK.value)
+    if (!card) return null
+    const sc = sceneList.value[card.k]
+    return {
+      lane: 'A', title: card.carry ? `A slot · ${card.part.media.file} carries on` : `A lane · part ${aCards.value.indexOf(card) + 1} of ${aCards.value.length}`,
+      scene: `Scene ${card.k + 1} · ${layoutLabel(sc.layout, w)} · ${at(card.start, card.start + card.len)}`, ...seen(sc, 'A'),
+      canMove: !card.carry,
+      moveHint: 'Moving this stretch to lane B makes it a B part at the start of the scene, which then shows B on its own.',
+    }
+  }
+  const p = current.value
+  if (!p) return null
+  if (isA(p)) {
+    const n = aCards.value.filter((c) => !c.carry && c.part === p).length
+    return { lane: 'A', title: 'A lane clip', scene: n ? `Shown in ${n} scene${n === 1 ? '' : 's'}` : 'No scene shows it yet',
+             shows: 'Pick its card in a scene to see where it sits and set where it starts there.', hidden: !n,
+             canMove: true, moveHint: 'Moving it to lane B makes it a part at the end of the cut list.' }
+  }
+  if (!p.keep) return { lane: 'B', title: 'B lane · skipped', shows: 'Skipped: not in the reel. Tick it to bring it back.', hidden: true, canMove: false }
+  const kk = kept.value.indexOf(p)
+  const k = sceneOfPart(p)
+  const sc = sceneList.value[k]
+  return {
+    lane: 'B', title: `B lane · part ${kk + 1} of ${kept.value.length}`,
+    scene: sc ? `Scene ${k + 1} · ${layoutLabel(sc.layout, w)} · ${at(partStart(kk), partEnd(kk))}` : '', ...seen(sc, 'B'),
+    canMove: p.media.kind === 'video',
+    moveHint: 'Moving it to lane A makes it this scene\'s A clip from where the part starts, and lane B closes up. The scene layout decides if it\'s seen.',
+  }
+})
+async function moveLane(to) {
+  const p = current.value
+  if (!p) return
+  if (to === 'A' && !isA(p) && selAK.value < 0) return moveBtoA(p)
+  if (to === 'B' && selAK.value >= 0) return moveAtoB(selAK.value)
+  if (to === 'B' && isA(p)) return toB(p, items.value.length)
+}
+// B → A: the part becomes its scene's A clip from where it starts; lane B closes
+// up. A scene left with no B parts becomes Solo A, so it still shows it.
+function moveBtoA(p) {
+  stopReel()
+  const k = sceneOfPart(p)
+  const list = sceneCopy()
+  const sc = list[k]
+  if (sc) {
+    const rest = sc.parts.filter((id) => id !== p.id)
+    sc.a = { item: p.id, in: null, out: null, timing: 'real', speed: 1 }
+    if (!rest.length) { sc.layout = 'soloA'; sc.len = Math.max(SOLO_A_MIN, len(p)) } else if (sc.from === p.id) sc.from = rest[0]
+  }
+  settings.laneA = [...aIds.value.filter((i) => i !== p.id), p.id]
+  commit(list)
+  say(`${short(p.media.file)} is in lane A now`)
+}
+// A → B: the scene's A stretch becomes a B part at the start of the scene, and
+// the scene shows B on its own.
+async function moveAtoB(k) {
+  const card = aCards.value.find((c) => c.k === k)
+  if (!card || card.carry) return
+  stopReel()
+  await saver.flushAll()
+  const a = card.part
+  const sc = sceneList.value[k]
+  // where it goes: before this scene's first part, else after the parts before it
+  const before = sc.parts.length ? byId.value.get(sc.parts[0])
+    : kept.value.find((x, i) => partStart(i) >= sceneTimes.value[k].end - 1e-6)
+  const pos = before ? items.value.indexOf(before) : items.value.length
+  const item = await api.addItem(id, { mediaId: a.mediaId, start: card.inClip, length: Math.round(card.len * 100) / 100,
+                                       focusX: a.focusX, focusY: a.focusY, zoom: a.zoom, lighten: a.lighten, frames: a.frames || {} })
+  items.value.splice(pos, 0, { ...item, media: a.media })
+  await saveOrder()
+  const list = sceneCopy()
+  list[k].layout = 'soloB'
+  list[k].from = item.id
+  commit(list)
+  if (!aCards.value.some((c) => !c.carry && c.part === a && c.k !== k)) settings.laneA = aIds.value.filter((i) => i !== a.id)
+  selA.value = null
+  select(items.value.findIndex((x) => x.id === item.id))
+  say('That stretch of A is a B part now')
+}
+
 // A reel with a relay in it has splits even with nothing in lane A.
 const hasRelay = computed(() => sceneList.value.some((sc, k) => isRelay(sceneList.value, k)))
 // A relay's A slot: the shot from the scene before, carrying on from where its part ended.
@@ -2208,6 +2402,7 @@ const reelTime = computed(() => {
   if (reelOn.value && clocked.value) return songClock.value
   if (reelOn.value && holdT.value !== null) return partsEnd.value + holdT.value
   if (reelOn.value && gapFrom.value !== null) return gapFrom.value + gapT.value
+  if (!reelOn.value && parkT.value !== null) return parkT.value
   const k = kept.value.indexOf(current.value)
   if (k < 0) return null
   const p = current.value
@@ -2289,6 +2484,11 @@ function onFrameEnded() {
 // go back to the top when the reel just finished and nothing was picked since.
 function playReel() {
   let k = kept.value.indexOf(current.value)
+  if (parkT.value !== null) {   // from where the playhead was put: the first part ending after it
+    k = kept.value.findIndex((x, i) => partEnd(i) > parkT.value + 0.01)
+    if (k < 0) k = 0
+    parkT.value = null
+  }
   if (k < 0) {
     const after = items.value.slice(selected.value + 1).find((p) => kept.value.includes(p))
     k = after ? kept.value.indexOf(after) : 0
@@ -2426,13 +2626,7 @@ function onKey(e) {
 }
 // Tab: from a B part to the A clip on screen, and back.
 function tabLane() {
-  if (isA(current.value)) {
-    const p = shownPart.value
-    if (p) select(items.value.indexOf(p))
-  } else {
-    const a = aNow.value?.part || aParts.value[0]
-    if (a) select(items.value.indexOf(a))
-  }
+  pickLane(pickedLane.value === 'A' ? 'B' : 'A')
 }
 onMounted(() => window.addEventListener('keydown', onKey))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
@@ -2701,4 +2895,39 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .aseg.relay { background: repeating-linear-gradient(45deg, #b8cfa8 0 8px, #a9c398 8px 16px); cursor: default; }
 .handoffshot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 3; pointer-events: none; }
 .timing.speedy b::after { content: ' · changes speed'; font-weight: 400; font-size: 11px; color: var(--muted); }
+
+/* Lanes: green is A, amber is B (style.css tokens) on the timeline, the clip
+   sheet, the preview and the inspector band. The page's other accents stay
+   neutral so those two colours only ever mean a lane. */
+.aseg { background: var(--lane-a); color: var(--on-lane); }
+.aseg.relay { background: repeating-linear-gradient(45deg, var(--lane-a) 0 10px, color-mix(in srgb, var(--lane-a) 70%, var(--paper)) 10px 20px); color: var(--on-lane); font-weight: 600; }
+.aseg.warn { background: var(--lane-a); box-shadow: inset 0 -3px 0 var(--danger); }
+.seg.abs:not(.gap):not(.spare) { background: var(--lane-b-soft); color: var(--ink); box-shadow: inset 0 0 0 1px var(--lane-b); }
+.seg.abs.playing:not(.gap) { background: var(--lane-b); color: var(--on-lane); box-shadow: none; }
+.seg.abs.picked, .aseg.picked { outline: 2px solid var(--picked); outline-offset: 1px; z-index: 3; }
+.scene.playing { border-color: var(--playing); box-shadow: inset 0 0 0 1px var(--playing); }
+.scene.sel { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.scene .glyph.g-soloA i:first-child, .scene .glyph.g-stack i:first-child, .scene .glyph.g-swap i:last-child { background: var(--lane-a); }
+.scene .glyph.g-soloB i:first-child, .scene .glyph.g-stack i:last-child, .scene .glyph.g-swap i:first-child { background: var(--lane-b); }
+.lay .glyph.g-soloA i:first-child, .lay .glyph.g-stack i:first-child, .lay .glyph.g-swap i:last-child { background: var(--lane-a); }
+.lay .glyph.g-soloB i:first-child, .lay .glyph.g-stack i:last-child, .lay .glyph.g-swap i:first-child { background: var(--lane-b); }
+.formats .btn.active, .lay.active, .timing.active { background: transparent; border-color: var(--ink); color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.toast { background: var(--ink); color: var(--paper); }
+.editor :deep(.btn.active) { background: transparent; border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.cliplist { padding-right: 4px; }
+.workspace { grid-template-columns: minmax(380px, 440px) 1fr; }
+@media (max-width: 1100px) { .workspace { grid-template-columns: 1fr; } }
+.nowplaying { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.nowrow {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; text-align: left; font: inherit; font-size: 12px;
+  border: 1px solid var(--line); background: var(--paper); color: inherit; cursor: pointer; min-width: 0;
+}
+.nowrow i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.nowrow.lane-A i { background: var(--lane-a); }
+.nowrow.lane-B i { background: var(--lane-b); }
+.nowrow.lane-A:not(.hidden) { border-color: var(--lane-a); }
+.nowrow.lane-B:not(.hidden) { border-color: var(--lane-b); }
+.nowrow.hidden { opacity: 0.55; cursor: default; }
+.nowrow.picked { outline: 2px solid var(--picked); outline-offset: 1px; }
+.nowrow span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>

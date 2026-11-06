@@ -3,11 +3,13 @@
     <div class="scenebox" :style="{ width: `${size.w}px`, height: `${size.h}px` }">
       <div class="content" :style="moveStyle">
         <div
-          v-for="lane in lanes" :key="lane" class="slot" :class="{ editing: editing === lane }"
-          :style="rectStyle(rectOf(lane))"
+          v-for="lane in lanes" :key="lane" class="slot" :class="[`lane-${lane}`, { picked: picked === lane }]"
+          :style="rectStyle(rectOf(lane))" @click.capture="pickSlot($event, lane)"
+          :title="picked === lane ? '' : `Select what's in the ${lane} slot`"
         >
           <slot :name="lane" :max-h="px(rectOf(lane)).h" :out="rectOf(lane).w / rectOf(lane).h" :bind-a="bindA" />
           <span class="chip" :class="`lane-${lane}`">{{ lane }} · {{ where(lane) }}</span>
+          <span v-if="captions[lane]" class="caption mono">{{ captions[lane].name }} {{ captions[lane].t }}</span>
         </div>
         <div
           v-if="slots.divider" class="divider" :class="slots.axis" :style="{ ...rectStyle(rectOf('divider')), background: dividerColor }"
@@ -45,8 +47,17 @@ const props = defineProps({
   aRate: { type: Number, default: 1 },
   aPlaying: Boolean,
   guides: Boolean,
+  picked: { type: String, default: '' },        // which slot holds the selected part: outlined
+  captions: { type: Object, default: () => ({}) }, // {A: {name, t}, B: ...}: the clip and time in it
 })
-const emit = defineEmits(['split'])
+const emit = defineEmits(['split', 'pick'])
+// Clicking a slot that doesn't hold the selected part selects what's in it.
+function pickSlot(e, lane) {
+  if (props.picked === lane) return
+  e.stopPropagation()
+  e.preventDefault()
+  emit('pick', lane)
+}
 
 // The lanes on screen, and while a morph runs, a lane leaving (it slides out
 // as the others take its room, rather than leaving black behind).
@@ -54,7 +65,7 @@ const lanes = computed(() => ['A', 'B'].filter((l) => props.slots[l] || (props.i
 const wide = computed(() => props.frameW > props.frameH)
 const where = (lane) => {
   if (!props.slots[lane]) return 'going'
-  if (['A', 'B'].filter((l) => props.slots[l]).length === 1) return 'alone'
+  if (['A', 'B'].filter((l) => props.slots[l]).length === 1) return 'full frame'
   const first = props.slots[lane].x === 0 && props.slots[lane].y === 0
   return wide.value ? (first ? 'left' : 'right') : (first ? 'top' : 'bottom')
 }
@@ -168,13 +179,22 @@ watch(() => [props.aT, props.aPlaying, props.aRate], syncA)
   content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 4;
   box-shadow: inset 0 0 0 2px transparent; transition: box-shadow 0.15s;
 }
-.slot.editing::after { box-shadow: inset 0 0 0 2px var(--sage); }
+.slot.lane-A::after { box-shadow: inset 0 0 0 2px var(--lane-a); }
+.slot.lane-B::after { box-shadow: inset 0 0 0 2px var(--lane-b); }
+.slot.picked::after { box-shadow: inset 0 0 0 2px var(--lane-a), inset 0 0 0 4px #fff; }
+.slot.lane-B.picked::after { box-shadow: inset 0 0 0 2px var(--lane-b), inset 0 0 0 4px #fff; }
+.slot:not(.picked) { cursor: pointer; }
 .chip {
   position: absolute; left: 8px; top: 8px; z-index: 5; pointer-events: none;
-  font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 6px; color: #1d2a1d;
+  font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 6px; color: var(--on-lane);
 }
-.chip.lane-A { background: #b8cfa8; }
-.chip.lane-B { background: #e9b27a; }
+.chip.lane-A { background: var(--lane-a); }
+.chip.lane-B { background: var(--lane-b); }
+.caption {
+  position: absolute; left: 8px; bottom: 8px; z-index: 5; pointer-events: none; max-width: calc(100% - 16px);
+  font-size: 11px; padding: 2px 7px; border-radius: 6px; background: rgb(0 0 0 / 60%); color: #fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .divider { position: absolute; z-index: 6; display: grid; place-items: center; touch-action: none; }
 .divider.y { cursor: ns-resize; }
 .divider.x { cursor: ew-resize; }

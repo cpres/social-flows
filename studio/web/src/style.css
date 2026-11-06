@@ -18,6 +18,16 @@
   --stage: #121812;           /* behind the video */
   --radius: 12px;
   --shadow: 0 1px 2px rgb(31 42 31 / 6%), 0 4px 14px rgb(31 42 31 / 7%);
+  /* The two lanes of a reel: green is lane A, amber lane B, wherever they show
+     (timeline blocks, the clip sheet, preview slots, the inspector band), and
+     never for anything else on the reel page. */
+  --lane-a: #6fa35b;
+  --lane-a-soft: #e1eed8;
+  --lane-b: #d98a35;
+  --lane-b-soft: #f8e4cc;
+  --on-lane: #18210f;
+  --playing: #d9434b;          /* the scene under the playhead */
+  --picked: #1f2a1f;           /* outline of the selected part, in all three places */
   color-scheme: light;
   font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   color: var(--ink);
@@ -61,6 +71,12 @@
   --topbar-ink: #d9dee3;
   --stage: #0b0d0f;
   --shadow: 0 1px 2px rgb(0 0 0 / 35%), 0 4px 14px rgb(0 0 0 / 30%);
+  --lane-a: #9cc98a;
+  --lane-a-soft: #24301f;
+  --lane-b: #e9a95f;
+  --lane-b-soft: #3a2a18;
+  --playing: #ff6b6b;
+  --picked: #ffffff;
   color-scheme: dark;
 }
 

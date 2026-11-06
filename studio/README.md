@@ -201,6 +201,37 @@ can override the reel's framing, chosen under *Layout* on the shoot page
 *Blur* shows the whole frame with a blurred copy filling the top and bottom
 (marked ◫ in the list).
 
+**Clip sheet: A and B side by side.** On a reel with two lanes, the list on
+the left is a clip sheet with one row per scene. Lane A's card (its stretch of
+the A clip, or the shot a relay carries on) sits on the left, and lane B's
+parts on the right, each with where it starts on the reel, its length, and a
+bar that fills as it plays. Green is always lane A and amber always lane B:
+on the timeline, in the sheet, on the preview's slot borders, in the Now
+playing rows and in the inspector's band. Other highlights on the page are
+neutral so the two colours only ever mean a lane.
+
+- **Following the playhead:** the scene under it is outlined in red with a
+  *playing* chip, and the A and B cards under it glow. *Follow playhead*
+  (on) keeps that row in view, and pauses for 3s after you scroll the sheet
+  yourself. A lane that isn't on screen in a scene shows a hatched *waits ·
+  off-screen* cell: it pauses there and picks up where it left off.
+- **One selection:** clicking a timeline block, a sheet card, a preview slot
+  or a *Now playing* row selects the same part everywhere, outlined in all of
+  them. The playhead moves to the part's start unless it's already inside it.
+  Clicking a scene's header moves the playhead to its start. `Tab` jumps
+  between the A and B on screen. *◀ Part* / *Part ▶* move the playhead to the
+  previous or next place a part starts, in either lane.
+- **The inspector's header** shows the lane in its colour, *B lane · part 3
+  of 12* (or *A lane · part 2 of 3*: the scenes that show A), the scene and
+  where it sits on the reel, and in plain words where it shows: *in the
+  BOTTOM slot*, *FULL FRAME*, or *Not visible: lane B waits*.
+- **Lane toggle:** moving a B part to lane A makes it its scene's A clip from
+  where the part starts, and lane B closes up (a scene left with no B becomes
+  Solo A, showing it). Moving an A card to lane B makes that stretch a B part
+  at the start of its scene, which then shows B on its own.
+- Parts that aren't in the reel right now (skipped parts, and lane A clips
+  no scene shows) wait at the bottom of the sheet.
+
 **Making a reel, in a style.** *New reel* (Home) and *Make a reel from this
 folder* (a shoot) ask for a name and a style:
 
