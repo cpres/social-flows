@@ -473,7 +473,8 @@ def apply_style(db, reel_id, style, body):
                 return [(start, length)]
             return montage.quiet_cut([(float(t), float(v)) for t, v in points], start, length)
 
-        parts, make = scenes_mod.relay_plan(clips, overlap, solo, cap, quiet if body.get("quiet") else None)
+        mix = body.get("mix") if body.get("mix") in scenes_mod.RELAY_MIX else "single"
+        parts, make = scenes_mod.relay_plan(clips, overlap, solo, cap, quiet if body.get("quiet") else None, mix)
         db.execute("DELETE FROM reel_items WHERE reel_id = ?", (reel_id,))
         ids = []
         for pos, (r, start, length, _) in enumerate(parts):
@@ -484,7 +485,7 @@ def apply_style(db, reel_id, style, body):
             ids.append(cur.lastrowid)
         s["laneA"] = []
         s["scenes"] = make(ids)
-        s["relay"] = {"overlap": overlap, "solo": solo, "cap": cap, "quiet": bool(body.get("quiet"))}
+        s["relay"] = {"overlap": overlap, "solo": solo, "cap": cap, "quiet": bool(body.get("quiet")), "mix": mix}
     db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), reel_id))
 
 

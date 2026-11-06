@@ -255,7 +255,17 @@ folder* (a shoot) ask for a name and a style:
   60s if you cap them. *Skip quiet moments in long clips* cuts out where
   nothing much happens, at real speed. **Photos and short clips** play alone
   for a set few seconds (3s by default), like clips between the long pieces.
-  The dialog shows about how long the reel will run. Every move is seamless:
+  **Single or split** sets how much of the relay has two clips on screen:
+  *Mostly single* (each clip mostly on its own, with a short split you
+  choose, 1 to 5s, between them), *Even* (about half single, half split)
+  or *Mostly split* (short moments single, long stretches of two at once).
+  For Even and Mostly split, each split's length comes from the long clips
+  on either side, and a photo stays up as long as the splits beside it
+  need. How close a reel gets depends on its clips: the first and last
+  only share with one neighbour, and every clip keeps at least a second
+  alone.
+  The dialog shows about how long the reel will run, and how much of it is
+  split. Every move is seamless:
   the shot moving up is exactly what was on screen, and B grows from its
   slot to the full frame. In the reel it's ordinary scenes (Solo B, then a
   split with *Relay* ticked that comes in with *Hand off*, then Solo B coming

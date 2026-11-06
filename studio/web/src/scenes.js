@@ -222,3 +222,54 @@ export function layoutLabel(v, wide) {
   const l = LAYOUTS.find((x) => x.v === v)
   return l ? (wide && l.wide) || l.label : v
 }
+
+// ---------------------------------------------------------------- relay plans
+
+// How a relay shares out the frame (as scenes.py relay_overlaps and
+// relay_plan, for the New reel dialog's estimate). clips: [{long, kind,
+// duration, avail}]; mix: single | even | split. Returns {total, split}
+// seconds.
+export const RELAY_MIX = { single: null, even: 0.5, split: 0.8 }
+export const ALONE_MIN = 1
+export function relayEstimate(clips, { overlap = 3, solo = 3, cap = 0, mix = 'single' } = {}) {
+  const n = clips.length
+  if (!n) return { total: 0, split: 0 }
+  const timeOf = (c) => (c.long ? (cap ? Math.min(c.avail, cap) : c.avail) : solo)
+  const f = RELAY_MIX[mix] ?? null
+  let shared
+  let alones
+  if (f === null) {
+    shared = Array(n - 1).fill(overlap)
+    alones = clips.map((c, i) => (c.long ? Math.max(solo, timeOf(c) - (i ? overlap : 0) - (i < n - 1 ? overlap : 0)) : solo))
+  } else {
+    const q = (2 * f) / (1 + f)
+    const times = clips.map(timeOf)
+    const sides = clips.map((c, i) => (i > 0) + (i < n - 1))
+    const want = clips.map((c, i) => (c.long && sides[i] ? (q * times[i]) / sides[i] : null))
+    shared = []
+    for (let i = 0; i < n - 1; i++) {
+      const w = [want[i], want[i + 1]].filter((x) => x !== null)
+      shared.push(w.length ? w.reduce((a, b) => a + b, 0) / w.length : q * solo)
+    }
+    const shortAlone = Math.max(ALONE_MIN, solo * (1 - q))
+    for (let pass = 0; pass < 3; pass++) {
+      clips.forEach((c, i) => {
+        const left = i ? shared[i - 1] : 0
+        const right = i < n - 1 ? shared[i] : 0
+        let room
+        if (c.long) room = times[i] - ALONE_MIN
+        else if (c.kind === 'video') room = Math.max(c.duration - shortAlone, 1)
+        else return
+        if (left + right > room) {
+          const k = Math.max(room, 1) / (left + right)
+          if (i) shared[i - 1] *= k
+          if (i < n - 1) shared[i] *= k
+        }
+      })
+    }
+    shared = shared.map((o) => Math.max(o, 0.5))
+    alones = clips.map((c, i) => (c.long ? Math.max(ALONE_MIN, times[i] - (i ? shared[i - 1] : 0) - (i < n - 1 ? shared[i] : 0)) : shortAlone))
+  }
+  const split = shared.reduce((a, b) => a + b, 0)
+  return { total: split + alones.reduce((a, b) => a + b, 0), split }
+}
