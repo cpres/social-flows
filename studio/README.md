@@ -499,6 +499,10 @@ needs:
 | ○ Small | a photo with neither | ≈ 0.45 × (0.9s) | 1 beat |
 | ⁂ Burst | near-repeats shot within 2 minutes | 0.4–0.7s each | ½ beat each, at least 0.4s (usually 1) |
 
+In a reel with two lanes on screen (lane A, or a relay), there's more to take
+in at once, so no photo flicks by: Burst holds 2s, Small 3s and Medium 4s,
+and on the beat each is the whole beats that last at least that long.
+
 On the beat, each is half the one above it, but never too quick to see (it
 goes up to the next division, so at 160 bpm a burst is one beat), and a run of
 photos that would end between beats holds its last one to the next beat, so the

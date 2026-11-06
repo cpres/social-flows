@@ -31,7 +31,24 @@ const round1 = (t) => Math.round(t * 10) / 10
 // burst: … }. len is the clip length in seconds; with period (seconds per
 // beat), lengths are beats instead, beatsPerCut for a clip. beats is 0 off
 // the beat. Each style is no longer than the one before it.
-export function holdLengths(len, period = 0, beatsPerCut = 4) {
+// floor (seconds), when given, is the shortest any photo plays: a reel with
+// two lanes on screen needs time to take in what's in each, so its photos
+// hold floor (Burst), 1.5× (Small) and 2× (Medium) that, in whole beats on
+// the beat.
+export const TWO_LANE_FLOOR = 2
+export function holdLengths(len, period = 0, beatsPerCut = 4, floor = 0) {
+  if (floor) {
+    const want = { clip: len, medium: floor * 2, small: floor * 1.5, burst: floor }
+    const out = {}
+    for (const style of Object.keys(STYLES)) {
+      if (style === 'clip') out.clip = period ? { beats: beatsPerCut, seconds: beatsPerCut * period } : { beats: 0, seconds: len }
+      else if (period) {
+        const b = Math.max(1, Math.ceil(want[style] / period - 1e-6))
+        out[style] = { beats: b, seconds: b * period }
+      } else out[style] = { beats: 0, seconds: round1(want[style]) }
+    }
+    return out
+  }
   const out = {}
   let longer = Infinity
   for (const style of Object.keys(STYLES)) {

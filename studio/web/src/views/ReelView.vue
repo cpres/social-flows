@@ -239,7 +239,7 @@
             <input id="reel-hold" type="number" min="0.2" step="0.1" v-model.number="settings.defaultHold" />
             <button
               v-if="kept.some((p) => p.media.kind === 'photo')" class="link" @click="smartHolds" :disabled="timingPhotos"
-              title="Photos with people or animals hold Medium, the rest Small, and look-alike shots taken together flick by as a Burst. Clips keep their lengths."
+              :title="anyA ? 'Photos with people or animals hold Medium (4s), the rest Small (3s), and look-alike shots taken together go by as a Burst (2s): with two lanes on screen, nothing shorter. Clips keep their lengths.' : 'Photos with people or animals hold Medium, the rest Small, and look-alike shots taken together flick by as a Burst. Clips keep their lengths.'"
             >{{ timingPhotos ? 'Looking at the photos…' : '✦ Smart photo holds' }}</button>
             <small v-if="smartNote">{{ smartNote }}</small>
           </div>
@@ -800,7 +800,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
 import { fitRange, fmtBeats, fmtTime, folderTitle, parseTime, reelColor, snapBeats } from '../time'
-import { holdLengths, photoStyles, timeline } from '../hold'
+import { TWO_LANE_FLOOR, holdLengths, photoStyles, timeline } from '../hold'
 import { songTitle } from '../songs'
 import { fxInfo, songLevel, VOICE_TAIL, voiceTimeline } from '../captions'
 import { useVoicePlayer } from '../voicePlayer'
@@ -1319,8 +1319,9 @@ async function smartHolds() {
     const { looks, detects } = await api.looks([...new Set(photos.map((p) => p.mediaId))])
     const entries = kept.value.map((p) => ({ mediaId: p.mediaId, kind: p.media.kind, media: p.media }))
     const styles = photoStyles(entries, looks)
+    // Two lanes on screen: no photo flicks by in under TWO_LANE_FLOOR seconds.
     const sizes = holdLengths(Number(settings.defaultLength) || 2, synced.value ? period.value : 0,
-                              Number(settings.beatsPerCut) || 4)
+                              Number(settings.beatsPerCut) || 4, anyA.value ? TWO_LANE_FLOOR : 0)
     const t = timeline(entries.map((e) => (e.kind === 'photo' ? styles.get(e.mediaId).style : 'clip')), sizes)
     kept.value.forEach((p, i) => {
       if (p.media.kind !== 'photo') return
@@ -1331,6 +1332,7 @@ async function smartHolds() {
     })
     const count = (s) => photos.filter((p) => styles.get(p.mediaId).style === s).length
     smartNote.value = `${count('medium')} Medium · ${count('small')} Small · ${count('burst')} in bursts`
+      + (anyA.value ? ` · two lanes, so none under ${TWO_LANE_FLOOR}s` : '')
       + (detects ? '' : " (this computer can't look for people and animals, so Medium stands in for Small)")
   } catch (e) {
     smartNote.value = `Couldn't look at the photos: ${e.message}`
