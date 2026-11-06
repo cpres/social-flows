@@ -41,6 +41,15 @@ export const GLASSES = [
   { v: 'A', label: 'A only', hint: 'Lane A\'s sound whenever it\'s on screen at real speed; never B\'s' },
   { v: 'off', label: 'Off', hint: 'No glasses audio: the song and voice only' },
 ]
+// The faders: each layer's level, 0..1.5 (1 as it comes), the same as montage.py's mix_level.
+export const MIX = [
+  { v: 'A', key: 'mixA' }, { v: 'B', key: 'mixB' }, { v: 'music', key: 'mixMusic' }, { v: 'voice', key: 'mixVoice' },
+]
+export function mixLevel(settings, layer) {
+  const v = Number(settings[MIX.find((m) => m.v === layer).key] ?? 1)
+  return Number.isFinite(v) ? Math.min(1.5, Math.max(0, v)) : 1
+}
+
 export function glassesMode(settings) {
   if (GLASSES.some((g) => g.v === settings.glassesAudio)) return settings.glassesAudio
   return settings.originalAudio ? 'primary' : 'off'
@@ -55,28 +64,32 @@ export function audioSegments(r) {
   const withSong = !!settings.music && settings.musicInVideo !== false
   const mode = glassesMode(settings)
   const glasses = mode !== 'off' ? (withSong ? Number(settings.originalVolume ?? 0.35) : 1) : 0
+  const fA = mixLevel(settings, 'A')
+  const fB = mixLevel(settings, 'B')
+  const fMusic = mixLevel(settings, 'music')
+  const fVoice = mixLevel(settings, 'voice')
 
   sceneList.forEach((sc, k) => {
     // A relay: A's slot is the Solo B shot before, carrying on from where its part ended.
     const carry = r.carryOf?.(k)
     if (carry) {
       if (!isVideo(carry)) return
-      const audible = glasses > 0 && (mode === 'A' || primaryLane(sc) === 'A')
+      const audible = glasses > 0 && fA > 0 && (mode === 'A' || primaryLane(sc) === 'A')
       out.A.push({ key: carry.media.id, at: sceneTimes[k].start, len: sceneTimes[k].end - sceneTimes[k].start,
-                   from: carry.start + carry.length, rate: 1, gain: glasses, audible, scene: k })
+                   from: carry.start + carry.length, rate: 1, gain: glasses * fA, fader: fA, audible, scene: k })
       return
     }
     const plan = aPlans[k]
     if (!plan) return
     const item = byId.get(sc.a.item)
     if (!isVideo(item)) return
-    const audible = glasses > 0 && (mode === 'A' || primaryLane(sc) === 'A') && Math.abs(plan.rate - 1) < 0.01
+    const audible = glasses > 0 && fA > 0 && (mode === 'A' || primaryLane(sc) === 'A') && Math.abs(plan.rate - 1) < 0.01
     let t = sceneTimes[k].start + (handoffs[k] || 0)
     let left = aSecs[k]
     for (const [from, length] of plan.pieces) {
       const len = Math.min(length / plan.rate, left)
       if (len <= 0.001) break
-      out.A.push({ key: item.media.id, at: t, len, from, rate: plan.rate, gain: glasses, audible, scene: k })
+      out.A.push({ key: item.media.id, at: t, len, from, rate: plan.rate, gain: glasses * fA, fader: fA, audible, scene: k })
       t += len
       left -= len
     }
@@ -88,9 +101,9 @@ export function audioSegments(r) {
     const sc = sceneList[st.scene]
     // The last part plays on to the end of the reel (held for the voice or the end card).
     const end = i === parts.length - 1 && st.scene === sceneList.length - 1 ? Math.max(st.end, reelLength) : st.end
-    const audible = glasses > 0 && mode === 'primary' && (primaryLane(sc) === 'B' || (!aPlans[st.scene] && !r.carryOf?.(st.scene)))
+    const audible = glasses > 0 && fB > 0 && mode === 'primary' && (primaryLane(sc) === 'B' || (!aPlans[st.scene] && !r.carryOf?.(st.scene)))
     out.B.push({ key: st.part.media.id, at: st.start, len: end - st.start, from: st.part.start, rate: 1,
-                 gain: glasses, audible, scene: st.scene })
+                 gain: glasses * fB, fader: fB, audible, scene: st.scene })
   })
 
   if (withSong && reelLength > 0) {
@@ -100,8 +113,10 @@ export function audioSegments(r) {
       ? () => Number(settings.voiceSongBetween ?? 0.3)
       : r.songVolume || (() => Number(settings.musicVolume ?? 0.8))
     out.music.push({
-      key: 'music', at: 0, len: reelLength, from: Number(settings.musicStart) || 0, rate: 1, audible: true,
-      gain: (t) => level(t) * Math.min(1, Math.max(0, (reelLength - t) / fade)) * duckAt(out.duck, t),
+      // Where the song starts: on its first beat when cutting on the beat (as the render does), else where you set.
+      key: 'music', at: 0, len: reelLength, from: r.songStart ?? (Number(settings.musicStart) || 0), rate: 1,
+      gain: (t) => level(t) * Math.min(1, Math.max(0, (reelLength - t) / fade)) * duckAt(out.duck, t) * fMusic,
+      fader: fMusic, audible: fMusic > 0,
     })
   }
   out.duck = []   // filled by withDucking(), once the envelopes are in
@@ -109,7 +124,7 @@ export function audioSegments(r) {
   // The voice is evened out in mono, then made stereo (3dB down a side).
   for (const p of r.voicePieces || []) {
     out.voice.push({ key: `${p.folder}/${p.file}`, at: p.at, len: p.length, from: Number(p.start) || 0, rate: 1,
-                     gain: Math.SQRT1_2, audible: true, loudnorm: VOICE_LUFS, mono: true })
+                     gain: Math.SQRT1_2 * fVoice, fader: fVoice, audible: fVoice > 0, loudnorm: VOICE_LUFS, mono: true })
   }
   return out
 }
@@ -191,7 +206,7 @@ export function trackBars(list, envs, reelLength, step = BAR) {
       if (seg.at >= t1 - 1e-3 || seg.at + seg.len <= t0 + 1e-3) continue
       any = true
       on = on || seg.audible
-      const raw = { ...seg, gain: 1, loudnorm: 0, mono: true }
+      const raw = { ...seg, gain: seg.fader ?? 1, loudnorm: 0, mono: true }   // its own level, through its fader
       for (let j = 0; j < samples; j++) p += segPower(raw, envs[seg.key], t0 + ((j + 0.5) * (t1 - t0)) / samples)
     }
     return { t: t0, h: any ? height(p / samples) : 0, on }

@@ -373,7 +373,8 @@
       <div class="lanerow audiorow">
         <div class="lanename">
           <b>Audio</b><small>{{ envWaiting ? 'measuring…' : 'what you hear' }}</small>
-          <button class="tracksbtn" @click="showTracks = !showTracks" :aria-expanded="showTracks">{{ showTracks ? 'Hide tracks' : 'Show tracks' }}</button>
+          <button class="tracksbtn" @click="showTracks = !showTracks" :aria-expanded="showTracks" title="A row for each sound, with its volume">{{ showTracks ? 'Hide tracks' : 'Tracks & volume' }}</button>
+          <small v-if="faded && !showTracks" class="fadednote">volumes set</small>
         </div>
         <div class="lanebody mixstrip" :title="mixHeard ? '' : 'Nothing is heard yet: glasses audio is off and there\'s no song or voice'">
           <div v-for="(b, i) in bands" :key="`band${i}`" class="band" :style="laneStyle(b.start, b.end - b.start)"></div>
@@ -393,7 +394,16 @@
       </div>
       <template v-if="showTracks">
         <div v-for="tr in tracks" :key="tr.id" class="lanerow audiorow trackrow">
-          <div class="lanename"><b :class="`t-${tr.id}`">{{ tr.name }}</b><small>{{ tr.sub }}</small></div>
+          <div class="lanename">
+            <b :class="`t-${tr.id}`">{{ tr.name }}</b><small>{{ tr.sub }}</small>
+            <div class="fader" :title="`${tr.name}: ${faderPct(tr.id)}%. Drag to turn it up or down; double-click for 100%`">
+              <input
+                type="range" min="0" max="150" step="5" :value="faderPct(tr.id)" :aria-label="`${tr.name} volume`"
+                @input="setFader(tr.id, $event.target.value)" @dblclick="setFader(tr.id, 100)"
+              />
+              <button class="pct mono" :class="{ muted0: faderPct(tr.id) === 0 }" @click="toggleMute(tr.id)" :aria-label="faderPct(tr.id) === 0 ? `Unmute ${tr.name}` : `Mute ${tr.name}`">{{ faderPct(tr.id) === 0 ? 'off' : `${faderPct(tr.id)}%` }}</button>
+            </div>
+          </div>
           <div class="lanebody track">
             <div v-for="(b, i) in bands" :key="`band${i}`" class="band" :style="laneStyle(b.start, b.end - b.start)"></div>
             <svg class="bars" :viewBox="`0 0 ${tr.bars.length || 1} 1`" preserveAspectRatio="none" aria-hidden="true">
@@ -831,7 +841,7 @@ import { quietCut, topSource } from '../stack'
 import { HANDOFF_DEFAULT, INTOS, isRelay, LAYOUTS as SCENE_LAYOUTS, SCENE_IN, SCENE_MOVE, SOLO_A_MIN, TIMINGS, aShort, aTiming, fitted, handoffSecs, frameFor, layoutLabel, newId, normalize,
   resolveA, sceneAPlan, sceneSlots, showsA, showsB, slotShape, soloSeconds } from '../scenes'
 import SceneFrame from '../components/SceneFrame.vue'
-import { DUCK_DB, GLASSES, QUIET_SNAP, audioSegments, glassesMode, mixBars, musicBars, quietMarker, trackBars, transitionBands, withDucking } from '../audioMix'
+import { DUCK_DB, GLASSES, MIX, QUIET_SNAP, audioSegments, mixLevel, glassesMode, mixBars, musicBars, quietMarker, trackBars, transitionBands, withDucking } from '../audioMix'
 import TimingFields from '../components/TimingFields.vue'
 import TrimBar from '../components/TrimBar.vue'
 
@@ -1366,7 +1376,7 @@ const songT0 = computed(() => (synced.value && grid.value ? grid.value.songT0 : 
 function startSong(at) {
   const a = audioEl.value
   if (!a) return
-  a.volume = Math.min(1, Math.max(0, songVolume(at)))
+  a.volume = songOut(at)
   a.currentTime = songT0.value + at
   a.play().catch(() => {})
   cancelAnimationFrame(songRaf)
@@ -1374,7 +1384,7 @@ function startSong(at) {
     if (!reelOn.value) return
     const t = a.currentTime - songT0.value
     songClock.value = t
-    if (voiceTl.value.pieces.length) a.volume = Math.min(1, Math.max(0, songVolume(t)))
+    a.volume = songOut(t)   // its level under the voice, and the music fader as it moves
     const k = reelIdx.value
     if (gapFrom.value !== null) { if (t >= partStart(k + 1)) startPart(k + 1) } else if (k < kept.value.length && t >= partEnd(k)) afterPart(k)
     songRaf = requestAnimationFrame(tick)
@@ -1390,7 +1400,7 @@ function listen() {
   if (!a) return
   if (listening.value) return stopListening()
   stopReel()
-  a.volume = Math.min(1, Math.max(0, Number(settings.musicVolume ?? 0.8)))
+  a.volume = Math.min(1, Math.max(0, Number(settings.musicVolume ?? 0.8) * mixLevel(settings, 'music')))
   a.currentTime = songT0.value
   a.play().catch(() => {})
   listening.value = true
@@ -1447,6 +1457,17 @@ function seekLane(e) {
 const songVolume = (t) => (voiceTl.value.pieces.length
   ? songLevel(voiceTl.value.pieces, Number(settings.voiceSongUnder ?? 0.15), Number(settings.voiceSongBetween ?? 0.3), t)
   : Number(settings.musicVolume ?? 0.8))
+
+// What the song plays at here: its level (under the voice) through the music fader.
+const songOut = (t) => Math.min(1, Math.max(0, songVolume(t) * mixLevel(settings, 'music')))
+// The faders reach Play reel too: the voice as it plays, B's own sound in the
+// preview (a browser can't play a video above 100%; the render goes to 150%).
+watch(() => mixLevel(settings, 'voice'), (v) => voicePlayer.setVolume(v), { immediate: true })
+watch(() => [mixLevel(settings, 'B'), player.video.value], ([v, el]) => { if (el) el.volume = Math.min(1, v) }, { immediate: true })
+watch(() => mixLevel(settings, 'music'), () => {
+  const a = audioEl.value
+  if (a && listening.value) a.volume = Math.min(1, Math.max(0, Number(settings.musicVolume ?? 0.8) * mixLevel(settings, 'music')))
+})
 
 // ---------------------------------------------------------------- transitions
 
@@ -1687,7 +1708,7 @@ const envsForMix = computed(() => ({ ...envs.value, music: envs.value[`music:${s
 const audioSegs = computed(() => withDucking(audioSegments({
   sceneList: sceneList.value, sceneTimes: sceneTimes.value, stretches: stretches.value, aPlans: aPlans.value,
   aSecs: aSecs.value, handoffs: handoffs.value, byId: byId.value, reelLength: reelLength.value, settings,
-  voicePieces: voiceTl.value.pieces, songVolume, carryOf,
+  voicePieces: voiceTl.value.pieces, songVolume, carryOf, songStart: songT0.value,
 }), envsForMix.value, reelLength.value, settings))
 // The rows per source (Show tracks): each at its own level, dim where it isn't heard.
 const TRACKS_KEY = 'footage-studio-audio-tracks'
@@ -1706,6 +1727,19 @@ const tracks = computed(() => {
   ]
   return rows.filter((r) => r.show)
 })
+// The faders: each layer's volume, 0..150% (stored 0..1.5 as mixA, mixB, mixMusic, mixVoice).
+const faderKey = (layer) => MIX.find((m) => m.v === layer).key
+const faderPct = (layer) => Math.round(mixLevel(settings, layer) * 100)
+const unmuted = {}   // what a muted fader goes back to
+function setFader(layer, pct) {
+  settings[faderKey(layer)] = Math.round(Math.min(150, Math.max(0, Number(pct) || 0))) / 100
+}
+function toggleMute(layer) {
+  if (faderPct(layer) === 0) return setFader(layer, unmuted[layer] || 100)
+  unmuted[layer] = faderPct(layer)
+  setFader(layer, 0)
+}
+const faded = computed(() => MIX.some((m) => mixLevel(settings, m.v) !== 1))
 // Glasses audio: follows the primary slot, lane A only, or off (older reels: Keep glasses audio).
 const glasses = computed({
   get: () => glassesMode(settings),
@@ -2573,6 +2607,12 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
   align-self: flex-start; margin-top: 3px; padding: 1px 7px; border-radius: 6px; font: inherit; font-size: 10px; cursor: pointer;
   border: 1px solid var(--line); background: transparent; color: var(--muted);
 }
+.fader { display: flex; align-items: center; gap: 3px; margin-top: 3px; }
+.fader input[type='range'] { width: 58px; height: 14px; margin: 0; accent-color: var(--sage); }
+.fader .pct { border: 0; background: none; padding: 0; color: var(--ink); font-size: 10px; min-width: 30px; text-align: left; cursor: pointer; }
+.fader .pct.muted0 { color: var(--danger); }
+.fadednote { color: var(--forest) !important; }
+.trackrow .track { min-height: 52px; }
 .lanename .tracksbtn:hover { color: var(--ink); border-color: var(--sage); }
 .track { min-height: 36px; border-radius: 6px; background: rgb(128 128 128 / 5%); }
 .track .bars { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }

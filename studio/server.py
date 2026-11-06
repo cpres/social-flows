@@ -179,6 +179,17 @@ def frame_size(s):
     return SHAPES.get(s.get("shape"), SHAPES["tall"])
 
 
+MIX_KEYS = {"A": "mixA", "B": "mixB", "music": "mixMusic", "voice": "mixVoice"}
+
+
+def mix_of(s, layer):
+    """A layer's fader, 0..1.5 (1: as it comes)."""
+    try:
+        return round(min(max(float(s.get(MIX_KEYS[layer], 1)), 0.0), 1.5), 3)
+    except (TypeError, ValueError):
+        return 1.0
+
+
 def glasses_of(s):
     """Which glasses audio a reel keeps: primary (the primary slot's lane), A
     (lane A only) or off. Reels from before say originalAudio true/false."""
@@ -216,6 +227,9 @@ def clean_settings(db, reel_id, s):
         s["glassesAudio"] = glasses_of(s)
         s["originalAudio"] = s["glassesAudio"] != "off"   # what older code reads
     s["duckMusic"] = bool(s.get("duckMusic", True))
+    for layer, k in MIX_KEYS.items():
+        if k in s:
+            s[k] = mix_of(s, layer)
     if "beat" in s:
         s["beat"] = beats_mod.clean(s["beat"])
     return s
@@ -1260,6 +1274,7 @@ def build_config(reel, rows, grid_bpm=None):
         "original_audio": glasses_of(s) != "off",
         "glasses_audio": glasses_of(s),
         "duck_music": bool(s.get("duckMusic", True)),
+        "mix": {layer: mix_of(s, layer) for layer in ("A", "B", "music", "voice")},
         "original_volume": s.get("originalVolume", 0.35),
         "fit": s.get("fit", "fill"),
         "photo_motion": "push",

@@ -307,6 +307,13 @@ over them. Lanes say what's playing; scenes say what's on screen.
   each for A glasses, B glasses, the music and the voice, at their own
   level: bright where it's heard, dim where it isn't (the lane whose sound
   isn't kept, a sped-up A, the song where it ducks).
+- **Volume:** *Tracks & volume* opens the rows, each with its own volume
+  (0–150%, 100% as it comes): A glasses, B glasses, the music and the
+  voice. Turn the clips' sound down under a song or a beat, or the song
+  down under them. Click the % to mute (again to bring it back),
+  double-click the slider for 100%. The audio strip, the render and Play
+  reel all follow it (the preview can't play a clip above 100%). With the
+  tracks hidden, *volumes set* says some aren't at 100%.
 - **Quiet moments:** a ◆ on the audio strip by each scene edge marks the
   quietest moment of what you hear within 1s of it, where a change of
   scene goes by least noticed. Dragging the edge within 0.3s of its ◆

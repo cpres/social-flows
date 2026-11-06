@@ -9,13 +9,20 @@ const FX_EDGE = 0.025   // crossfade between the plain voice and an effect, as t
 // does the real thing). The takes are fetched and decoded once.
 export function useVoicePlayer() {
   let ctx = null
+  let master = null   // everything plays through this: the reel's voice fader
+  let level = 1
   const buffers = new Map()   // "folder/file" -> Promise<AudioBuffer>
   let playing = []
   const irs = new Map()
 
   const keyOf = (p) => `${p.folder}/${p.file}`
   function context() {
-    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)()
+    if (!ctx) {
+      ctx = new (window.AudioContext || window.webkitAudioContext)()
+      master = ctx.createGain()
+      master.gain.value = level
+      master.connect(ctx.destination)
+    }
     if (ctx.state === 'suspended') ctx.resume()
     return ctx
   }
@@ -130,7 +137,7 @@ export function useVoicePlayer() {
         const clock = (reelT) => c.currentTime + (reelT - now)   // reel time -> context time
         if (end > now) {
           const offset = p.start + Math.max(0, now - p.at)
-          const g = source(c, buf, clock(Math.max(now, p.at)), offset, end - Math.max(now, p.at), 0.04, c.destination)
+          const g = source(c, buf, clock(Math.max(now, p.at)), offset, end - Math.max(now, p.at), 0.04, master)
           // The plain voice steps aside for each phrase with an effect.
           for (const f of p.fx || []) {
             const r0 = clock(p.at + f.s - p.start)
@@ -148,7 +155,7 @@ export function useVoicePlayer() {
           const when = clock(at)
           const until = when + (f.e - f.s) + fxTail(f.effect, f.amount)
           const bus = c.createGain()
-          effect(c, f, bus, c.destination, when, until)
+          effect(c, f, bus, master, when, until)
           source(c, buf, when, f.s, f.e - f.s, FX_EDGE, bus)
         }
       }).catch(() => {})
@@ -163,5 +170,11 @@ export function useVoicePlayer() {
   // Fetch and decode ahead, so pressing play starts the voice straight away.
   const prepare = (pieces) => Promise.all(pieces.map((p) => load(p).catch(() => null)))
 
-  return { play, stop, prepare, context }
+  // The voice's fader (0..1.5), now and for what plays next.
+  function setVolume(v) {
+    level = Math.max(0, Number(v) || 0)
+    if (master) master.gain.setTargetAtTime(level, ctx.currentTime, 0.03)
+  }
+
+  return { play, stop, prepare, context, setVolume }
 }

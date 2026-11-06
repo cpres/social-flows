@@ -86,6 +86,14 @@ def glasses_mode(cfg):
     return "primary" if cfg.get("original_audio") else "off"
 
 
+def mix_level(cfg, layer):
+    """A layer's fader (`mix:` {A, B, music, voice}, 0..1.5; 1 if unset)."""
+    try:
+        return min(max(float((cfg.get("mix") or {}).get(layer, 1)), 0.0), 1.5)
+    except (TypeError, ValueError):
+        return 1.0
+
+
 def scene_sound(scene, lanes, mode):
     """Which lane's sound a scene keeps, or None for none."""
     if mode == "off":
@@ -1247,7 +1255,8 @@ def compose_scene(scene, slots, div, files, frames, tail, cfg, workdir, k):
     sound = scene_sound(scene, lanes, glasses_mode(cfg))
     graph.append(f"{cur}format=yuv420p,trim=end_frame={frames + tail},setpts=PTS-STARTPTS[v]")
     if sound:
-        graph.append(f"[{lanes.index(sound)}:a]apad,atrim=0:{frames / fps:.4f},asetpts=PTS-STARTPTS[a]")
+        level = mix_level(cfg, sound)   # that lane's fader
+        graph.append(f"[{lanes.index(sound)}:a]volume={level:.3f},apad,atrim=0:{frames / fps:.4f},asetpts=PTS-STARTPTS[a]")
     else:
         cmd += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
         graph.append(f"[{len(lanes)}:a]atrim=0:{frames / fps:.4f},asetpts=PTS-STARTPTS[a]")
@@ -1654,7 +1663,8 @@ def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output,
               "-movflags", "+faststart", "-t", f"{total_len:.3f}", str(output)]
 
     if not music and not voice:
-        audio = ["-map", "0:a"] if keep_audio else ["-an"]
+        fader = [] if cfg.get("scenes") else ["-af", f"volume={mix_level(cfg, 'B'):.3f}"]   # scenes: done per lane
+        audio = ["-map", "0:a", *fader] if keep_audio else ["-an"]
         run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(assembled),
              "-map", "0:v", *audio, *common])
         return
@@ -1663,6 +1673,8 @@ def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output,
     graph, mix = [], []
     # The assembled audio sets the length; silent unless the clips' sound is kept.
     bed = (float(cfg.get("original_volume", 0.35)) if music else 1.0) if keep_audio else 0.0
+    if not cfg.get("scenes"):
+        bed *= mix_level(cfg, "B")   # without scenes, all the clips' sound is the cut list's (with scenes, per lane)
     graph.append(f"[0:a]volume={bed}[o]")
     mix.append("[o]")
     if music:
@@ -1678,7 +1690,7 @@ def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output,
             print(f"  ducking the song under the glasses audio in {len(runs)} place{'s' if len(runs) != 1 else ''}"
                   "                ")
             base = f"({base})*({duck_level(runs)})"
-        level = f"volume='{base}':eval=frame"
+        level = f"volume='({base})*{mix_level(cfg, 'music'):.3f}':eval=frame"
         graph.append(f"[1:a]aformat=sample_rates=48000:channel_layouts=stereo,{level},"
                      f"afade=t=out:st={max(total_len - fade, 0):.3f}:d={fade:.3f}[m]")
         mix.append("[m]")
@@ -1694,7 +1706,7 @@ def finish(assembled, cfg, base_dir, music_start, total_len, keep_audio, output,
                      f"aformat=sample_rates=48000:channel_layouts=stereo,"
                      f"afade=t=in:d={VOICE_EDGE},"
                      f"afade=t=out:st={max(p['length'] - VOICE_EDGE * 2, 0):.3f}:d={VOICE_EDGE * 2},"
-                     f"volume={voice['volume']}")
+                     f"volume={voice['volume'] * mix_level(cfg, 'voice'):.3f}")
             if not p["fx"]:
                 graph.append(f"{chain},adelay=delays={delay}:all=1[v{i}]")
                 parts.append(f"[v{i}]")
