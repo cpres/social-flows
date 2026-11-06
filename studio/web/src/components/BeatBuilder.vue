@@ -62,6 +62,14 @@
           <button v-for="c in CURVES" :key="c.v" class="btn small" :class="{ primary: beat.preset === c.v }" @click="setPreset(c.v)">{{ c.label }}</button>
         </div>
       </div>
+      <div class="tops" role="radiogroup" aria-label="How high the energy goes">
+        <span class="muted small">Highest it goes</span>
+        <button
+          v-for="o in TOPS" :key="o.v" class="btn small" role="radio" :aria-checked="topChoice === o.v" :class="{ primary: topChoice === o.v }"
+          :title="o.hint" @click="setTop(o.v)"
+        >{{ o.label }}</button>
+        <span class="muted small">or drag the line along the top of the curve</span>
+      </div>
       <div ref="pad" class="pad" @pointerdown.self="addPoint" @pointermove="dragMove" @pointerup="dragEnd" @pointercancel="dragEnd">
         <span class="padlabel top">peak</span><span class="padlabel bottom">calm</span>
         <svg class="curve" viewBox="0 0 1000 200" preserveAspectRatio="none" aria-hidden="true">
@@ -72,6 +80,13 @@
             vector-effect="non-scaling-stroke"
           />
         </svg>
+        <!-- the ceiling: drag it down to keep things calmer -->
+        <div
+          class="ceil" :class="{ hot: ceilDrag }" :style="{ top: `${(1 - topNow) * 100}%` }" role="slider" tabindex="0"
+          aria-label="How high the energy goes" aria-valuemin="10" aria-valuemax="100" :aria-valuenow="Math.round(topNow * 100)"
+          @pointerdown.stop="ceilStart" @dblclick.stop="setTop(1)" @keydown="ceilKey"
+          title="Drag down to keep the energy lower the whole way; double-click for Full"
+        ><span class="ceilgrip">Top {{ Math.round(topNow * 100) }}% ↕</span></div>
         <button
           v-for="(p, i) in beat.curve" :key="i" class="pt" :class="{ hot: drag === i }"
           :style="{ left: `${p[0] * 100}%`, top: `${(1 - p[1]) * 100}%` }"
@@ -151,7 +166,8 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { api } from '../api'
 import { fmtTime } from '../time'
 import {
-  CURVES, LEVERS, VIBES, beatPrompt, curveAt, derivedKey, derivedTempo, leverClick, presetCurve, sceneFractions, sceneRole,
+  CURVES, LEVERS, TOPS, VIBES, beatPrompt, capCurve, curveAt, derivedKey, derivedTempo, leverClick, presetCurve, sceneFractions,
+  sceneRole, topOf,
 } from '../beat'
 
 const props = defineProps({
@@ -281,11 +297,39 @@ const edges = computed(() => fractions.value.slice(1).map((s) => s.a))
 const roles = computed(() => fractions.value.map((s, k) => sceneRole(beat.value.curve, s, k, fractions.value.length)))
 // "Follow my scenes" follows them as they change.
 watch(() => JSON.stringify(fractions.value), () => {
-  if (beat.value.preset === 'follow') beat.value.curve = presetCurve('follow', fractions.value)
+  if (beat.value.preset === 'follow') beat.value.curve = capCurve(presetCurve('follow', fractions.value), beat.value.ceiling ?? 1)
 })
 function setPreset(v) {
   beat.value.preset = v
-  beat.value.curve = presetCurve(v, fractions.value)
+  beat.value.curve = capCurve(presetCurve(v, fractions.value), beat.value.ceiling ?? 1)
+}
+
+// The ceiling: how high the energy goes. A preset is redrawn under it; a
+// curve of your own is squashed (or stretched back up) from where it was.
+const topNow = computed(() => topOf(beat.value.curve))
+const topChoice = computed(() => {
+  const c = beat.value.ceiling ?? 1
+  return TOPS.find((o) => Math.abs(o.v - c) < 0.03)?.v ?? null
+})
+let ceilBase = null
+function setTop(top, base = null) {
+  const t = Math.round(Math.min(1, Math.max(0.1, top)) * 100) / 100
+  beat.value.ceiling = t >= 0.995 ? null : t
+  beat.value.curve = beat.value.preset !== 'custom'
+    ? capCurve(presetCurve(beat.value.preset, fractions.value), t)
+    : capCurve(base || beat.value.curve, t, true)
+}
+const ceilDrag = ref(false)
+function ceilStart(e) {
+  e.currentTarget.setPointerCapture?.(e.pointerId)
+  ceilBase = beat.value.curve.map((p) => [...p])
+  ceilDrag.value = true
+}
+function ceilKey(e) {
+  const d = { ArrowUp: 0.05, ArrowDown: -0.05 }[e.key]
+  if (!d) return
+  e.preventDefault()
+  setTop(topNow.value + d)
 }
 const samples = computed(() => Array.from({ length: 201 }, (_, i) => [i / 200, curveAt(beat.value.curve, i / 200)]))
 const line = computed(() => samples.value.map(([x, y], i) => `${i ? 'L' : 'M'}${(x * 1000).toFixed(1)},${((1 - y) * 200).toFixed(1)}`).join(''))
@@ -306,6 +350,7 @@ function dragStart(e, i) {
   drag.value = i
 }
 function dragMove(e) {
+  if (ceilDrag.value) { setTop(at(e)[1], ceilBase); return }
   const i = drag.value
   if (i === null) return
   const [x, y] = at(e)
@@ -316,7 +361,7 @@ function dragMove(e) {
   if (i > 0 && i < last) pts[i][0] = Math.round(Math.min(pts[i + 1][0] - 0.01, Math.max(pts[i - 1][0] + 0.01, x)) * 1000) / 1000
   edit(pts)
 }
-function dragEnd() { drag.value = null }
+function dragEnd() { drag.value = null; ceilDrag.value = false; ceilBase = null }
 function addPoint(e) {
   const [x, y] = at(e)
   const pts = beat.value.curve.map((p) => [...p])
@@ -358,7 +403,7 @@ const built = computed(() => beatPrompt({
   tempo: tempo.value, key: key.value,
   from: beat.value.from.kind === 'song' ? { ...beat.value.from, title: songName(beat.value.from.name) } : beat.value.from,
   levers: beat.value.levers, curve: beat.value.curve, hits: beat.value.hits, end: beat.value.end,
-  length: length.value, edges: edges.value.map((f) => f * length.value),
+  length: length.value, edges: edges.value.map((f) => f * length.value), ceiling: beat.value.ceiling,
 }))
 const prompt = computed(() => beat.value.prompt ?? built.value)
 defineExpose({ built, prompt, length, tempo, key, keyFrom, tempoFrom })
@@ -406,6 +451,16 @@ defineExpose({ built, prompt, length, tempo, key, keyFrom, tempoFrom })
   border: 2px solid var(--b-blue); background: var(--paper);
 }
 .pt:hover, .pt.hot, .pt:focus-visible { background: var(--b-blue); outline: none; }
+.tops { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -2px 0 10px; }
+.ceil {
+  position: absolute; left: 0; right: 0; height: 14px; margin-top: -7px; cursor: ns-resize; z-index: 2; touch-action: none;
+  background: linear-gradient(to bottom, transparent 6px, #e08038 6px, #e08038 8px, transparent 8px); opacity: 0.55;
+}
+.ceil:hover, .ceil.hot, .ceil:focus-visible { opacity: 1; outline: none; }
+.ceilgrip {
+  position: absolute; right: 6px; top: -9px; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px;
+  background: #e08038; color: #1d1208; white-space: nowrap;
+}
 .sstrip { position: relative; height: 26px; margin: 6px 6px 10px; }
 .sblock {
   position: absolute; top: 0; bottom: 0; border-radius: 5px; font-size: 11px; font-weight: 600; padding: 0 8px; line-height: 26px;

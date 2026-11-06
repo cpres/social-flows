@@ -447,8 +447,9 @@ onBeforeUnmount(() => {
 .tact { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .tact .done { cursor: default; }
 .warnbtn { border-color: var(--warn); color: var(--warn); }
-.ttl { display: flex; align-items: baseline; gap: 4px; }
-.ttl b { min-width: 0; }
+.ttl { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 4px; }
+.ttl b { flex: 1; min-width: 0; }
+.ttl .star { flex: none; }
 .star { border: 0; background: none; padding: 0 2px; font-size: 17px; line-height: 1; color: var(--muted); cursor: pointer; }
 .star.on { color: #e0a43a; }
 .star:hover { color: #e0a43a; }

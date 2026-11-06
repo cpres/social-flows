@@ -1664,7 +1664,9 @@ def beat_prompt_text(ctx):
     head = f"{s['tempo']} BPM, {s['key']}"
     if s["genres"]:
         head += f", {', '.join(s['genres'])}"
-    return ". ".join(x for x in [head, ", ".join(s["levers"] + s["words"])] if x) + "."
+    calm = (ctx["beat"].get("ceiling") or 1) <= 0.65
+    tail = "Stays relaxed and steady the whole way, a gentle lift, no big drops" if calm else ""
+    return ". ".join(x for x in [head, ", ".join(s["levers"] + s["words"]), tail] if x) + "."
 
 
 @app.get("/api/reels/{reel_id}/beat/preview")

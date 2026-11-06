@@ -130,6 +130,29 @@ function followScenes(scenes) {
   return out
 }
 
+// How high the energy goes: the curve's top, squashed down under a ceiling.
+export const TOPS = [
+  { v: 1, label: 'Full', hint: 'Builds all the way to a big peak' },
+  { v: 0.8, label: 'Lively', hint: 'Lifts well, but stops short of a big peak' },
+  { v: 0.62, label: 'Mid', hint: 'Stays in a groove, with a gentle lift' },
+  { v: 0.45, label: 'Chill', hint: 'Stays relaxed the whole way, a small rise at most' },
+]
+export const topOf = (points) => Math.max(...points.map((p) => p[1]))
+// The curve with its highest point at `top`, its shape kept and its calm
+// parts left where they are (unless the top comes down past them). Only ever
+// squashes, unless `stretch` (dragging the line back up on a curve of your own).
+export function capCurve(points, top, stretch = false) {
+  const ys = points.map((p) => p[1])
+  const lo = Math.min(...ys)
+  const hi = Math.max(...ys)
+  const t = Math.min(1, Math.max(0.1, top))
+  if (!stretch && hi <= t + 1e-3) return points
+  const r = (v) => Math.round(Math.min(1, Math.max(0, v)) * 100) / 100
+  if (hi - lo < 0.01) return points.map(([x]) => [x, r(t)])
+  const lo2 = Math.max(0, Math.min(lo, t - 0.08))
+  return points.map(([x, y]) => [x, r(lo2 + ((y - lo) * (t - lo2)) / (hi - lo))])
+}
+
 // What each scene does in the music, for the strip under the curve: intro, build, peak, cool or steady.
 export function sceneRole(points, s, k, n) {
   // Judged on the scene's inner 80%, so a rise into the next scene doesn't count.
@@ -155,7 +178,7 @@ export function peakOf(points) {
 
 // ---------------------------------------------------------------- the prompt
 
-export function beatPrompt({ tempo, key, from, levers: l, curve, hits, end, length, edges }) {
+export function beatPrompt({ tempo, key, from, levers: l, curve, hits, end, length, edges, ceiling }) {
   // Whole seconds, as people say them; tenths too in a short reel, where they matter.
   const t = (s) => (length < 30 ? fmtTime(s) : fmtTime(Math.round(s)).replace(/\.\d$/, ''))
   const parts = [`${tempo} BPM, ${key}`]
@@ -166,10 +189,14 @@ export function beatPrompt({ tempo, key, from, levers: l, curve, hits, end, leng
   const lo = Math.min(...curve.map((p) => p[1]))
   const hi = Math.max(...curve.map((p) => p[1]))
   const shape = []
-  if (hi - lo < 0.15) shape.push('Steady energy throughout')
+  if (hi - lo < 0.15) shape.push((ceiling ?? 1) <= 0.65 ? 'Stays relaxed and steady throughout, no big drops' : 'Steady energy throughout')
   else {
     const start = curve[0][1]
-    shape.push(`${start < 0.35 ? 'Starts calm' : start > 0.7 ? 'Starts lively' : 'Starts mid'}, builds to a peak at ${t(peakOf(curve) * length)}`)
+    const opening = start < 0.35 ? 'Starts calm' : start > 0.7 ? 'Starts lively' : 'Starts mid'
+    const top = ceiling ?? 1
+    shape.push(top <= 0.65 ? `${opening}, stays relaxed and steady the whole way, lifting gently around ${t(peakOf(curve) * length)}, no big drops`
+      : top < 0.95 ? `${opening}, lifts to a moderate high around ${t(peakOf(curve) * length)} without a big peak`
+        : `${opening}, builds to a peak at ${t(peakOf(curve) * length)}`)
   }
   if (hits && edges.length) shape.push(`hits at ${edges.map((e) => t(e)).join(', ')}`)
   shape.push(end ? `resolves on the last frame at ${t(length)}` : `fades out by ${t(length)}`)
@@ -181,6 +208,6 @@ export function beatPrompt({ tempo, key, from, levers: l, curve, hits, end, leng
 export function newBeat(scenes) {
   return {
     from: { kind: 'scratch' }, curve: presetCurve('follow', scenes), preset: 'follow', hits: true, end: true,
-    levers: { ...VIBES[0].levers }, vibe: VIBES[0].v, tempo: null, key: null, prompt: null,
+    levers: { ...VIBES[0].levers }, vibe: VIBES[0].v, tempo: null, key: null, prompt: null, ceiling: null,
   }
 }

@@ -69,6 +69,8 @@ def clean(beat):
     out["key"] = key or None
     prompt = beat.get("prompt")
     out["prompt"] = str(prompt)[:4000] if isinstance(prompt, str) and prompt.strip() else None
+    ceil = beat.get("ceiling")
+    out["ceiling"] = None if ceil in (None, "") or _num(ceil, 0.1, 1, 1) >= 0.995 else round(_num(ceil, 0.1, 1, 1), 2)
     out["engine"] = beat.get("engine") if beat.get("engine") in ENGINES else "elevenlabs"
     use = beat.get("inUse")
     out["inUse"] = ({"take": str(use["take"])[:40], "length": round(_num(use.get("length"), 0, 3600, 0), 2),
@@ -225,7 +227,10 @@ def composition_plan(beat, secs, style, variation):
     length = secs[-1]["end"]
     ms = [round(s["end"] * 1000) - round(s["start"] * 1000) for s in secs]
     ms[-1] = round(length * 1000) - sum(ms[:-1])
-    negative = ["lead vocals", "lyrics", "spoken word", "rap"] if beat["levers"]["ecstatic"] >= 4 else NO_VOCALS
+    negative = ["lead vocals", "lyrics", "spoken word", "rap"] if beat["levers"]["ecstatic"] >= 4 else list(NO_VOCALS)
+    calm = (beat.get("ceiling") or 1) <= 0.65   # kept low: relaxed and steady the whole way
+    if calm:
+        negative += ["big drop", "aggressive"]
     chunks = []
     for i, (s, d) in enumerate(zip(secs, ms)):
         directions = []
@@ -240,7 +245,9 @@ def composition_plan(beat, secs, style, variation):
         styles = [energy_words(s["energy"])]
         if i == 0:
             styles = (["instrumental"] + style["genres"] + style["words"] + style["levers"]
-                      + [f"{style['tempo']} BPM", style["key"]] + styles + variation + ["great production quality"])
+                      + [f"{style['tempo']} BPM", style["key"]] + styles + variation
+                      + (["relaxed, steady vibe throughout", "gentle lift, never peaks"] if calm else [])
+                      + ["great production quality"])
         chunks.append({"text": f"[{s['name']}]\n" + "\n".join(f"{{{d_}}}" for d_ in directions),
                        "duration_ms": d, "positive_styles": [x[:200] for x in styles][:50],
                        "negative_styles": negative, "context_adherence": "high"})
