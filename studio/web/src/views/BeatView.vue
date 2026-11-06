@@ -17,7 +17,7 @@
         >{{ e.label }}</button>
       </div>
       <button class="btn primary go" :disabled="running || !ready || !!preview?.error" @click="generate()">
-        {{ running ? 'Making takes…' : 'Generate 3 takes' }}
+        {{ running ? (job?.takes?.length === 1 ? 'Making a take…' : 'Making takes…') : 'Generate 3 takes' }}
       </button>
     </header>
 
@@ -57,13 +57,31 @@
         </section>
 
         <section class="card takes">
-          <h3>Takes <small class="muted">each exactly the reel's length; the take in the reel is its song</small></h3>
-          <p v-if="!takes.length" class="muted small">No takes yet. <b>Generate 3 takes</b> makes three, each leaning a different way.</p>
+          <h3>
+            Takes <small class="muted">each exactly the reel's length; the take in the reel is its song</small>
+            <button v-if="takes.some((t) => t.starred)" class="link starfilter" :aria-pressed="starOnly" @click="starOnly = !starOnly">{{ starOnly ? 'Show all' : '★ Starred only' }}</button>
+          </h3>
+          <p v-if="!takes.length && !running" class="muted small">No takes yet. <b>Generate 3 takes</b> makes three, each leaning a different way.</p>
           <ul>
-            <li v-for="t in takes" :key="t.id" class="take" :class="{ inuse: inUse?.take === t.id, playing: playing === t.id }">
+            <!-- takes being made right now -->
+            <li v-for="p in pending" :key="`p${p.n}`" class="take pending" :class="p.state">
+              <span class="spin" :class="p.state" aria-hidden="true"></span>
+              <div class="tinfo">
+                <b>Take {{ p.n }}<template v-if="p.label"> · {{ p.label }}</template></b>
+                <small v-if="sourceTake" class="from">↳ from Take {{ sourceTake.n }}</small>
+                <small class="muted">{{ takeState(p) }}</small>
+                <div class="pbar"><i :style="{ width: `${p.expected ? Math.min(100, (p.received / p.expected) * 100) : 0}%` }"></i></div>
+              </div>
+            </li>
+            <li v-for="t in shownTakes" :key="t.id" class="take" :class="{ inuse: inUse?.take === t.id, playing: playing === t.id, source: running && job?.source === t.id }">
               <button class="play" @click="toggle(t)" :aria-label="playing === t.id ? `Pause take ${t.n}` : `Play take ${t.n}`">{{ playing === t.id ? '❚❚' : '▶' }}</button>
               <div class="tinfo">
-                <b>Take {{ t.n }} · {{ t.label }}</b>
+                <div class="ttl">
+                  <button class="star" :class="{ on: t.starred }" :aria-pressed="!!t.starred" :aria-label="t.starred ? `Unstar take ${t.n}` : `Star take ${t.n}`"
+                          :title="t.starred ? 'Starred: click to unstar' : 'Star it if you like it'" @click="star(t)">{{ t.starred ? '★' : '☆' }}</button>
+                  <b>Take {{ t.n }} · {{ t.label }}</b>
+                </div>
+                <small v-if="t.fromN" class="from">↳ from Take {{ t.fromN }}</small>
                 <small class="mono muted">{{ t.tempo }} BPM · {{ t.key }} · {{ fmtTime(t.length) }} · {{ t.engine === 'elevenlabs' ? 'ElevenLabs' : 'Lyria' }} · {{ madeAt(t.created) }}</small>
                 <svg class="wave" viewBox="0 0 60 20" preserveAspectRatio="none" aria-hidden="true">
                   <rect v-for="(v, i) in miniWave(t.id)" :key="i" :x="i + 0.15" width="0.7" :y="10 - v * 9.5" :height="Math.max(v * 19, 0.6)"
@@ -71,14 +89,32 @@
                 </svg>
               </div>
               <div class="tact">
-                <button class="btn small" :disabled="running" @click="generate({ like: t.id })" title="One more take with this one's seed, and the levers as they are now">More like this</button>
+                <span v-if="running && job?.source === t.id" class="tag">{{ pending[0]?.label === 'rebuilt for the new cut' ? 'Rebuilding…' : 'Adapting…' }}</span>
+                <button
+                  v-else-if="!running" class="btn small" :class="{ primary: adapting === t.id }" :aria-expanded="adapting === t.id"
+                  @click="openAdapt(t)" title="Make a new take from this one, changed the way you say: same seed and tempo"
+                >Adapt…</button>
                 <button v-if="inUse?.take !== t.id" class="btn small" @click="use(t)">Use in reel</button>
                 <span v-else class="btn small primary done">✓ In the reel</span>
                 <button
-                  v-if="inUse?.take === t.id && stale" class="btn small warnbtn" :disabled="running" @click="generate({ rebuild: t.id })"
+                  v-if="inUse?.take === t.id && stale && !running" class="btn small warnbtn" @click="generate({ rebuild: t.id })"
                   :title="`The cut changed: the reel now runs ${fmtTime(staleLen)}, this take ${fmtTime(t.length)}`"
                 >Rebuild to {{ fmtTime(staleLen) }}</button>
                 <button class="x" @click="remove(t)" :aria-label="`Delete take ${t.n}`" title="Delete this take">✕</button>
+              </div>
+              <div v-if="adapting === t.id && !running" class="adapt">
+                <p class="small muted">A new take from Take {{ t.n }}, with its seed and tempo, changed this way:</p>
+                <div class="chips">
+                  <button
+                    v-for="o in adaptOptions" :key="o.v" class="btn small" :class="{ primary: tweaks.includes(o.v) }" :aria-pressed="tweaks.includes(o.v)"
+                    @click="tweaks = tweaks.includes(o.v) ? tweaks.filter((x) => x !== o.v) : [...tweaks, o.v]"
+                  >{{ o.label }}</button>
+                </div>
+                <input v-model="adaptNote" maxlength="200" placeholder="or say how, e.g. add a kalimba melody" @keydown.enter="doAdapt(t)" aria-label="How to change it, in your words" />
+                <div class="row">
+                  <button class="btn small primary" @click="doAdapt(t)">{{ tweaks.length || adaptNote.trim() ? 'Make it' : 'Another like it' }}</button>
+                  <button class="btn small" @click="adapting = null">Cancel</button>
+                </div>
               </div>
             </li>
           </ul>
@@ -226,6 +262,32 @@ function miniWave(tid) {
     for (let j = a; j < b; j++) p += 10 ** (e.db[j] / 10)
     return Math.max(0.03, Math.min(1, (10 * Math.log10(p / (b - a) || 1e-9) + 54) / 54))
   })
+}
+// Takes being made, shown above the rest while a run is going.
+const pending = computed(() => (running.value ? (job.value?.takes || []).filter((t) => t.state !== 'done') : []))
+const sourceTake = computed(() => takes.value.find((t) => t.id === job.value?.source) || null)
+const starOnly = ref(false)
+const shownTakes = computed(() => (starOnly.value ? takes.value.filter((t) => t.starred) : takes.value))
+async function star(t) {
+  t.starred = !t.starred
+  try { await api.beatStar(id, t.id, t.starred) } catch { t.starred = !t.starred }
+  if (starOnly.value && !takes.value.some((x) => x.starred)) starOnly.value = false
+}
+// Adapt: a new take from this one, changed by the picked tweaks and/or a note.
+const adaptOptions = ref([])
+api.beatAdapts().then((o) => { adaptOptions.value = o }).catch(() => {})
+const adapting = ref(null)
+const tweaks = ref([])
+const adaptNote = ref('')
+function openAdapt(t) {
+  adapting.value = adapting.value === t.id ? null : t.id
+  tweaks.value = []
+  adaptNote.value = ''
+}
+function doAdapt(t) {
+  const body = { adapt: { take: t.id, tweaks: tweaks.value, note: adaptNote.value.trim() } }
+  adapting.value = null
+  generate(body)
 }
 async function use(t) {
   await api.beatUse(id, t.id)
@@ -385,6 +447,27 @@ onBeforeUnmount(() => {
 .tact { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .tact .done { cursor: default; }
 .warnbtn { border-color: var(--warn); color: var(--warn); }
+.ttl { display: flex; align-items: baseline; gap: 4px; }
+.ttl b { min-width: 0; }
+.star { border: 0; background: none; padding: 0 2px; font-size: 17px; line-height: 1; color: var(--muted); cursor: pointer; }
+.star.on { color: #e0a43a; }
+.star:hover { color: #e0a43a; }
+.from { color: #6f93c4; font-size: 12px; }
+.starfilter { margin-left: 8px; font-size: 12px; font-weight: 400; }
+.take.source { border-color: #e08038; box-shadow: inset 0 0 0 1px #e08038; }
+.tag { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: rgb(224 128 56 / 18%); color: #e08038; }
+.take.pending { border-style: dashed; border-color: #6f93c4; }
+.spin { width: 40px; height: 40px; border-radius: 50%; border: 3px solid rgb(111 147 196 / 25%); border-top-color: #6f93c4; animation: spin 1s linear infinite; box-sizing: border-box; }
+.spin.failed { animation: none; border-color: var(--danger); }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+.pbar { height: 4px; border-radius: 2px; background: rgb(111 147 196 / 18%); margin-top: 6px; overflow: hidden; }
+.pbar i { display: block; height: 100%; background: #6f93c4; transition: width 0.3s; }
+.adapt { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 8px; background: rgb(111 147 196 / 10%); }
+.adapt p { margin: 0; }
+.adapt .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.adapt input { font: inherit; font-size: 13px; padding: 6px 8px; }
+.adapt .row { display: flex; gap: 6px; }
 .x { margin-left: auto; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 14px; }
 .x:hover { color: var(--danger); }
 </style>

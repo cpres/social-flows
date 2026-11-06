@@ -178,6 +178,43 @@ def sections(beat, length, edges):
 VARIATIONS = [("tighter drums", ["tight, punchy drums", "crisp hi-hats"]),
               ("more bass, warmer", ["warm, round bass up front", "warmer tone"]),
               ("sparser, more space", ["sparse arrangement", "more space and air"])]
+# Adapting a take: ways to change it, each a label, words for the music,
+# lever nudges, and how the energy curve moves. The take keeps its seed and
+# tempo (so it stays close, and still fits the cut).
+ADAPTS = {
+    "drums+": ("more drums", ["bigger, busier drums", "more percussion and fills"], {"drummy": 2}, 0),
+    "drums-": ("fewer drums", ["lighter, sparser drums", "less percussion"], {"drummy": -2}, 0),
+    "bass+": ("more bass", ["heavier bass", "more low end"], {"bass": 2}, 0),
+    "calmer": ("calmer", ["calmer and softer", "more space"], {"chill": 1, "upbeat": -1}, -0.15),
+    "energy+": ("more energy", ["more energy and drive", "bigger build-ups"], {"upbeat": 1}, 0.15),
+    "brighter": ("brighter", ["brighter, happier tone", "sparkling top end"], {"happy": 1}, 0),
+    "grittier": ("grittier", ["grittier, more texture", "a little tape dirt"], {"grungy": 2}, 0),
+    "simpler": ("simpler", ["simpler arrangement", "fewer layers"], {}, 0),
+}
+
+
+def adapted(beat, tweaks, note):
+    """A take's beat, changed by the tweaks (ADAPTS keys) and a note in your
+    own words: (beat, extra words for the music, label)."""
+    b = json.loads(json.dumps(beat))
+    words, labels = [], []
+    for k in tweaks:
+        if k not in ADAPTS:
+            continue
+        label, extra, nudges, lift = ADAPTS[k]
+        labels.append(label)
+        words += extra
+        for lever, d in nudges.items():
+            b["levers"][lever] = int(min(max(b["levers"][lever] + d, 0), 5))
+        if lift:
+            b["curve"] = [[x, round(min(max(y + lift, 0.0), 1.0), 3)] for x, y in b["curve"]]
+    note = " ".join(str(note or "").split())[:200]
+    if note:
+        words.append(note)
+        labels.append(f"“{note}”")
+    return b, words, (", ".join(labels) or "another like it")
+
+
 NO_VOCALS = ["vocals", "singing", "lyrics", "spoken word", "rap"]
 
 
@@ -326,7 +363,22 @@ def list_takes(home, reel_id):
             continue
         if (d / f"{t['id']}.mp3").exists():
             out.append(t)
-    return sorted(out, key=lambda t: (t.get("created", ""), t.get("n", 0)), reverse=True)
+    for t in out:   # names from before Adapt: "more like …" / "rebuilt to …"
+        old = t.get("label", "")
+        if old.startswith("more like ") or old.startswith("rebuilt to "):
+            t["label"] = "another like it" if old.startswith("more like ") else "rebuilt for the new cut"
+            (d / f"{t['id']}.json").write_text(json.dumps(t, indent=1))
+    out.sort(key=lambda t: (t.get("created", ""), t.get("n", 0)))
+    if len({t.get("n") for t in out}) < len(out):
+        # Takes from before they were numbered on across runs (several "Take 1"s):
+        # renumber them once, in the order they were made, and their "from Take n" with them.
+        new = {t["id"]: i + 1 for i, t in enumerate(out)}
+        for t in out:
+            t["n"] = new[t["id"]]
+            if t.get("from") in new:
+                t["fromN"] = new[t["from"]]
+            (d / f"{t['id']}.json").write_text(json.dumps(t, indent=1))
+    return out[::-1]
 
 
 def new_id():
@@ -349,6 +401,7 @@ class Job:
         self.takes = [{"n": i + 1, "label": "", "state": "waiting", "received": 0.0, "expected": 0.0,
                        "first": None, "error": None, "take": None} for i in range(n)]
         self.plan = None
+        self.source = None   # the take being adapted or rebuilt, if any
         self.lock = threading.Lock()
 
     def say(self, text, kind="info"):
@@ -357,7 +410,7 @@ class Job:
 
     def view(self):
         with self.lock:
-            return {"id": self.id, "reelId": self.reel_id, "engine": self.engine, "status": self.status,
+            return {"id": self.id, "reelId": self.reel_id, "engine": self.engine, "status": self.status, "source": self.source,
                     "elapsed": round((self.finished or time.time()) - self.started, 1), "error": self.error,
                     "log": list(self.log), "takes": [dict(t) for t in self.takes], "plan": self.plan}
 
@@ -393,7 +446,7 @@ def run_job(job, ctx, home, lyria=None):
             with job.lock:
                 t.update(label=label, state="asking", expected=length)
             asked = time.time()
-            job.say(f"Take {i + 1} · {label}: composing…")
+            job.say(f"Take {t['n']} · {label}: composing…")
             if job.engine == "elevenlabs":
                 if edited:
                     body = {"model_id": ELEVEN_MODEL, "prompt": beat["prompt"], "music_length_ms": round(length * 1000),
@@ -413,7 +466,7 @@ def run_job(job, ctx, home, lyria=None):
                             first = False
                         t["received"] = round(min(secs_in, length), 2)
                     if first:
-                        job.say(f"Take {i + 1}: the first notes are in after {t['first']:.0f}s")
+                        job.say(f"Take {t['n']}: the first notes are in after {t['first']:.0f}s")
                 audio, song = eleven_stream(body, arrived)
             else:
                 text = timestamped(beat.get("prompt") or ctx["prompt"], secs) + f"\nLean: {', '.join(variation)}."
@@ -425,14 +478,15 @@ def run_job(job, ctx, home, lyria=None):
                 t["received"] = length
             tid = new_id()
             got = land(audio, d / f"{tid}.mp3", length, beat["end"], {
-                "title": f"Beat · {ctx['reel_name']} · take {i + 1}", "artist": who,
+                "title": f"Beat · {ctx['reel_name']} · take {t['n']}", "artist": who,
                 "genre": "AI", "comment": (beat.get("prompt") or ctx["prompt"])[:900]})
             diff = got - length
-            job.say(f"Take {i + 1}: came back {clock(got)} long"
+            job.say(f"Take {t['n']}: came back {clock(got)} long"
                     + (" — exactly the reel" if abs(diff) < 0.05 else
                        f", trimmed to land on the last frame at {clock(length)}" if diff > 0 else
                        f", {-diff:.1f}s short, so it's padded with silence to {clock(length)}"))
-            meta = {"id": tid, "run": job.id, "n": i + 1, "label": label, "engine": job.engine,
+            meta = {"id": tid, "run": job.id, "n": t["n"], "label": label, "engine": job.engine,
+                    "from": ctx.get("from"), "fromN": ctx.get("fromN"), "starred": False,
                     "model": ELEVEN_MODEL if job.engine == "elevenlabs" else "google/lyria-3-pro-preview",
                     "seed": seed if job.engine == "elevenlabs" and not edited else None, "variation": variation,
                     "length": length, "generated": round(got, 2), "tempo": style["tempo"], "key": style["key"],
@@ -453,7 +507,7 @@ def run_job(job, ctx, home, lyria=None):
                     msg = str(e) if isinstance(e, BeatError) else f"{type(e).__name__}: {e}"
                     with job.lock:
                         job.takes[i].update(state="failed", error=msg)
-                    job.say(f"Take {i + 1} didn't come: {msg}", "error")
+                    job.say(f"Take {job.takes[i]['n']} didn't come: {msg}", "error")
         ok = sum(t["state"] == "done" for t in job.takes)
         if ok:
             job.say(f"Done in {time.time() - job.started:.0f}s: {ok} take{'s' if ok != 1 else ''} ready. "

@@ -140,8 +140,12 @@ python3 studio/server.py --open
   - Every take is cut or padded to exactly the reel's length (the last bar
     resolving on the last frame, or a fade if you'd rather) and kept in
     `~/Footage/.studio/beats/<reel>/` with what it was asked for and its
-    seed. *More like this* makes one more with a take's seed and today's
-    levers. *Use in reel* puts it on the music shelf (category *AI*) as the
+    seed. ☆ stars a take you like (*★ Starred only* to see just those).
+    *Adapt…* makes a new take from one: pick how to change it (more or
+    fewer drums, more bass, calmer, more energy, brighter, grittier,
+    simpler) and/or say it in your own words; it keeps the take's seed and
+    tempo, so it stays close and still fits the cut, and shows *from Take n*.
+    Takes are numbered on across runs. *Use in reel* puts it on the music shelf (category *AI*) as the
     reel's song. If the cut changes after, the take in the reel offers
     *Rebuild to* the new length (same seed), which replaces it in the reel.
 - **Song names and categories:** songs show by name and artist, read from the

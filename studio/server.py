@@ -1657,10 +1657,11 @@ def beat_preview(reel_id: int):
 
 @app.post("/api/reels/{reel_id}/beat/generate")
 def beat_generate(reel_id: int, body: dict = Body(default={})):
-    """Make takes: three from the reel's beat settings, or one More like this
-    (body.like: a take, keeping its seed and lean with today's levers), or
-    Rebuild to new length (body.rebuild: the take in use, at the reel's
-    length now; it replaces that take in the reel when done)."""
+    """Make takes: three from the reel's beat settings; or one Adapted from a
+    take (body.adapt: {take, tweaks: [ADAPTS keys], note}: its seed, tempo
+    and plan, changed that way); or Rebuild to new length (body.rebuild: the
+    take in use, at the reel's length now; it replaces that take in the reel
+    when done). Takes are numbered on from the reel's last."""
     reel, _ = reel_and_rows(reel_id)
     s = settings_of(reel)
     beat = beats_mod.clean(s.get("beat"))
@@ -1670,22 +1671,36 @@ def beat_generate(reel_id: int, body: dict = Body(default={})):
     if running and running.status == "running":
         return running.view()
     engine = body.get("engine") if body.get("engine") in beats_mod.ENGINES else beat["engine"]
-    base = None
-    if body.get("like") or body.get("rebuild"):
-        tid = str(body.get("like") or body.get("rebuild"))
-        base = next((t for t in beats_mod.list_takes(lib.home, reel_id) if t["id"] == tid), None)
+    base, extra, label = None, [], ""
+    adapt = body.get("adapt") if isinstance(body.get("adapt"), dict) else ({"take": body["like"]} if body.get("like") else None)
+    tid = (adapt or {}).get("take") or body.get("rebuild")
+    all_takes = beats_mod.list_takes(lib.home, reel_id)
+    if tid:
+        base = next((t for t in all_takes if t["id"] == str(tid)), None)
         if not base:
             raise HTTPException(404, "No such take")
         engine = base["engine"]
-        if body.get("rebuild"):
+        if adapt:
+            beat, extra, label = beats_mod.adapted(beats_mod.clean(base["beat"]), adapt.get("tweaks") or [], adapt.get("note"))
+            beat["tempo"], beat["key"] = base["tempo"], base["key"]   # stays in time with the cut
+            if beat.get("prompt") and extra:
+                beat["prompt"] += " " + ", ".join(extra) + "."
+        else:
             beat = beats_mod.clean(base["beat"])   # the same beat, only longer or shorter
+            label = "rebuilt for the new cut"
     n = 1 if base else 3
+    first = max([t.get("n") or 0 for t in all_takes] + [0]) + 1   # numbered on from the last take
     if engine == "elevenlabs":
         try:
             beats_mod.eleven_key()
         except beats_mod.BeatError as e:
             raise HTTPException(400, str(e))
     job = beats_mod.Job(reel_id, engine, n)
+    for i, t in enumerate(job.takes):
+        t["n"] = first + i
+    if base:
+        job.source = base["id"]
+        job.takes[0]["label"] = label
     beat_jobs[job.id] = job
     beat_latest[reel_id] = job.id
 
@@ -1709,9 +1724,11 @@ def beat_generate(reel_id: int, body: dict = Body(default={})):
         ctx["prompt"] = beat_prompt_text(ctx)
         if base:
             ctx["seeds"] = [base.get("seed") or random.randrange(2 ** 31)]
-            ctx["variations"] = [base.get("variation") or []]
-            ctx["labels"] = [("rebuilt to " + beats_mod.clock(ctx["length"])) if body.get("rebuild")
-                             else f"more like {base['label']}"]
+            ctx["variations"] = [(base.get("variation") or []) + extra]
+            ctx["labels"] = [label]
+            ctx["from"], ctx["fromN"] = base["id"], base.get("n")
+            job.say(f"{'Adapting' if adapt else 'Rebuilding'} take {base.get('n')} ({base.get('label')}): "
+                    f"{label}, with its seed and tempo ({base['tempo']} BPM)")
         else:
             ctx["seeds"] = [random.randrange(2 ** 31) for _ in range(n)]
             ctx["variations"] = [v for _, v in beats_mod.VARIATIONS]
@@ -1742,7 +1759,7 @@ def beat_last_job(reel_id: int):
 @app.get("/api/reels/{reel_id}/beat/takes")
 def beat_takes(reel_id: int):
     keep = ("id", "run", "n", "label", "engine", "model", "seed", "length", "generated", "tempo", "key",
-            "prompt", "sections", "created", "took")
+            "prompt", "sections", "created", "took", "from", "fromN", "starred")
     return [{k: t.get(k) for k in keep} for t in beats_mod.list_takes(lib.home, reel_id)]
 
 
@@ -1789,6 +1806,22 @@ def use_take(reel_id, take_id):
 @app.post("/api/reels/{reel_id}/beat/takes/{take_id}/use")
 def beat_use(reel_id: int, take_id: str):
     return {"music": use_take(reel_id, take_id)}
+
+
+@app.post("/api/reels/{reel_id}/beat/takes/{take_id}/star")
+def beat_star(reel_id: int, take_id: str, body: dict = Body(default={})):
+    """Star a take you like (body.starred: true/false)."""
+    meta_path = beat_take_path(reel_id, take_id).with_suffix(".json")
+    meta = json.loads(meta_path.read_text())
+    meta["starred"] = bool(body.get("starred", True))
+    meta_path.write_text(json.dumps(meta, indent=1))
+    return {"starred": meta["starred"]}
+
+
+@app.get("/api/beat/adapts")
+def beat_adapts():
+    """The ways a take can be adapted: [{v, label}]."""
+    return [{"v": k, "label": v[0]} for k, v in beats_mod.ADAPTS.items()]
 
 
 @app.delete("/api/reels/{reel_id}/beat/takes/{take_id}")
