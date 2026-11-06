@@ -1448,6 +1448,7 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
         lane_files = {}
         relay = bool(sc.get("relay") and sc.get("carry") and moves_in(scenes, k) == "handoff")
         if relay:
+            print(f"  scene {k + 1}/{len(scenes)}: relay, {Path(sc['carry']['file']).name} carrying on...", end="\r")
             # A relay: the shot before carries on in A's slot and B plays in its own,
             # each as a band of its full frame (the bottom, unless framed), so they
             # move in and out seamlessly.
@@ -1464,6 +1465,7 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
                 a.setdefault("fit", solo_fill)
             ain, aout = ranges[k]
             a_frames = frames[k] - hand_f[k]
+            print(f"  scene {k + 1}/{len(scenes)}: lane A, {Path(a['file']).name} {fmt(ain)} -> {fmt(aout)}...", end="\r")
             pieces, rate = scene_a_plan(a, ain, aout, max(a_frames / fps, 0.04), sc)
             path = (base_dir / a["file"]).expanduser()
             # A carries on past the scene too, while the next comes in.
@@ -1475,6 +1477,7 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
                 lane_files["A"] = hand_off_a(files[k - 1], slots["A"], lane_files["A"], hand_f[k], frames[k] + tails[k],
                                              cfg, workdir, k, sc.get("band_a"))
         all_slots.append(slots)
+        print(f"  scene {k + 1}/{len(scenes)}: putting the lanes in their slots...", end="\r")
         files.append(compose_scene(sc, slots, div, lane_files, frames[k], tails[k], cfg, workdir, k))
         # Where its sound comes from: lane A's clip from where to where (and how fast), or the B parts.
         lane = scene_sound(sc, [x for x in ("A", "B") if x in slots], mode)
@@ -1506,6 +1509,7 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
                 and a_play[k][0] == a_play[k - 1][0] and not hand_f[k]):
             print(f"  moving A into scene {k + 1}...            ", end="\r")
             morphs[k] = morph_a(k, files, all_slots, a_play, frames, tails[k - 1], cfg, workdir)
+    print(f"  joining {len(files)} scenes and their transitions...          ", end="\r")
     return join_scenes(files, scenes, frames, tails, cfg, workdir, all_slots, hand_f, switches, morphs)
 
 
@@ -1992,6 +1996,25 @@ def load_cards(cfg, base_dir):
         except ImportError:
             sys.exit("The title and end card need Pillow: pip install pillow")
     return cards
+
+
+def latest_cards(config_path, cfg, cards, times, plan, total, base_dir):
+    """Re-read the title and end card from the config file, which may have
+    changed since the render started. How long the end card holds can't
+    change now (it set the reel's length); its words and logos can."""
+    try:
+        fresh = yaml.safe_load(Path(config_path).read_text()) or {}
+        now_cfg = {k: v for k, v in cfg.items() if k not in ("title", "end_card")}
+        for key in ("title", "end_card"):
+            if fresh.get(key):
+                now_cfg[key] = fresh[key]
+        new = load_cards(now_cfg, base_dir)
+    except (OSError, ValueError, yaml.YAMLError, SystemExit):
+        return cards, times
+    spec = lambda cs: [(c["kind"], c["spec"]) for c in cs]   # noqa: E731
+    if spec(new) != spec(cards):
+        print("  using the title and end card as they are now (changed during the render)")
+    return new, card_times(new, plan, total)
 
 
 def card_times(cards, plan, total):
@@ -2740,6 +2763,9 @@ def main():
         if cap_lines:
             print("  laying the captions over...             ", end="\r")
             assembled = add_captions(assembled, cap_lines, cap, cfg, base_dir, total, workdir)
+        # The title and end card as they are now: the studio keeps this file up
+        # to date while a render runs, so their words and logos can still change.
+        cards, times = latest_cards(config_path, cfg, cards, times, plan, total, base_dir)
         if cards:
             print("  laying the title and end card over...    ", end="\r")
             assembled = add_cards(assembled, cards, times, cfg, base_dir, total, workdir)

@@ -49,7 +49,13 @@
     <section class="panel render" v-if="job">
       <template v-if="job.status === 'running'">
         <div class="bar"><div class="fill" :style="{ width: `${renderPct}%` }"></div></div>
-        <p class="muted">{{ stageText }} · {{ elapsed }}s</p>
+        <p class="muted">{{ stageText }} · {{ elapsed }}s
+          <span class="small">· the title and end card can still change: they're laid over near the end</span></p>
+        <ol v-if="steps.length" class="steps" ref="stepsEl">
+          <li v-for="(st, i) in steps" :key="i" :class="{ now: st.now, slow: st.slow }">
+            <span class="mono dur">{{ st.secs.toFixed(1) }}s</span> {{ st.label }}
+          </li>
+        </ol>
       </template>
       <div v-else-if="job.status === 'done'" class="result">
         <video :src="`${api.renderVideo(job.id)}?t=${job.finishedAt}`" controls playsinline></video>
@@ -57,6 +63,12 @@
           <h3>Rendered</h3>
           <p class="mono path">{{ job.output }}</p>
           <p class="muted">Took {{ Math.round(job.finishedAt - job.startedAt) }}s.</p>
+          <details v-if="steps.length" class="stepsbox">
+            <summary class="muted small">What took the time</summary>
+            <ol class="steps">
+              <li v-for="(st, i) in slowest" :key="i" :class="{ slow: st.slow }"><span class="mono dur">{{ st.secs.toFixed(1) }}s</span> {{ st.label }}</li>
+            </ol>
+          </details>
           <p v-if="job.note" class="note">🎵 {{ job.note }}</p>
           <div class="controls">
             <button class="btn primary" @click="sending = job.output.split('/').pop()">Send to phone</button>
@@ -799,7 +811,7 @@
 </template>
 
 <script setup>
-import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
@@ -2597,8 +2609,27 @@ const renderPct = computed(() => {
 const stageText = computed(() => ({
   starting: 'Starting…', cutting: `Cutting ${job.value.done} of ${job.value.total}`,
   joining: 'Joining cuts and transitions…', captions: 'Laying the captions over…', mixing: 'Mixing sound…',
+  scenes: 'Putting the scenes together…', cards: 'Laying the title and end card over…',
 }[job.value.stage] || job.value.stage))
 const elapsed = computed(() => Math.max(0, Math.round(clock.value - job.value.startedAt)))
+// The render's steps, each with how long it took (the one under way, so far).
+const steps = computed(() => {
+  const list = job.value?.steps || []
+  const out = list.filter((st) => st.label !== 'finished').map((st, i) => {
+    const next = list[i + 1]
+    const end = next ? next.at : (job.value.status === 'running' ? clock.value : job.value.finishedAt || st.at)
+    return { label: st.label, secs: Math.max(0, end - st.at), now: !next && job.value.status === 'running' }
+  })
+  const total = out.reduce((a, st) => a + st.secs, 0) || 1
+  out.forEach((st) => { st.slow = st.secs > Math.max(5, total * 0.08) })
+  return out
+})
+const slowest = computed(() => [...steps.value].sort((a, b) => b.secs - a.secs).slice(0, 12))
+const stepsEl = ref(null)
+watch(() => steps.value.length, async () => {
+  await nextTick()
+  if (stepsEl.value) stepsEl.value.scrollTop = stepsEl.value.scrollHeight
+})
 
 let poll
 function watchJob() {
@@ -2967,4 +2998,12 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .nowrow.hidden { opacity: 0.55; cursor: default; }
 .nowrow.picked { outline: 2px solid var(--picked); outline-offset: 1px; }
 .nowrow span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.steps { list-style: none; margin: 8px 0 0; padding: 6px 10px; max-height: 190px; overflow-y: auto; font-size: 12px; border-radius: 8px; background: var(--cream); }
+.steps li { padding: 1px 0; color: var(--muted); }
+.steps li.slow { color: var(--ink); font-weight: 600; }
+.steps li.now { color: var(--ink); }
+.steps li.now::after { content: ' …'; }
+.steps .dur { display: inline-block; width: 52px; text-align: right; margin-right: 8px; }
+.stepsbox summary { cursor: pointer; }
 </style>

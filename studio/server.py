@@ -628,7 +628,32 @@ def update_reel(reel_id: int, body: dict = Body(...)):
             settings = clean_settings(db, reel_id, {**settings_of(r), **body["settings"]})
             db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(settings), reel_id))
         touch(db, reel_id)
+    if "settings" in body:
+        refresh_running_cards(reel_id)
     return {"ok": True}
+
+
+def refresh_running_cards(reel_id):
+    """A render of this reel under way: give it the title and end card as they
+    are now. The engine reads them again just before laying them over."""
+    job = jobs.get(latest.get(reel_id))
+    if not job or job["status"] != "running" or not job.get("config"):
+        return
+    try:
+        reel, rows = reel_and_rows(reel_id)
+        fresh = build_config(reel, rows)
+        path = Path(job["config"])
+        cfg = yaml.safe_load(path.read_text()) or {}
+    except (HTTPException, OSError, yaml.YAMLError):
+        return
+    for key in ("title", "end_card"):
+        if fresh.get(key):
+            cfg[key] = fresh[key]
+        else:
+            cfg.pop(key, None)
+    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
+    tmp.replace(path)
 
 
 @app.delete("/api/reels/{reel_id}")
@@ -1921,7 +1946,21 @@ jobs_lock = threading.Lock()
 
 def job_view(job):
     return {k: job.get(k) for k in ("id", "reelId", "status", "stage", "done", "total",
-                                    "output", "startedAt", "finishedAt", "log", "note")}
+                                    "output", "startedAt", "finishedAt", "log", "note", "steps")}
+
+
+# The engine's progress lines that start a step of the render (each part cut,
+# each scene, A moving, joining, captions, cards, mixing): kept with when they
+# started, so the studio can show what took how long.
+STEP_LINE = re.compile(r"(cutting \d+/\d+|scene \d+/\d+|moving A|joining|stacking|laying the|mixing|ducking|using the title)")
+
+
+def note_step(job, line):
+    label = re.sub(r"\.\.\.$", "", line).strip()
+    steps = job.setdefault("steps", [])
+    if not steps or steps[-1]["label"] != label:
+        steps.append({"label": label, "at": now()})
+        del steps[:-400]
 
 
 def run_render(job, config_path):
@@ -1929,7 +1968,7 @@ def run_render(job, config_path):
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     buf = b""
     while True:
-        chunk = proc.stdout.read(256)
+        chunk = proc.stdout.read1(4096)   # what's there now: a full read would wait for 4 KB
         if not chunk:
             break
         buf += chunk
@@ -1939,11 +1978,17 @@ def run_render(job, config_path):
             line = raw.decode(errors="replace").strip()
             if not line:
                 continue
+            if STEP_LINE.match(line):
+                note_step(job, line)
             m = re.match(r"cutting (\d+)/(\d+)", line)
             if m:
                 job["stage"], job["done"], job["total"] = "cutting", int(m[1]), int(m[2])
             elif line.startswith("joining"):
                 job["stage"] = "joining"
+            elif line.startswith("scene "):
+                job["stage"] = "scenes"
+            elif line.startswith("laying the title"):
+                job["stage"] = "cards"
             elif line.startswith("laying the captions"):
                 job["stage"] = "captions"
             elif line.startswith("mixing"):
@@ -1953,6 +1998,7 @@ def run_render(job, config_path):
             else:
                 job["log"] = (job["log"] + [line])[-60:]
     proc.wait()
+    note_step(job, "finished")
     job["status"] = "done" if proc.returncode == 0 and Path(job["output"]).exists() else "failed"
     job["stage"] = job["status"]
     job["finishedAt"] = now()
@@ -1968,7 +2014,8 @@ def start_render(reel_id: int):
         RENDERS.mkdir(parents=True, exist_ok=True)
         job = {"id": uuid.uuid4().hex[:12], "reelId": reel_id, "status": "running",
                "stage": "starting", "done": 0, "total": len(cfg["sources"]),
-               "output": cfg["output"], "startedAt": now(), "finishedAt": None, "log": []}
+               "output": cfg["output"], "startedAt": now(), "finishedAt": None, "log": [],
+               "steps": [], "config": str(out)}
         jobs[job["id"]] = job
         latest[reel_id] = job["id"]
     threading.Thread(target=run_render, args=(job, out), daemon=True).start()

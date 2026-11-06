@@ -180,6 +180,13 @@ python3 studio/server.py --open
 - **Open a reel** to see its parts from every shoot. Drag to reorder (or *Sort by
   shot time*), fine-tune each part's start and length, skip parts without
   removing them, and set music, beat sync and framing under *Settings*.
+- **While it renders**, a list under the progress bar shows each step (each
+  part cut, each scene, A moving between frame and slot, joining, captions,
+  cards, mixing) with how long it took, the slow ones in bold; *What took the
+  time* lists them afterwards. The title and end card are laid over near the
+  end, so changing their words or logos while a render runs still makes it
+  into that video (how long the end card holds can't change mid-render: it
+  sets the reel's length).
 - **Render video** runs the montage engine for you, with a progress bar, then
   plays the result in the page. *Show in Finder* jumps to the file. Videos go to
   `~/Movies/Footage Studio/` (set `RENDER_DIR` to change). *Preview cut list*
