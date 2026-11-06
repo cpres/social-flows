@@ -220,6 +220,13 @@ can override the reel's framing, chosen under *Layout* on the shoot page
 *Blur* shows the whole frame with a blurred copy filling the top and bottom
 (marked ◫ in the list).
 
+**Look: colour.** Under *Look & timing*, *As shot* leaves the clips alone;
+*Vivid* adds colour, a touch of contrast and depth in the shadows; *Rich* goes
+further. It's applied to every clip as it's cut (no extra render time), the
+preview shows it, and titles, cards and captions keep their own colours.
+iPhone HDR (HLG / Dolby Vision) clips are tone mapped to ordinary video
+automatically, so they no longer come out flat and washed out.
+
 **Clip sheet: A and B side by side.** On a reel with two lanes, the list on
 the left is a clip sheet with one row per scene. Lane A's card (its stretch of
 the A clip, or the shot a relay carries on) sits on the left, and lane B's

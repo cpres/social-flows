@@ -226,6 +226,16 @@
             </div>
             <button class="link" @click="squareBottom" title="Square, with every part framed to the bottom of its shot, where the hands are">Square, framed to the bottom</button>
           </div>
+          <div class="field">
+            Look
+            <div class="shapes">
+              <button
+                v-for="l in LOOKS" :key="l.v" class="btn small" :class="{ active: (settings.look || '') === l.v }"
+                :title="l.hint" @click="settings.look = l.v"
+              >{{ l.label }}</button>
+            </div>
+            <small class="muted">{{ LOOKS.find((l) => l.v === (settings.look || '')).hint }} The preview shows it; titles, cards and captions keep their colours.</small>
+          </div>
           <label class="field">
             Framing on its own
             <select v-model="settings.fit">
@@ -482,7 +492,7 @@
       </aside>
 
       <section class="editor" v-if="current">
-        <div class="preview-col">
+        <div class="preview-col" :class="settings.look ? `look-${settings.look}` : ''">
           <div v-if="current.media.missing" class="frame-missing">
             <p class="unplayable">
               This file is missing from <code>{{ current.media.folder }}/{{ current.media.file }}</code>.
@@ -1548,6 +1558,13 @@ function setLayout(p, v) {
   p.layout = v
   saver.queue(p.id, { layout: v })
 }
+
+// The reel's look, on every clip (montage.py LOOKS); the preview copies it with CSS.
+const LOOKS = [
+  { v: '', label: 'As shot', hint: 'The clips as they are.' },
+  { v: 'vivid', label: 'Vivid', hint: 'More colour, a touch more contrast and depth in the shadows.' },
+  { v: 'rich', label: 'Rich', hint: 'Stronger still: deep colour and contrast.' },
+]
 
 // ---------------------------------------------------------------- lanes & scenes
 
@@ -3006,4 +3023,8 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .steps li.now::after { content: ' …'; }
 .steps .dur { display: inline-block; width: 52px; text-align: right; margin-right: 8px; }
 .stepsbox summary { cursor: pointer; }
+
+/* the reel's Look, as near as CSS gets to the render's eq */
+.preview-col.look-vivid :deep(.media video), .preview-col.look-vivid :deep(.media img) { filter: contrast(1.08) saturate(1.28) brightness(0.985); }
+.preview-col.look-rich :deep(.media video), .preview-col.look-rich :deep(.media img) { filter: contrast(1.15) saturate(1.45) brightness(0.97); }
 </style>

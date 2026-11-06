@@ -226,6 +226,7 @@ def clean_settings(db, reel_id, s):
     if "glassesAudio" in s:
         s["glassesAudio"] = glasses_of(s)
         s["originalAudio"] = s["glassesAudio"] != "off"   # what older code reads
+    s["look"] = s.get("look") if s.get("look") in ("vivid", "rich") else ""
     s["duckMusic"] = bool(s.get("duckMusic", True))
     s["beatsFit"] = "fixed" if s.get("beatsFit") == "fixed" else "nearest"
     for layer, k in MIX_KEYS.items():
@@ -1342,6 +1343,7 @@ def build_config(reel, rows, grid_bpm=None):
         "mix": {layer: mix_of(s, layer) for layer in ("A", "B", "music", "voice")},
         "original_volume": s.get("originalVolume", 0.35),
         "fit": s.get("fit", "fill"),
+        **({"look": s["look"]} if s.get("look") in ("vivid", "rich") else {}),
         "photo_motion": "push",
         "photo_zoom": 0.06,
         "crf": 18,

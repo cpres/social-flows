@@ -528,7 +528,7 @@ def video_codec(cfg):
             "-crf", str(cfg.get("crf", 18)), "-profile:v", "high", *pix]
 
 
-def fit_filter(cfg, src_label, out_label, focus=(0.5, 0.5), zoom=1.0, fit=None):
+def fit_filter(cfg, src_label, out_label, focus=(0.5, 0.5), zoom=1.0, fit=None, pre=""):
     """Frame a source to the output size. `focus` picks which part of a
     too-wide or too-tall source the crop keeps: 0 = left/top, 1 = right/bottom.
     `zoom` > 1 (fill only) crops tighter: the source is scaled up first.
@@ -540,17 +540,17 @@ def fit_filter(cfg, src_label, out_label, focus=(0.5, 0.5), zoom=1.0, fit=None):
     if fit == "fill":
         z = min(max(float(zoom or 1), 1.0), 3.0)
         zw, zh = round(w * z / 2) * 2, round(h * z / 2) * 2
-        return (f"[{src_label}]scale={zw}:{zh}:force_original_aspect_ratio=increase,"
+        return (f"[{src_label}]{pre}scale={zw}:{zh}:force_original_aspect_ratio=increase,"
                 f"{crop}[{out_label}]")
     if fit == "blur":
-        return (f"[{src_label}]split[fa][fb];"
+        return (f"[{src_label}]{pre}split[fa][fb];"
                 f"[fa]scale={w}:{h}:force_original_aspect_ratio=increase,"
                 f"{crop},boxblur=30:5[fbg];"
                 f"[fb]scale={w}:{h}:force_original_aspect_ratio=decrease[ffg];"
                 f"[fbg][ffg]overlay=(W-w)/2:(H-h)/2[{out_label}]")
     if fit == "pad":
         color = BRAND_BG.get(cfg.get("pad_color", "forest"), cfg.get("pad_color"))
-        return (f"[{src_label}]scale={w}:{h}:force_original_aspect_ratio=decrease,"
+        return (f"[{src_label}]{pre}scale={w}:{h}:force_original_aspect_ratio=decrease,"
                 f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color={color}[{out_label}]")
     sys.exit(f"Unknown fit mode: {fit} (use fill, blur, or pad)")
 
@@ -602,13 +602,14 @@ def render_segment(seg, idx, cfg, workdir, keep_audio):
 
     framing = (seg.get("focus", (0.5, 0.5)), seg.get("zoom", 1), seg.get("fit"))
     lift = min(max(seg.get("lighten", 0), 0.0), 1.0)
-    if lift:
-        # Lift shadows and midtones (gamma) rather than flat brightness, so
-        # shade opens up without blowing out the sky.
-        graph = (fit_filter(cfg, "0:v", "fit0", *framing) +
-                 f";[fit0]eq=gamma={1 + LIGHTEN_GAMMA * lift:.3f}:saturation={1 + 0.08 * lift:.3f}[fit];")
+    # Lift shadows and midtones (gamma) rather than flat brightness, so shade
+    # opens up without blowing out the sky; then the reel's look.
+    pre = hdr_fix(seg["path"]) if seg["kind"] == "video" else ""
+    post = grade(cfg, lift)
+    if post:
+        graph = fit_filter(cfg, "0:v", "fit0", *framing, pre=pre) + f";[fit0]{post.rstrip(',')}[fit];"
     else:
-        graph = fit_filter(cfg, "0:v", "fit", *framing) + ";"
+        graph = fit_filter(cfg, "0:v", "fit", *framing, pre=pre) + ";"
     # Zoom punch-in: start PUNCH_ZOOM larger and ease back to normal.
     punch_frames = round(seg.get("punch_in", 0) * fps)
     punch = (f"+{PUNCH_ZOOM}*pow(max(0,1-on/{punch_frames}),2)" if punch_frames else "")
@@ -890,6 +891,50 @@ def top_length(top, under, keys=None):
     return under if top["fit"] or moving or top["fit_by"] == "quiet" else round(top["length"] / top["speed"] * 1000) / 1000
 
 
+# A reel's look, laid on every clip as it's cut (not on the cards or captions,
+# so the brand's colours stay exact). vivid: more colour, a touch more contrast
+# and depth in the shadows; rich: more of both.
+LOOKS = {
+    "vivid": "eq=contrast=1.08:saturation=1.28:brightness=-0.012:gamma=0.97",
+    "rich": "eq=contrast=1.15:saturation=1.45:brightness=-0.02:gamma=0.94",
+}
+
+
+def grade(cfg, lift=0.0):
+    """A clip's lighten (its own) and the reel's look, as filters to chain."""
+    look = LOOKS.get((cfg or {}).get("look") or "")
+    return lighten_eq(lift) + (f"{look}," if look else "")
+
+
+# HDR video (iPhones record HLG by default) turned into ordinary video without
+# tone mapping comes out grey and washed out. Such clips are tone mapped first.
+_HDR = {}
+_ZSCALE = None
+
+
+def hdr_fix(path):
+    """Filters that tone map an HDR clip to ordinary (BT.709) video, or ''."""
+    global _ZSCALE
+    path = str(path)
+    if path not in _HDR:
+        try:
+            out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                                  "stream=color_transfer,color_primaries", "-of", "csv=p=0", path],
+                                 capture_output=True, text=True, timeout=30).stdout
+        except Exception:
+            out = ""
+        _HDR[path] = any(t in out for t in ("arib-std-b67", "smpte2084"))
+    if not _HDR[path]:
+        return ""
+    if _ZSCALE is None:
+        filters = subprocess.run(["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True).stdout
+        _ZSCALE = " zscale " in filters and " tonemap " in filters
+    if not _ZSCALE:
+        return ""
+    return ("zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
+            "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,")
+
+
 def lighten_eq(lift):
     lift = min(max(lift, 0.0), 1.0)
     return f"eq=gamma={1 + LIGHTEN_GAMMA * lift:.3f}:saturation={1 + 0.08 * lift:.3f}," if lift else ""
@@ -907,11 +952,11 @@ def compose_top(top, assembled, cfg, under, workdir, plan=None):
     pane = cfg[along]
     out = workdir / "stacked.mkv"
     cfg[along] = top["size"]
-    graph = fit_filter(cfg, "0:v", "tfit", top["focus"], top["zoom"], "fill") + ";"
+    graph = fit_filter(cfg, "0:v", "tfit", top["focus"], top["zoom"], "fill", pre=hdr_fix(top["path"])) + ";"
     cfg[along] = pane
     speed = total / top["length"] if top["fit"] else 1 / top["speed"]
     frames = round(total * fps)
-    graph += (f"[tfit]setpts=(PTS-STARTPTS)*{speed:.6f},fps={fps},{lighten_eq(top['lighten'])}setsar=1,"
+    graph += (f"[tfit]setpts=(PTS-STARTPTS)*{speed:.6f},fps={fps},{grade(cfg, top['lighten'])}setsar=1,"
               f"format=yuv420p,trim=end_frame={frames},setpts=PTS-STARTPTS[top];")
     # Cuts shorter than the top clip hold their last frame (and go quiet).
     hold = max(total - under, 0)
@@ -950,10 +995,10 @@ def compose_layout(top, assembled, cfg, keys, total, workdir):
     cmd, graph = ["ffmpeg", "-nostdin", "-y", "-v", "error"], []
     for i, (s, l) in enumerate(pieces):
         cmd += ["-ss", f"{s:.3f}", "-t", f"{l:.3f}", "-i", str(top["path"])]
-        graph.append(fit_filter(tcfg, f"{i}:v", f"f{i}", top["focus"], top["zoom"], "fill")
+        graph.append(fit_filter(tcfg, f"{i}:v", f"f{i}", top["focus"], top["zoom"], "fill", pre=hdr_fix(top["path"]))
                      + f";[f{i}]setpts=(PTS-STARTPTS)/{rate:.6f},fps={fps},setsar=1,format=yuv420p[p{i}]")
     graph.append("".join(f"[p{i}]" for i in range(len(pieces)))
-                 + f"concat=n={len(pieces)}:v=1:a=0,{lighten_eq(top['lighten'])}"
+                 + f"concat=n={len(pieces)}:v=1:a=0,{grade(cfg, top['lighten'])}"
                  + f"tpad=stop_mode=clone:stop_duration={total / fps + 1:.3f},"
                  + f"trim=end_frame={max(shown, 1)},setpts=PTS-STARTPTS[v]")
     run(cmd + ["-filter_complex", ";".join(graph), "-map", "[v]", *video_codec(cfg), "-r", str(fps), str(seq)])
@@ -1204,14 +1249,14 @@ def render_scene_a(a, path, pieces, rate, size, frames, cfg, keep_audio, workdir
     cmd, graph = ["ffmpeg", "-nostdin", "-y", "-v", "error"], []
     for i, (s, l) in enumerate(pieces):
         cmd += ["-ss", f"{s:.3f}", "-t", f"{l:.3f}", "-i", str(path)]
-        graph.append(fit_filter(tcfg, f"{i}:v", f"f{i}", a.get("focus", (0.5, 0.5)), a.get("zoom", 1), a.get("fit"))
+        graph.append(fit_filter(tcfg, f"{i}:v", f"f{i}", a.get("focus", (0.5, 0.5)), a.get("zoom", 1), a.get("fit"), pre=hdr_fix(path))
                      + f";[f{i}]setpts=(PTS-STARTPTS)/{rate:.6f},fps={fps},setsar=1,format=yuv420p[p{i}]")
         if sound:
             graph.append(f"[{i}:a:0]aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS[q{i}]")
     n = len(pieces)
     joined = "".join(f"[p{i}]" + (f"[q{i}]" if sound else "") for i in range(n))
     graph.append(f"{joined}concat=n={n}:v=1:a={1 if sound else 0}[vc]" + ("[ac]" if sound else ""))
-    graph.append(f"[vc]{lighten_eq(a.get('lighten', 0))}tpad=stop_mode=clone:stop_duration={frames / fps + 1:.3f},"
+    graph.append(f"[vc]{grade(cfg, a.get('lighten', 0))}tpad=stop_mode=clone:stop_duration={frames / fps + 1:.3f},"
                  f"trim=end_frame={frames},setpts=PTS-STARTPTS[v]")
     if not sound:
         cmd += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
@@ -1537,7 +1582,7 @@ def morph_a(k, files, slots, a_play, frames, n, cfg, workdir):
     tmp.mkdir(exist_ok=True)
     # A as it plays through the move (the scene coming in sets where it is).
     run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", f"{t0:.3f}", "-i", str(path),
-         "-vf", f"setpts=(PTS-STARTPTS)/{rate:.6f},fps={fps},{lighten_eq(a.get('lighten', 0))}null",
+         "-vf", f"{hdr_fix(path)}setpts=(PTS-STARTPTS)/{rate:.6f},fps={fps},{grade(cfg, a.get('lighten', 0))}null",
          "-frames:v", str(n), str(tmp / "a%03d.png")])
     # B's frames: the scene coming in (B arriving) or the last frame of the one going.
     if shrink:
@@ -1613,8 +1658,9 @@ def render_carry(carry, frames, cfg, base_dir, keep_audio, workdir, k, fill):
            ["-ss", f"{float(carry.get('start', 0)):.3f}", "-i", str(path)]
     sound = keep_audio and not image and probe(path)[1]
     fcfg = {**cfg, "width": w, "height": h}
-    graph = [fit_filter(fcfg, "0:v", "f", carry.get("focus", (0.5, 0.5)), carry.get("zoom", 1), carry.get("fit") or fill)
-             + f";[f]fps={fps},{lighten_eq(carry.get('lighten', 0))}setsar=1,format=yuv420p,"
+    graph = [fit_filter(fcfg, "0:v", "f", carry.get("focus", (0.5, 0.5)), carry.get("zoom", 1), carry.get("fit") or fill,
+                        pre="" if image else hdr_fix(path))
+             + f";[f]fps={fps},{grade(cfg, carry.get('lighten', 0))}setsar=1,format=yuv420p,"
              f"tpad=stop_mode=clone:stop_duration={frames / fps + 1:.3f},trim=end_frame={frames},setpts=PTS-STARTPTS[v]"]
     if sound:
         graph.append(f"[0:a:0]aformat=sample_rates=48000:channel_layouts=stereo,apad,atrim=0:{frames / fps:.4f},asetpts=PTS-STARTPTS[a]")

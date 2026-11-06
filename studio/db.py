@@ -117,6 +117,7 @@ DEFAULT_SETTINGS = {
     "beatsPerCut": 4,       # beats per part when beatsFit is "fixed"
     "beatsFit": "nearest",  # parts without their own beats: the whole beats nearest their length
     "fit": "fill",
+    "look": "",             # the reel's look on every clip: "" (as shot) | vivid | rich
     "shape": "tall",        # tall (9:16) | wide (16:9, YouTube) | portrait (4:5) | square (1:1); a wide Stack is side by side
     "transition": "cut",    # between parts, unless a part picks its own
     "originalAudio": False,  # glasses audio off unless a reel turns it on
