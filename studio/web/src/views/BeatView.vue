@@ -270,6 +270,7 @@ function ensureAnalyser() {
 async function toggle(t) {
   const a = audioEl.value
   if (playing.value === t.id) { a.pause(); return }
+  window.dispatchEvent(new CustomEvent('footage-audio', { detail: 'take' }))   // stops a song preview
   ensureAnalyser()
   await actx?.resume?.()
   a.src = api.beatTakeAudio(id, t.id)
@@ -317,9 +318,11 @@ function leave(e) {
   router.push(`/reel/${id}`)
 }
 function onKey(e) { if (e.key === 'Escape') leave(e) }
-onMounted(() => { load(); window.addEventListener('keydown', onKey) })
+const otherAudio = (e) => { if (e.detail !== 'take') stop() }   // a song preview started
+onMounted(() => { load(); window.addEventListener('keydown', onKey); window.addEventListener('footage-audio', otherAudio) })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
+  window.removeEventListener('footage-audio', otherAudio)
   clearTimeout(pollTimer); clearTimeout(saveTimer); cancelAnimationFrame(tick)
   audioEl.value?.pause(); actx?.close?.()
 })

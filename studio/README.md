@@ -119,7 +119,8 @@ python3 studio/server.py --open
     and live frequencies.
   - Under it, the plan: *Start from* a song category, a song or scratch (the
     song sets the groove and sound, measured here: tempo, key, tone; needs
-    `--beat`; never copied or sent); *Energy over the reel* (*Follow my
+    `--beat`; never copied or sent; ▶ on a card plays
+    30 seconds from the middle of its song, ■ stops); *Energy over the reel* (*Follow my
     scenes*, *Arc*, *Slow build*, *Two peaks*, *Steady*, or drag the points;
     *Hits on scene changes*, *End on the last frame*); ten *vibe levers*
     with four presets; the tempo and key they point to (or yours); and the

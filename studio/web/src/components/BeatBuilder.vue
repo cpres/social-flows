@@ -4,26 +4,41 @@
     <section class="bsec">
       <h5>1 · Start from <small class="muted">a song in your Reels folder sets the groove and sound palette; nothing is copied note for note</small></h5>
       <div class="cards">
-        <button
-          v-for="c in categories" :key="c.name" class="card" :class="{ on: beat.from.kind === 'song' && beat.from.category === c.name }"
-          @click="pickCategory(c)"
-        >
-          <b>{{ c.name }}</b>
-          <small>{{ c.songs.length }} song{{ c.songs.length === 1 ? '' : 's' }}<template v-if="styleOf(c.songs[0].name)?.words"> · {{ styleOf(c.songs[0].name).words[0] }}</template></small>
-        </button>
-        <label v-if="unsorted.length" class="card pick" :class="{ on: beat.from.kind === 'song' && !beat.from.category }">
-          <b>No category ▾</b>
-          <small>{{ beat.from.kind === 'song' && !beat.from.category ? songName(beat.from.name) : `pick one of ${unsorted.length}` }}</small>
-          <select :value="beat.from.kind === 'song' && !beat.from.category ? beat.from.name : ''" @change="pickSong($event.target.value, '')" aria-label="A song with no category">
-            <option value="" disabled>Pick a song…</option>
-            <option v-for="t in unsorted" :key="t.name" :value="t.name">{{ t.title || t.name }}</option>
-          </select>
-        </label>
+        <div v-for="c in categories" :key="c.name" class="cardwrap">
+          <button class="card" :class="{ on: beat.from.kind === 'song' && beat.from.category === c.name }" @click="pickCategory(c)">
+            <b>{{ c.name }}</b>
+            <small>{{ c.songs.length }} song{{ c.songs.length === 1 ? '' : 's' }}<template v-if="styleOf(c.songs[0].name)?.words"> · {{ styleOf(c.songs[0].name).words[0] }}</template></small>
+          </button>
+          <button
+            class="hear" :class="{ on: hearing === catSong(c) }" @click="hear(catSong(c))"
+            :title="hearing === catSong(c) ? 'Stop' : `Hear 30s from the middle of ${songName(catSong(c))}`"
+            :aria-label="hearing === catSong(c) ? `Stop ${songName(catSong(c))}` : `Hear ${songName(catSong(c))}`"
+          >{{ hearing === catSong(c) ? '■' : '▶' }}</button>
+          <span v-if="hearing === catSong(c)" class="heard" :style="{ width: `${heardShare * 100}%` }"></span>
+        </div>
+        <div v-if="unsorted.length" class="cardwrap">
+          <label class="card pick" :class="{ on: beat.from.kind === 'song' && !beat.from.category }">
+            <b>No category ▾</b>
+            <small>{{ uncatPick ? songName(uncatPick) : `pick one of ${unsorted.length}` }}</small>
+            <select :value="uncatPick || ''" @change="pickSong($event.target.value, '')" aria-label="A song with no category">
+              <option value="" disabled>Pick a song…</option>
+              <option v-for="t in unsorted" :key="t.name" :value="t.name">{{ t.title || t.name }}</option>
+            </select>
+          </label>
+          <button
+            v-if="uncatPick" class="hear" :class="{ on: hearing === uncatPick }" @click="hear(uncatPick)"
+            :title="hearing === uncatPick ? 'Stop' : `Hear 30s from the middle of ${songName(uncatPick)}`"
+            :aria-label="hearing === uncatPick ? `Stop ${songName(uncatPick)}` : `Hear ${songName(uncatPick)}`"
+          >{{ hearing === uncatPick ? '■' : '▶' }}</button>
+          <span v-if="uncatPick && hearing === uncatPick" class="heard" :style="{ width: `${heardShare * 100}%` }"></span>
+        </div>
         <button class="card" :class="{ on: beat.from.kind === 'scratch' }" @click="beat.from = { kind: 'scratch' }">
           <b>From scratch</b><small>levers only</small>
         </button>
       </div>
       <p v-if="beat.from.kind === 'song'" class="small fromline">
+        <button class="hear inline" :class="{ on: hearing === beat.from.name }" @click="hear(beat.from.name)" :aria-label="hearing === beat.from.name ? 'Stop' : `Hear ${songName(beat.from.name)}`"
+                :title="hearing === beat.from.name ? 'Stop' : 'Hear 30s from the middle of it'">{{ hearing === beat.from.name ? '■' : '▶' }}</button>
         <template v-if="catSongs.length > 1">
           Song
           <select :value="beat.from.name" @change="pickSong($event.target.value, beat.from.category)">
@@ -132,7 +147,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { api } from '../api'
 import { fmtTime } from '../time'
 import {
@@ -164,7 +179,68 @@ const categories = computed(() => {
 const unsorted = computed(() => tracks.value.filter((t) => !(t.categories || []).length))
 const catSongs = computed(() => categories.value.find((c) => c.name === beat.value.from.category)?.songs || [])
 const songName = (name) => { const t = tracks.value.find((x) => x.name === name); return t?.title || name }
-function pickCategory(c) { pickSong(c.songs[0].name, c.name) }
+function pickCategory(c) { pickSong(catSong(c), c.name) }
+// A category's song: the one picked in it, else its first.
+const catSong = (c) => (beat.value.from.category === c.name && c.songs.some((t) => t.name === beat.value.from.name)
+  ? beat.value.from.name : c.songs[0].name)
+// No category's song: the one picked there, remembered while another card is chosen.
+const lastUncat = ref('')
+const uncatPick = computed(() => (beat.value.from.kind === 'song' && !beat.value.from.category ? beat.value.from.name : lastUncat.value))
+watch(uncatPick, (n) => { if (n) lastUncat.value = n })
+
+// ---------------------------------------------------------------- hearing a song
+// 30 seconds from the middle of a song, faded in and out; one at a time, and
+// it stops a take that's playing (and a take stops it): 'footage-audio' events.
+const PREVIEW = 30
+const FADE = 0.6
+const hearing = ref('')
+const heardShare = ref(0)
+let player = null
+let span = [0, 0]
+let frame = 0
+function stopHearing() {
+  cancelAnimationFrame(frame)
+  if (player) { player.pause(); player.removeAttribute('src'); player.load() }
+  hearing.value = ''
+  heardShare.value = 0
+}
+async function hear(name) {
+  if (!name) return
+  if (hearing.value === name) return stopHearing()
+  stopHearing()
+  window.dispatchEvent(new CustomEvent('footage-audio', { detail: 'preview' }))
+  player = player || new Audio()
+  player.preload = 'auto'
+  player.src = api.musicFile(name)
+  hearing.value = name
+  const known = tracks.value.find((t) => t.name === name)?.duration
+  await new Promise((ok) => {
+    if (player.readyState >= 1) ok()
+    else player.addEventListener('loadedmetadata', ok, { once: true })
+  })
+  if (hearing.value !== name) return
+  const dur = known || player.duration || 0
+  const len = Math.min(PREVIEW, dur || PREVIEW)
+  const from = Math.max(0, dur / 2 - len / 2)
+  span = [from, from + len]
+  player.currentTime = from
+  player.volume = 0
+  try { await player.play() } catch { return stopHearing() }
+  const step = () => {
+    if (hearing.value !== name) return
+    const t = player.currentTime
+    const into = t - span[0]
+    const left = span[1] - t
+    player.volume = Math.max(0, Math.min(1, into / FADE, left / FADE))
+    heardShare.value = Math.min(1, Math.max(0, into / (span[1] - span[0])))
+    if (left <= 0 || player.ended) return stopHearing()
+    frame = requestAnimationFrame(step)
+  }
+  frame = requestAnimationFrame(step)
+}
+const otherAudio = (e) => { if (e.detail !== 'preview') stopHearing() }
+window.addEventListener('footage-audio', otherAudio)
+onBeforeUnmount(() => { window.removeEventListener('footage-audio', otherAudio); stopHearing() })
 function pickSong(name, category) {
   if (name) beat.value.from = { kind: 'song', name, category }
 }
@@ -304,6 +380,15 @@ defineExpose({ built, prompt, length, tempo, key, keyFrom, tempoFrom })
 .card small { color: var(--muted); font-size: 12px; }
 .card.on { border-color: var(--b-blue); box-shadow: inset 0 0 0 1px var(--b-blue); background: var(--b-blue-soft); }
 .card.pick select { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.cardwrap { position: relative; display: flex; }
+.cardwrap .card { flex: 1; padding-right: 44px; }
+.hear {
+  position: absolute; top: 8px; right: 8px; z-index: 1; width: 30px; height: 30px; border-radius: 50%; padding: 0;
+  border: 1px solid var(--b-blue); background: var(--paper); color: var(--b-blue); font-size: 11px; line-height: 1; cursor: pointer;
+}
+.hear:hover, .hear:focus-visible, .hear.on { background: var(--b-blue); color: var(--paper); outline: none; }
+.hear.inline { position: static; width: 24px; height: 24px; margin-right: 6px; vertical-align: middle; font-size: 9px; }
+.heard { position: absolute; left: 1px; bottom: 1px; height: 3px; border-radius: 0 0 0 8px; background: var(--b-blue); pointer-events: none; transition: width 0.1s linear; }
 .fromline { margin: 8px 0 0; }
 .fromline select { margin: 0 4px; }
 .pad {
