@@ -48,10 +48,13 @@ const props = defineProps({
 })
 const emit = defineEmits(['split'])
 
-const lanes = computed(() => ['A', 'B'].filter((l) => props.slots[l]))
+// The lanes on screen, and while a morph runs, a lane leaving (it slides out
+// as the others take its room, rather than leaving black behind).
+const lanes = computed(() => ['A', 'B'].filter((l) => props.slots[l] || (props.into?.type === 'morph' && props.into.p < 1 && props.into.from?.[l])))
 const wide = computed(() => props.frameW > props.frameH)
 const where = (lane) => {
-  if (lanes.value.length === 1) return 'alone'
+  if (!props.slots[lane]) return 'going'
+  if (['A', 'B'].filter((l) => props.slots[l]).length === 1) return 'alone'
   const first = props.slots[lane].x === 0 && props.slots[lane].y === 0
   return wide.value ? (first ? 'left' : 'right') : (first ? 'top' : 'bottom')
 }
@@ -89,9 +92,14 @@ const ease = computed(() => 0.5 - 0.5 * Math.cos(Math.PI * clamp(props.into?.p ?
 function rectOf(lane) {
   const r = props.slots[lane]
   const t = props.into
-  if (!t || t.type !== 'morph' || t.p >= 1 || !r) return r
+  if (!t || t.type !== 'morph' || t.p >= 1) return r
   const e = ease.value
   const from = t.from?.[lane]
+  if (!r) {   // leaving: out past its own edge
+    const wideFrame = props.frameW > props.frameH
+    if (wideFrame) return { ...from, x: from.x === 0 ? from.x - (from.x + from.w) * e : from.x + (props.frameW - from.x) * e }
+    return { ...from, y: from.y === 0 ? from.y - (from.y + from.h) * e : from.y + (props.frameH - from.y) * e }
+  }
   if (from) return { w: from.w + (r.w - from.w) * e, h: from.h + (r.h - from.h) * e, x: from.x + (r.x - from.x) * e, y: from.y + (r.y - from.y) * e }
   // arriving from its side: below (or right) if it sits after the other lane, else above (or left)
   const wideFrame = props.frameW > props.frameH

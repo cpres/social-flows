@@ -569,7 +569,7 @@ def render_segment(seg, idx, cfg, workdir, keep_audio):
     """Render one cut to a uniform intermediate (x264 + PCM in mkv)."""
     w, h, fps = cfg["width"], cfg["height"], cfg["fps"]
     if seg["kind"] == "blank":
-        out = workdir / f"seg_{idx:03d}.mkv"
+        out = workdir / (f"seg_{idx:03d}.mkv" if isinstance(idx, int) else f"seg_{idx}.mkv")
         length = seg["render_length"]
         run(["ffmpeg", "-nostdin", "-y", "-v", "error",
              "-f", "lavfi", "-i", f"color=c=black:s={w}x{h}:r={fps}",
@@ -579,7 +579,7 @@ def render_segment(seg, idx, cfg, workdir, keep_audio):
         return out
     length = seg["render_length"]
     n_frames = round(length * fps)
-    out = workdir / f"seg_{idx:03d}.mkv"
+    out = workdir / (f"seg_{idx:03d}.mkv" if isinstance(idx, int) else f"seg_{idx}.mkv")
     cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error"]
 
     if seg["kind"] == "image":
@@ -908,7 +908,7 @@ def compose_top(top, assembled, cfg, under, workdir, plan=None):
     # Cuts shorter than the top clip hold their last frame (and go quiet).
     hold = max(total - under, 0)
     pad = f",tpad=stop_mode=clone:stop_duration={hold:.3f}" if hold > 0.001 else ""
-    graph += (f"[1:v]setsar=1,format=yuv420p{pad},trim=end_frame={frames},setpts=PTS-STARTPTS[bot];"
+    graph += (f"[1:v]setpts=N/({fps}*TB),setsar=1,format=yuv420p{pad},trim=end_frame={frames},setpts=PTS-STARTPTS[bot];"
               f"[1:a]apad,atrim=0:{total:.4f},asetpts=PTS-STARTPTS[a];")
     stack = "hstack" if top["axis"] == "x" else "vstack"
     if top["divider"]:
@@ -959,7 +959,7 @@ def compose_layout(top, assembled, cfg, keys, total, workdir):
         runs.append((visible[f], g - f))
         f = g
     shows = [n for on, n in runs if on] or [1]
-    graph = [f"[0:v]split={len(shows)}" + "".join(f"[s{i}]" for i in range(len(shows)))]
+    graph = [f"[0:v]setpts=N/({fps}*TB),split={len(shows)}" + "".join(f"[s{i}]" for i in range(len(shows)))]
     at, chunks, k = 0, [], -1
     for j, (on, n) in enumerate(runs):
         if on:
@@ -991,7 +991,7 @@ def compose_layout(top, assembled, cfg, keys, total, workdir):
 
     blur = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
             f"boxblur=30:5,eq=brightness=-0.06")
-    graph += [f"[1:v]setsar=1,format=yuv420p,tpad=stop_mode=clone:stop_duration={seconds:.4f},"
+    graph += [f"[1:v]setpts=N/({fps}*TB),setsar=1,format=yuv420p,tpad=stop_mode=clone:stop_duration={seconds:.4f},"
               f"trim=end_frame={total},setpts=PTS-STARTPTS,split[B][Bb]",
               f"[Ab]{blur}[bgA]", f"[Bb]{blur}[bgB]",
               f"color=c=black:s={W}x{H}:r={fps}:d={seconds:.4f},format=yuv420p[base]",
@@ -1031,9 +1031,9 @@ def compose_layout(top, assembled, cfg, keys, total, workdir):
 # into is how the scene comes in: cut | slide | push | dissolve; fill is how
 # a lane on its own fills the frame (fill | blur).
 
-SCENE_IN = 0.4       # seconds a scene's transition in takes
-HANDOFF_MOVE = 0.6   # hand off: the solo frame moving into A's slot as B comes in
-HANDOFF_FADE = 0.4   # ... and, its overlap over, dissolving into A
+SCENE_IN = 0.8       # seconds a scene's transition in takes
+HANDOFF_MOVE = 1.0   # hand off: the solo frame moving into A's slot as B comes in
+HANDOFF_FADE = 0.6   # ... and, its overlap over, dissolving into A
 
 
 def handoff(scenes, k, secs):
@@ -1231,7 +1231,10 @@ def compose_scene(scene, slots, div, files, frames, tail, cfg, workdir, k):
         cmd += ["-i", str(file)]
         sw, sh, x, y = slots[lane]
         fit = f"crop={sw}:{sh}:{crop[0]}:{crop[1]}" if crop else f"scale={sw}:{sh}"
-        graph.append(f"[{i}:v]{fit},setsar=1,format=yuv420p,"
+        # Frame times from the file are whole milliseconds, which overlay reads as
+        # landing a hair after the frame's 1/fps step: renumber them exactly, or
+        # every third frame repeats the one before.
+        graph.append(f"[{i}:v]setpts=N/({fps}*TB),{fit},setsar=1,format=yuv420p,"
                      f"tpad=stop_mode=clone:stop_duration={(frames + tail) / fps + 1:.3f},"
                      f"trim=end_frame={frames + tail},setpts=PTS-STARTPTS[l{i}]")
         graph.append(f"{cur}[l{i}]overlay=x={x}:y={y}:eof_action=repeat[c{i}]")
@@ -1273,8 +1276,9 @@ def join_scenes(files, scenes, frames, tails, cfg, workdir, slots=None, hand_f=N
     for k in range(n):   # each scene is used for its body, its head and the tail the next comes in over
         uses = ["body"] + (["head"] if k > 0 and tails[k - 1] else []) + (["tail"] if k + 1 < n and tails[k] else [])
         labels[k] = {u: f"[s{k}{u}]" for u in uses}
-        graph.append(f"[{k}:v]split={len(uses)}" + "".join(labels[k].values()) if len(uses) > 1
-                     else f"[{k}:v]null{labels[k]['body']}")
+        exact = f"[{k}:v]setpts=N/({fps}*TB),"   # exact frame times (see compose_scene)
+        graph.append(f"{exact}split={len(uses)}" + "".join(labels[k].values()) if len(uses) > 1
+                     else f"{exact}null{labels[k]['body']}")
     for k in range(n):
         head = tails[k - 1] if k > 0 else 0
         if head:
@@ -1437,12 +1441,12 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
         if relay:
             # A relay: the shot before carries on in A's slot and B plays in its own,
             # each as the middle band of its full frame, so they move in and out seamlessly.
-            lane_files["B"] = (segs_of(k, w, h, solo_fill), band_offset(slots["B"], w, h))
-            lane_files["A"] = (render_carry(sc["carry"], frames[k], cfg, base_dir, keep_audio, workdir, k, solo_fill),
+            lane_files["B"] = (segs_of(k, w, h, solo_fill, tails[k]), band_offset(slots["B"], w, h))
+            lane_files["A"] = (render_carry(sc["carry"], frames[k] + tails[k], cfg, base_dir, keep_audio, workdir, k, solo_fill),
                                band_offset(slots["A"], w, h))
         elif "B" in slots:
             bw, bh = slots["B"][:2]
-            lane_files["B"] = segs_of(k, bw, bh, solo_fill if sc.get("layout") == "soloB" else None)
+            lane_files["B"] = segs_of(k, bw, bh, solo_fill if sc.get("layout") == "soloB" else None, tails[k])
         if "A" in slots and not relay:
             a = {**sc["a"]}
             if sc.get("layout") == "soloA":
@@ -1452,11 +1456,13 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
             a_frames = frames[k] - hand_f[k]
             pieces, rate = scene_a_plan(a, ain, aout, max(a_frames / fps, 0.04), sc)
             path = (base_dir / a["file"]).expanduser()
-            lane_files["A"] = render_scene_a(a, path, pieces, rate, slots["A"][:2], a_frames, cfg,
+            # A carries on past the scene too, while the next comes in.
+            more = pieces[:-1] + [(pieces[-1][0], pieces[-1][1] + tails[k] / fps * rate)]
+            lane_files["A"] = render_scene_a(a, path, more, rate, slots["A"][:2], a_frames + tails[k], cfg,
                                              keep_audio, workdir, k)
             a_play[k] = (path, a, pieces[0][0], rate, solo_fill if sc.get("layout") == "soloA" else "fill")
             if hand_f[k]:
-                lane_files["A"] = hand_off_a(files[k - 1], slots["A"], lane_files["A"], hand_f[k], frames[k],
+                lane_files["A"] = hand_off_a(files[k - 1], slots["A"], lane_files["A"], hand_f[k], frames[k] + tails[k],
                                              cfg, workdir, k)
         all_slots.append(slots)
         files.append(compose_scene(sc, slots, div, lane_files, frames[k], tails[k], cfg, workdir, k))
@@ -1525,7 +1531,7 @@ def morph_a(k, files, slots, a_play, frames, n, cfg, workdir):
         split_slots, solo = slots[k], a_play[k - 1]
     else:
         run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(files[k - 1]),
-             "-vf", f"select='gte(n,{max(frames[k - 1] - 1, 0)})'", "-frames:v", "1", str(tmp / "s001.png")])
+             "-vf", f"select='gte(n,{frames[k - 1]})'", "-vsync", "0", "-frames:v", str(n), str(tmp / "s%03d.png")])
         split_slots, solo = slots[k - 1], a_play[k]
     split_a = (a_play[k] if shrink else a_play[k - 1])[1]
     aw, ah, ax, ay = split_slots["A"]
@@ -1555,23 +1561,22 @@ def morph_a(k, files, slots, a_play, frames, n, cfg, workdir):
     slot_dest = (ax, ay, aw, ah)
     slot_win = cover_window(sw, sh, aw, ah, split_a.get("focus", (0.5, 0.5)), split_a.get("zoom", 1))
     lerp = lambda p, q, e: tuple(x + (y - x) * e for x, y in zip(p, q))   # noqa: E731
-    backdrop = Image.open(tmp / "s001.png").convert("RGB") if not shrink else None
     for i in range(n):
         u = (i + 1) / n
         e = 0.5 - 0.5 * math.cos(math.pi * u)
         to_slot = e if shrink else 1 - e          # 0: A full, 1: A in its slot
         canvas = Image.new("RGB", (w, h), (0, 0, 0))
         img = Image.open(frames_a[min(i, len(frames_a) - 1)]).convert("RGB")
-        if full_fit == "blur" and to_slot < 1:    # the blurred backdrop of A alone, fading as it goes
-            bg = img.resize((w, h), Image.BILINEAR).filter(ImageFilter.GaussianBlur(30))
-            canvas = Image.blend(canvas, bg, 1 - to_slot)
+        if full_fit == "blur" and to_slot < 1:    # A alone's blurred backdrop stays behind it as it moves
+            canvas = img.resize((w, h), Image.BILINEAR).filter(ImageFilter.GaussianBlur(30))
         dx, dy, dw, dh = lerp(full_dest, slot_dest, to_slot)
         wx, wy, ww, wh = lerp(full_win, slot_win, to_slot)
         piece = img.crop((round(wx), round(wy), round(wx + ww), round(wy + wh))).resize(
             (max(1, round(dw)), max(1, round(dh))), Image.BILINEAR)
         canvas.paste(piece, (round(dx), round(dy)))
         # B (and the divider) come in from their side, or go out.
-        src = Image.open(tmp / f"s{(i + 1 if shrink else 1):03d}.png").convert("RGB") if shrink else backdrop
+        shots = sorted(tmp.glob("s*.png"))   # the B side, playing on
+        src = Image.open(shots[min(i, len(shots) - 1)]).convert("RGB")
         part = src.crop(block)
         away = 1 - e if shrink else e
         canvas.paste(part, (round(block[0] + off[0] * away), round(block[1] + off[1] * away)))
@@ -2681,16 +2686,21 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         workdir = Path(tmp)
         if cfg.get("scenes"):
-            def segs_of(k, w, h, fill):
+            def segs_of(k, w, h, fill, tail=0):
+                """Scene k's cuts at w x h; the last carries on `tail` frames
+                past the scene, so it keeps playing while the next comes in."""
                 idx = [i for i, seg in enumerate(plan) if (seg.get("scene") or 0) == k and seg["kind"] != "gap"]
                 if not idx:
                     return None
                 kcfg = {**cfg, "width": w, "height": h, **({"fit": fill} if fill else {})}
+                segs = [plan[i] for i in idx]
+                if tail:
+                    segs[-1] = {**segs[-1], "render_length": segs[-1]["render_length"] + tail / cfg["fps"]}
                 files = []
-                for i in idx:
+                for i, seg in zip(idx, segs):
                     print(f"  cutting {i + 1}/{len(plan)}: {plan[i]['label']}          ", end="\r")
-                    files.append(render_segment(plan[i], i, kcfg, workdir, keep_audio))
-                return assemble(files, [plan[i] for i in idx], kcfg, workdir, f"scene{k:02d}_b")
+                    files.append(render_segment(seg, f"{i:03d}_{k}_{w}", kcfg, workdir, keep_audio))
+                return assemble(files, segs, kcfg, workdir, f"scene{k:02d}_b{w}")
             assembled = render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir)
             plan_done = True
         else:

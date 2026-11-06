@@ -510,7 +510,7 @@
           </div>
           <!-- lanes in their slots, as the scene on show has them -->
           <SceneFrame
-            v-else-if="aIds.length && slots" :frame-w="frameW" :frame-h="frameH" :slots="slots"
+            v-else-if="(aIds.length || hasRelay) && slots" :frame-w="frameW" :frame-h="frameH" :slots="slots"
             :divider-color="settings.dividerColor" :editing="isA(current) ? 'A' : 'B'" :into="intoNow"
             :a-t="aNow?.t ?? 0" :a-rate="aNow?.rate ?? 1" :a-playing="reelOn && aNow?.playing !== false" :guides="tall && guides"
             @split="(v) => setSplit(shownScene, v)"
@@ -518,7 +518,7 @@
             <template #A="{ maxH, out, bindA }">
               <img v-if="handoffShot" class="handoffshot" :src="handoffShot.url" alt="" :style="{ opacity: 1 - handoffShot.fade }" />
               <ReelFrame
-                v-if="isA(current) && aNow?.part === current" :key="`edit-${current.id}`" v-bind="frameProps" v-on="frameOn"
+                v-if="isA(current) && aNow?.part === current" :key="`edit-${current.mediaId}`" v-bind="frameProps" v-on="frameOn"
                 :out="out" :max-h="maxH" muted
               />
               <ReelFrame
@@ -529,7 +529,7 @@
             </template>
             <template #B="{ maxH, out }">
               <ReelFrame
-                v-if="!isA(current)" :key="`edit-${current.id}`" v-bind="frameProps" v-on="frameOn"
+                v-if="!isA(current)" :key="`edit-${current.mediaId}`" v-bind="frameProps" v-on="frameOn"
                 :out="out" :max-h="maxH"
               />
               <div v-else class="underidle">
@@ -828,7 +828,7 @@ import SongPicker from '../components/SongPicker.vue'
 import ReelFrame from '../components/ReelFrame.vue'
 import { SHAPES, shapeOf, shapeRatio } from '../shapes'
 import { quietCut, topSource } from '../stack'
-import { HANDOFF_DEFAULT, INTOS, isRelay, LAYOUTS as SCENE_LAYOUTS, SCENE_IN, SOLO_A_MIN, TIMINGS, aShort, aTiming, fitted, handoffSecs, frameFor, layoutLabel, newId, normalize,
+import { HANDOFF_DEFAULT, INTOS, isRelay, LAYOUTS as SCENE_LAYOUTS, SCENE_IN, SCENE_MOVE, SOLO_A_MIN, TIMINGS, aShort, aTiming, fitted, handoffSecs, frameFor, layoutLabel, newId, normalize,
   resolveA, sceneAPlan, sceneSlots, showsA, showsB, slotShape, soloSeconds } from '../scenes'
 import SceneFrame from '../components/SceneFrame.vue'
 import { DUCK_DB, GLASSES, QUIET_SNAP, audioSegments, glassesMode, mixBars, musicBars, quietMarker, trackBars, transitionBands, withDucking } from '../audioMix'
@@ -1578,6 +1578,8 @@ const aNeeds = computed(() => aParts.value.map((p) => {
   return { part: p, used: true, from, to, short }
 }))
 // What the A slot shows now: which clip, where in it and how fast.
+// A reel with a relay in it has splits even with nothing in lane A.
+const hasRelay = computed(() => sceneList.value.some((sc, k) => isRelay(sceneList.value, k)))
 // A relay's A slot: the shot from the scene before, carrying on from where its part ended.
 const carryOf = (k) => {
   if (!isRelay(sceneList.value, k)) return null
@@ -1587,6 +1589,14 @@ const carryOf = (k) => {
 const aNow = computed(() => {
   const k = shownScene.value
   const within = reelOn.value && reelTime.value !== null ? reelTime.value - sceneTimes.value[k].start : 0
+  // A going (a scene without it coming in): the scene before's A, playing on as it slides out.
+  if (k > 0 && intoNow.value?.type === 'morph' && intoNow.value.from?.A && !showsA(sceneList.value[k]) && !isRelay(sceneList.value, k)) {
+    const prevCarry = carryOf(k - 1)
+    const run = sceneSecs.value[k - 1] + within
+    if (prevCarry) return { part: prevCarry, t: prevCarry.media.kind === 'video' ? prevCarry.start + prevCarry.length + run : 0, rate: 1, playing: true }
+    const prevPlan = aPlans.value[k - 1]
+    if (prevPlan) return { part: byId.value.get(sceneList.value[k - 1].a.item), t: topSource(prevPlan, run - handoffs.value[k - 1]), rate: prevPlan.rate, playing: true }
+  }
   const carry = carryOf(k)
   if (carry) return { part: carry, t: carry.media.kind === 'video' ? carry.start + carry.length + within : 0, rate: 1, playing: true, carry: true }
   const plan = aPlans.value[k]
@@ -1613,15 +1623,23 @@ const intoNow = computed(() => {
   const k = shownScene.value
   const sc = sceneList.value[k]
   if (!k || !sc || (sc.into || 'cut') === 'cut') return null
-  const p = (reelTime.value - sceneTimes.value[k].start) / SCENE_IN
+  const moves = ['handoff', 'takeover'].includes(sc.into)
+  const p = (reelTime.value - sceneTimes.value[k].start) / (moves ? SCENE_MOVE : SCENE_IN)
   if (p >= 1) return null
-  // Into or out of Solo A with a slide, A moves between full frame and its slot (as the render).
+  // A new layout: the lanes lock into their new slots rather than a picture
+  // sliding in over black. A lane on screen before moves from where it was
+  // (in a hand off the Solo B shot moves into A's slot); one arriving comes
+  // in from its side.
   const prev = sceneList.value[k - 1]
-  if (sc.into === 'slide' && [prev.layout, sc.layout].includes('soloA') && prev.layout !== sc.layout
-      && showsA(prev) && showsA(sc) && prev.a?.item === sc.a?.item) {
-    return { type: 'morph', p, from: sceneSlots(prev, frameW.value, frameH.value, Number(settings.dividerPx) || 0) }
+  if (sc.into !== 'dissolve' && prev.layout !== sc.layout) {
+    const before = sceneSlots(prev, frameW.value, frameH.value, Number(settings.dividerPx) || 0)
+    const from = { ...before }
+    if (sc.into === 'handoff' && before.B) { from.A = before.B; delete from.B }
+    // A shown both sides but a different clip (or a relay's carried shot): it comes in fresh, from its side.
+    if (sc.into !== 'handoff' && showsA(sc) && !(showsA(prev) && prev.a?.item === sc.a?.item && !isRelay(sceneList.value, k - 1))) delete from.A
+    return { type: 'morph', p, from }
   }
-  return { type: sc.into === 'handoff' ? 'slide' : sc.into, p }
+  return { type: sc.into === 'handoff' || sc.into === 'takeover' ? 'slide' : sc.into, p }
 })
 // ---------------------------------------------------------------- audio rows
 

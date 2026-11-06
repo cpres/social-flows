@@ -45,7 +45,8 @@ export function aTiming(sc) {
   const t = sc.a?.timing || 'real'
   return t === 'range' ? 'real' : ['real', 'quiet', 'hold', 'fit'].includes(t) ? t : 'real'
 }
-export const SCENE_IN = 0.4
+export const SCENE_IN = 0.8      // seconds a scene's slide, push or dissolve takes (as montage.py)
+export const SCENE_MOVE = 1.0    // ... and a hand off or take over
 export const SOLO_A_DEFAULT = 4
 export const SOLO_A_MIN = 1
 export const showsA = (sc) => sc.layout !== 'soloB'
