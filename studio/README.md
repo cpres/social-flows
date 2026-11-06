@@ -120,11 +120,14 @@ python3 studio/server.py --open
   - Under it, the plan: *Start from* a song category, a song or scratch (the
     song sets the groove and sound, measured here: tempo, key, tone; needs
     `--beat`; never copied or sent; ▶ on a card plays
-    30 seconds from the middle of its song, ■ stops); *Energy over the reel* (*Follow my
+    30 seconds from the middle of its song, ■ stops). Picking a song sets
+    the levers, tempo and key from it (minor or major, how bright and
+    beat-driven, its categories), and a note says so; change them after and
+    the takes follow what you set (*set them from the song again* goes
+    back); *Energy over the reel* (*Follow my
     scenes*, *Arc*, *Slow build*, *Two peaks*, *Steady*, or drag the points; *Highest it goes* (*Full*, *Lively*, *Mid*,
-    *Chill*), or drag the orange line along the top down, keeps the energy
-    lower the whole way: the curve's shape and calm parts stay, its top
-    comes down, and from *Mid* down the music is asked to stay relaxed and
+    *Chill*), or drag the orange line along the top down, slides the whole
+    curve down, keeping its shape, and from *Mid* down the music is asked to stay relaxed and
     steady with no big drops;
     *Hits on scene changes*, *End on the last frame*); ten *vibe levers*
     with four presets; the tempo and key they point to (or yours); and the

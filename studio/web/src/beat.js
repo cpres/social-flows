@@ -29,6 +29,40 @@ export const VIBES = [
   { v: 'lofi', label: 'Lo-fi chill', levers: levers([1, 2, 5, 0, 2, 0, 0, 2, 2, 2]) },
 ]
 
+// A song to start from sets the levers, from how it was measured (tempo,
+// major or minor, how bright, how beat-driven) and its categories. Then the
+// levers say what the song is like, and what's asked for matches them.
+export function leversFromSong(style, categories = []) {
+  const bpm = style?.bpm >= 40 ? style.bpm : 100
+  const minor = /minor/i.test(style?.key || '')
+  const words = (style?.words || []).join(' ')
+  const bright = /bright|airy/.test(words) ? 2 : /warm|rounded/.test(words) ? 1 : 0   // 0 dark
+  const drive = /punchy|beat-forward/.test(words) ? 2 : /steady groove/.test(words) ? 1 : 0
+  const cats = categories.join(' ').toLowerCase()
+  const has = (re) => re.test(cats)
+  const clamp = (v) => Math.max(0, Math.min(5, Math.round(v)))
+  return {
+    funky: clamp(has(/funk|disco|groove/) ? 4 : 1 + (drive >= 1 ? 1 : 0)),
+    happy: clamp(minor ? (bright === 2 ? 2 : bright === 1 ? 1 : 0) : 3 + (bright === 2 ? 1 : 0) + (has(/happy|sunny|joy/) ? 1 : 0)),
+    chill: clamp((bpm < 90 ? 3 : bpm < 105 ? 2 : 1) + (drive === 0 ? 1 : 0) + (has(/chill|lo-?fi|ambient|calm/) ? 1 : 0)),
+    upbeat: clamp(bpm >= 125 ? 4 : bpm >= 110 ? 3 : bpm >= 95 ? 2 : 1),
+    grungy: clamp(has(/street|grit|hip|rap|trap|rock|punk/) ? 3 : 0),
+    futuristic: clamp(has(/electr|edm|synth|techno|house|future/) ? 3 : 0),
+    ecstatic: clamp(has(/dance|ecstatic|trance/) ? 3 : bpm >= 120 && drive === 2 ? 2 : 0),
+    drummy: clamp(drive === 2 ? 4 : drive === 1 ? 3 : 1),
+    bass: clamp(bright === 0 ? 4 : bright === 1 ? 3 : 1),
+    earthy: clamp(has(/acoustic|world|folk|nature|garden|earth/) ? 4 : 1),
+  }
+}
+// A song's tempo as a beat's (60..180): halved or doubled into range.
+export function songTempo(bpm) {
+  let b = Number(bpm) || 0
+  if (b < 40) return null
+  while (b > 180) b /= 2
+  while (b < 60) b *= 2
+  return Math.round(b)
+}
+
 // Clicking a notch sets that level; clicking the level it's at lowers it by one (so 1 → 0).
 export const leverClick = (now, notch) => (notch === now ? notch - 1 : notch)
 
@@ -138,19 +172,18 @@ export const TOPS = [
   { v: 0.45, label: 'Chill', hint: 'Stays relaxed the whole way, a small rise at most' },
 ]
 export const topOf = (points) => Math.max(...points.map((p) => p[1]))
-// The curve with its highest point at `top`, its shape kept and its calm
-// parts left where they are (unless the top comes down past them). Only ever
-// squashes, unless `stretch` (dragging the line back up on a curve of your own).
+// The whole curve slid down (or back up) so its highest point is at `top`:
+// every point scales toward the floor, so the shape stays and the calm parts
+// come down a little too. Only ever lowers, unless `stretch` (dragging the
+// line back up on a curve of your own).
+const FLOOR = 0.05
 export function capCurve(points, top, stretch = false) {
-  const ys = points.map((p) => p[1])
-  const lo = Math.min(...ys)
-  const hi = Math.max(...ys)
+  const hi = Math.max(...points.map((p) => p[1]))
   const t = Math.min(1, Math.max(0.1, top))
   if (!stretch && hi <= t + 1e-3) return points
   const r = (v) => Math.round(Math.min(1, Math.max(0, v)) * 100) / 100
-  if (hi - lo < 0.01) return points.map(([x]) => [x, r(t)])
-  const lo2 = Math.max(0, Math.min(lo, t - 0.08))
-  return points.map(([x, y]) => [x, r(lo2 + ((y - lo) * (t - lo2)) / (hi - lo))])
+  if (hi <= FLOOR + 0.01) return points.map(([x]) => [x, r(t)])
+  return points.map(([x, y]) => [x, r(FLOOR + ((Math.max(y, FLOOR) - FLOOR) * (t - FLOOR)) / (hi - FLOOR))])
 }
 
 // What each scene does in the music, for the strip under the curve: intro, build, peak, cool or steady.

@@ -52,6 +52,10 @@
           <template v-else> · listening to it…</template>
         </span>
       </p>
+      <p v-if="songNote" class="small songnote" :class="{ edited: songNote.edited }">
+        {{ songNote.text }}
+        <button v-if="songNote.edited" class="link" @click="applySong(beat.from.name, true)">set them from the song again</button>
+      </p>
     </section>
 
     <!-- 2 · Energy over the reel -->
@@ -142,7 +146,7 @@
           <label class="dcard">
             <span class="muted small">Tempo</span>
             <input class="mono big" type="number" min="60" max="180" :value="tempo" @change="setTempo($event.target.value)" aria-label="Tempo in BPM" />
-            <small class="muted">BPM · {{ beat.tempo != null ? 'yours' : tempoFrom }}<button v-if="beat.tempo != null" class="link" @click="beat.tempo = null">use the levers'</button></small>
+            <small class="muted">BPM · {{ beat.tempo != null ? (refStyle?.measured && beat.tempo === songTempo(refStyle.bpm) ? `from ${songName(beat.from.name)}` : 'yours') : tempoFrom }}<button v-if="beat.tempo != null" class="link" @click="beat.tempo = null">use the levers'</button></small>
           </label>
           <label class="dcard">
             <span class="muted small">Key</span>
@@ -166,7 +170,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { api } from '../api'
 import { fmtTime } from '../time'
 import {
-  CURVES, LEVERS, TOPS, VIBES, beatPrompt, capCurve, curveAt, derivedKey, derivedTempo, leverClick, presetCurve, sceneFractions,
+  CURVES, LEVERS, TOPS, VIBES, beatPrompt, capCurve, leversFromSong, songTempo, curveAt, derivedKey, derivedTempo, leverClick, presetCurve, sceneFractions,
   sceneRole, topOf,
 } from '../beat'
 
@@ -258,8 +262,36 @@ const otherAudio = (e) => { if (e.detail !== 'preview') stopHearing() }
 window.addEventListener('footage-audio', otherAudio)
 onBeforeUnmount(() => { window.removeEventListener('footage-audio', otherAudio); stopHearing() })
 function pickSong(name, category) {
-  if (name) beat.value.from = { kind: 'song', name, category }
+  if (!name) return
+  beat.value.from = { kind: 'song', name, category }
+  applySong(name)
 }
+// Starting from a song sets the levers, tempo and key from it (once it's been
+// measured), so what's shown is what's asked for. Change them after as you like.
+const pendingSong = ref('')
+function applySong(name, now = false) {
+  const st = styles.value[name]
+  if (st === undefined || st === null) {   // still measuring: as soon as it's in
+    pendingSong.value = name
+    fetchStyle(name)
+    return
+  }
+  pendingSong.value = ''
+  if (beat.value.from.name !== name && !now) return
+  const cats = tracks.value.find((t) => t.name === name)?.categories || []
+  beat.value.levers = leversFromSong(st.measured ? st : null, cats)
+  beat.value.tempo = st.measured ? songTempo(st.bpm) : null
+  beat.value.key = null
+  beat.value.vibe = 'song'
+}
+const songNote = computed(() => {
+  if (beat.value.from.kind !== 'song') return null
+  const name = songName(beat.value.from.name)
+  if (pendingSong.value) return { text: `Setting the levers, tempo and key from ${name} once it's measured…` }
+  if (beat.value.vibe === 'song') return { text: `The levers, tempo and key below are set from ${name}; change any of them and the takes follow what you set.` }
+  if (beat.value.vibe === 'song-edited') return { text: `Set from ${name}, then changed by you: the takes follow the levers as they are now.`, edited: true }
+  return { text: `The levers are your own (${VIBES.find((v) => v.v === beat.value.vibe)?.label || 'changed'}), not from ${name}: the takes take ${name}'s groove and sound, with these levers.`, edited: true }
+})
 
 // What a song sounds like (measured on the server, once).
 const styles = ref({})
@@ -272,6 +304,7 @@ async function fetchStyle(name) {
 watch(categories, async (cs) => { for (const c of cs) await fetchStyle(c.songs[0].name) }, { immediate: true })
 watch(() => beat.value.from.name, (n) => fetchStyle(n), { immediate: true })
 const refStyle = computed(() => (beat.value.from.kind === 'song' ? styles.value[beat.value.from.name] : null))
+watch(styles, () => { if (pendingSong.value && styles.value[pendingSong.value]) applySong(pendingSong.value) }, { deep: true })
 
 // ---------------------------------------------------------------- tempo, key, length
 const tempo = computed(() => beat.value.tempo ?? derivedTempo(beat.value.levers))
@@ -391,7 +424,7 @@ function keyPoint(e, i) {
 const vibeNow = computed(() => VIBES.find((v) => LEVERS.every((l) => (beat.value.levers[l.v] || 0) === v.levers[l.v]))?.v || '')
 function setLever(k, n) {
   beat.value.levers = { ...beat.value.levers, [k]: Math.max(0, leverClick(beat.value.levers[k] || 0, n)) }
-  beat.value.vibe = vibeNow.value
+  beat.value.vibe = String(beat.value.vibe || '').startsWith('song') ? 'song-edited' : vibeNow.value
 }
 function setVibe(v) {
   beat.value.levers = { ...v.levers }
@@ -451,6 +484,9 @@ defineExpose({ built, prompt, length, tempo, key, keyFrom, tempoFrom })
   border: 2px solid var(--b-blue); background: var(--paper);
 }
 .pt:hover, .pt.hot, .pt:focus-visible { background: var(--b-blue); outline: none; }
+.songnote { margin: 6px 0 0; padding: 6px 10px; border-radius: 8px; background: var(--b-blue-soft); }
+.songnote.edited { background: rgb(224 128 56 / 12%); }
+.songnote .link { margin-left: 6px; }
 .tops { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -2px 0 10px; }
 .ceil {
   position: absolute; left: 0; right: 0; height: 14px; margin-top: -7px; cursor: ns-resize; z-index: 2; touch-action: none;

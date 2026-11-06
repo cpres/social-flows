@@ -76,7 +76,7 @@
             <li v-for="t in shownTakes" :key="t.id" class="take" :class="{ inuse: inUse?.take === t.id, playing: playing === t.id, source: running && job?.source === t.id }">
               <button class="play" @click="toggle(t)" :aria-label="playing === t.id ? `Pause take ${t.n}` : `Play take ${t.n}`">{{ playing === t.id ? '❚❚' : '▶' }}</button>
               <div class="tinfo">
-                <div class="ttl">
+                <div class="tname">
                   <button class="star" :class="{ on: t.starred }" :aria-pressed="!!t.starred" :aria-label="t.starred ? `Unstar take ${t.n}` : `Star take ${t.n}`"
                           :title="t.starred ? 'Starred: click to unstar' : 'Star it if you like it'" @click="star(t)">{{ t.starred ? '★' : '☆' }}</button>
                   <b>Take {{ t.n }} · {{ t.label }}</b>
@@ -447,9 +447,9 @@ onBeforeUnmount(() => {
 .tact { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .tact .done { cursor: default; }
 .warnbtn { border-color: var(--warn); color: var(--warn); }
-.ttl { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 4px; }
-.ttl b { flex: 1; min-width: 0; }
-.ttl .star { flex: none; }
+.tname { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 4px; }
+.tname b { flex: 1; min-width: 0; }
+.tname .star { flex: none; }
 .star { border: 0; background: none; padding: 0 2px; font-size: 17px; line-height: 1; color: var(--muted); cursor: pointer; }
 .star.on { color: #e0a43a; }
 .star:hover { color: #e0a43a; }
