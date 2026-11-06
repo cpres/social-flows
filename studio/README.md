@@ -154,8 +154,11 @@ python3 studio/server.py --open
   genre tag starts it off); the category chips above the list narrow it down.
   These live in the library, so the files themselves are never changed.
 - **Cut on the beat:** the studio finds the song's beats once (cached), then each
-  part lasts a whole number of beats: 1, 2, 4 or 8 (default 4, set per reel).
-  A photo can also be ½ or ¼ of a beat, for quick ones. Change a part's beats in
+  part lasts a whole number of beats: by default the number nearest its own
+  length, so a 30s clip stays about 30s (*Beats per part: Nearest to each
+  part's length*), or a fixed 1, 2, 4 or 8 for every part. A photo can also
+  be ½ or ¼ of a beat, for quick ones. A part given beats of its own keeps
+  them; *↺ nearest to its length* in its editor goes back. Change a part's beats in
   its editor, or drag its end, which snaps to whole beats (or ½ and ¼ for a
   photo). The strip shows beat ticks, with a longer one every 4 beats. The render
   uses the same beats, so it cuts exactly where the preview does.
