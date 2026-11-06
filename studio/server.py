@@ -53,6 +53,30 @@ ENGINE = HERE.parent / "montage" / "montage.py"
 BRAND = HERE.parent / "brand"   # the logo PNGs, kept out of git
 sys.path.insert(0, str(ENGINE.parent))
 sys.path.insert(0, str(HERE))
+
+
+def load_dotenv(*files):
+    """KEY=value lines from .env files (the repo's, then studio's) into the
+    environment, for API keys kept out of git. Never overrides what the shell
+    already set to something; # comments, `export ` and quotes are allowed."""
+    for f in files:
+        if not f.is_file():
+            continue
+        for line in f.read_text(errors="replace").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.removeprefix("export ").split("=", 1)
+            k, v = k.strip(), v.strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+                v = v[1:-1]
+            elif " #" in v:
+                v = v.split(" #", 1)[0].rstrip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k) and not os.environ.get(k):   # unset, or set but empty
+                os.environ[k] = v
+
+
+load_dotenv(HERE.parent / ".env", HERE / ".env")
 import looks  # noqa: E402
 from db import DEFAULT_SETTINGS, Library, default_start, now, settings_of  # noqa: E402
 import audio  # noqa: E402
