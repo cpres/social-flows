@@ -320,9 +320,13 @@ over them. Lanes say what's playing; scenes say what's on screen.
   changes (it snaps to a cut). Under 1s, the two scenes merge.
 - **Framing per slot:** a part keeps a framing for each slot shape: full
   frame, half, square. So reframing it for the bottom half doesn't touch its
-  full-frame crop. Drag the window in its slot to reframe. In a slot, new B
-  parts start framed low (hands are low in glasses footage) and A a little
-  above the middle. `Tab` jumps between the A clip and the B part on screen.
+  full-frame crop. Drag the window in its slot to reframe. Until you do, a
+  part in a half or square slot shows the **bottom** of its shot (in glasses
+  footage, where the hands are), in either lane. The same goes for a
+  full-frame shot moving into a slot, as in a relay or a hand off: it's the
+  bottom band that lands in the slot (or the band you framed there), and B
+  growing back to the full frame grows from that same band, so the moves
+  stay seamless. `Tab` jumps between the A clip and the B part on screen.
 - **Transitions:** inside a scene, parts keep their own *Into next part*.
   Where a scene starts, the scene's transition wins, and the part's picker
   says so.

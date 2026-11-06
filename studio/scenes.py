@@ -145,11 +145,14 @@ def slot_shape(scene, lane):
 
 def frame_for(row, shape, lane):
     """A part's framing (focus x, y, zoom) in a slot shape. The full frame
-    is the part's own framing; a half or square slot remembers its own,
-    defaulting low for B (hands are low in glasses footage) and a little
-    above the middle for A. Parts from before slots kept one framing."""
+    is the part's own framing; a half or square slot remembers its own, and
+    until it's framed there shows the bottom of the shot (in glasses
+    footage, where the hands are). A part from before slots that was framed
+    keeps that framing everywhere."""
     legacy = (row["focus_x"], row["focus_y"], row["zoom"] or 1)
-    if shape == "full" or row["frames"] is None:
+    if shape == "full":
+        return legacy
+    if row["frames"] is None and (legacy[0], legacy[1], legacy[2]) != (0.5, 0.5, 1):
         return legacy
     try:
         f = json.loads(row["frames"] or "{}").get(shape)
@@ -157,7 +160,14 @@ def frame_for(row, shape, lane):
         f = None
     if f:
         return (float(f.get("x", 0.5)), float(f.get("y", 0.5)), float(f.get("zoom", 1) or 1))
-    return (legacy[0], 1.0 if lane == "B" else 0.35, 1.0)
+    return (legacy[0], 1.0, 1.0)
+
+
+def band_of(row):
+    """Which band of a part's full frame a half slot shows when the part
+    moves into one (or grows out of one): its half framing, x and y."""
+    fx, fy, _ = frame_for(row, "half", "B")
+    return [round(fx, 3), round(fy, 3)]
 
 
 def clean(scenes, s):

@@ -103,12 +103,16 @@ export function slotShape(sc, lane) {
 }
 
 // A part's framing in a slot shape: {x, y, zoom}.
-export function frameFor(p, shape, lane) {
+// Until it's framed in a half or square slot, a part shows the bottom of its
+// shot there (in glasses footage, where the hands are); a part from before
+// slots that was framed keeps that framing. As scenes.py frame_for.
+export function frameFor(p, shape, lane) {   // eslint-disable-line no-unused-vars
   const legacy = { x: p.focusX, y: p.focusY, zoom: p.zoom || 1 }
-  if (shape === 'full' || p.frames == null) return legacy
-  const f = p.frames[shape]
+  if (shape === 'full') return legacy
+  if (p.frames == null && !(legacy.x === 0.5 && legacy.y === 0.5 && legacy.zoom === 1)) return legacy
+  const f = p.frames?.[shape]
   if (f) return { x: f.x, y: f.y, zoom: f.zoom || 1 }
-  return { x: legacy.x, y: lane === 'B' ? 1 : 0.35, zoom: 1 }
+  return { x: legacy.x, y: 1, zoom: 1 }
 }
 
 // Where each lane sits in a w × h frame: { A: {w, h, x, y}, B: ..., divider }.

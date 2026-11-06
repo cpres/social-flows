@@ -485,7 +485,7 @@
             @split="(v) => setSplit(shownScene, v)"
           >
             <template #A="{ maxH, out, bindA }">
-              <img v-if="handoffShot" class="handoffshot" :src="handoffShot.url" alt="" :style="{ opacity: 1 - handoffShot.fade }" />
+              <img v-if="handoffShot" class="handoffshot" :src="handoffShot.url" alt="" :style="{ opacity: 1 - handoffShot.fade, objectPosition: handoffShot.pos }" />
               <ReelFrame
                 v-if="isA(current) && aNow?.part === current" :key="`edit-${current.mediaId}`" v-bind="frameProps" v-on="frameOn"
                 :out="out" :max-h="maxH" muted
@@ -498,8 +498,12 @@
             </template>
             <template #B="{ maxH, out }">
               <ReelFrame
-                v-if="!isA(current)" :key="`edit-${current.mediaId}`" v-bind="frameProps" v-on="frameOn"
+                v-if="!isA(current) && (selAK < 0 || reelOn)" :key="`edit-${current.mediaId}`" v-bind="frameProps" v-on="frameOn"
                 :out="out" :max-h="maxH"
+              />
+              <ReelFrame
+                v-else-if="shownPart" :key="`b-${shownPart.id}`" :media="shownPart.media" fit="fill" :out="out" :max-h="maxH"
+                cropped muted :lighten="shownPart.lighten" v-bind="focusProps(shownPart, 'B')" :poster-time="shownPart.start"
               />
               <div v-else class="underidle">
                 <img v-if="shownPart" :src="api.thumb(shownPart.media.folder, shownPart.media.file, shownPart.start, 480)" alt="" />
@@ -1860,7 +1864,9 @@ const handoffShot = computed(() => {
   const p = byId.value.get(prev.parts[prev.parts.length - 1])
   if (!p) return null
   const t = p.media.kind === 'video' ? p.start + p.length : 0
-  return { url: api.thumb(p.media.folder, p.media.file, t, 640), fade: Math.min(1, Math.max(0, (within - handoffs.value[k]) / 0.4)) }
+  const f = frameFor(p, 'half', 'B')   // the band of it A's slot shows: the bottom, unless framed
+  return { url: api.thumb(p.media.folder, p.media.file, t, 640), fade: Math.min(1, Math.max(0, (within - handoffs.value[k]) / 0.4)),
+           pos: `${f.x * 100}% ${f.y * 100}%` }
 })
 // The scene coming in, while it does: {type, p}.
 const intoNow = computed(() => {
@@ -2513,6 +2519,7 @@ function onFrameEnded() {
 // Start from the cut you're on (or the next kept one if it's skipped); only
 // go back to the top when the reel just finished and nothing was picked since.
 function playReel() {
+  selA.value = null   // playing: the selection follows the part playing
   let k = kept.value.indexOf(current.value)
   if (parkT.value !== null) {   // from where the playhead was put: the first part ending after it
     k = kept.value.findIndex((x, i) => partEnd(i) > parkT.value + 0.01)

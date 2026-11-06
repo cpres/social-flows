@@ -1310,7 +1310,7 @@ def join_scenes(files, scenes, frames, tails, cfg, workdir, slots=None, hand_f=N
                 # shot alone, full frame) while A and the divider slide out.
                 aw, ah, ax, ay = slots[k - 1]["A"]
                 bw, bh, bx, by = slots[k - 1]["B"]
-                ox, oy = band_offset(slots[k - 1]["B"], w, h)
+                ox, oy = band_offset(slots[k - 1]["B"], w, h, scenes[k - 1].get("band_b"))
                 if axis == "x":
                     a0, a1 = min(ax, bx + bw), max(ax + aw, bx)      # A and the divider beside it
                     block = (a1 - a0, h, a0, 0)
@@ -1328,10 +1328,10 @@ def join_scenes(files, scenes, frames, tails, cfg, workdir, slots=None, hand_f=N
                 graph.append(f"[pt{k}]crop={block[0]}:{block[1]}:{block[2]}:{block[3]}[ab{k}]")
                 graph.append(f"[pm{k}][ab{k}]overlay={old_move}[tr{k}]")
             elif into == "handoff":
-                # The solo frame moves so its middle band lands on A's slot,
+                # The solo frame moves so its band (the bottom, unless framed) lands on A's slot,
                 # while B (and the divider) come in from their side.
                 aw, ah, ax, ay = slots[k]["A"]
-                ox, oy = band_offset(slots[k]["A"], w, h)
+                ox, oy = band_offset(slots[k]["A"], w, h, scenes[k].get("band_a"))
                 bw, bh, bx, by = slots[k]["B"]
                 if axis == "x":
                     bx0, bx1 = min(bx, ax + aw), max(bx + bw, ax)   # B and the divider beside it
@@ -1449,10 +1449,11 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
         relay = bool(sc.get("relay") and sc.get("carry") and moves_in(scenes, k) == "handoff")
         if relay:
             # A relay: the shot before carries on in A's slot and B plays in its own,
-            # each as the middle band of its full frame, so they move in and out seamlessly.
-            lane_files["B"] = (segs_of(k, w, h, solo_fill, tails[k]), band_offset(slots["B"], w, h))
+            # each as a band of its full frame (the bottom, unless framed), so they
+            # move in and out seamlessly.
+            lane_files["B"] = (segs_of(k, w, h, solo_fill, tails[k]), band_offset(slots["B"], w, h, sc.get("band_b")))
             lane_files["A"] = (render_carry(sc["carry"], frames[k] + tails[k], cfg, base_dir, keep_audio, workdir, k, solo_fill),
-                               band_offset(slots["A"], w, h))
+                               band_offset(slots["A"], w, h, sc.get("band_a")))
         elif "B" in slots:
             bw, bh = slots["B"][:2]
             lane_files["B"] = segs_of(k, bw, bh, solo_fill if sc.get("layout") == "soloB" else None, tails[k])
@@ -1472,7 +1473,7 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
             a_play[k] = (path, a, pieces[0][0], rate, solo_fill if sc.get("layout") == "soloA" else "fill")
             if hand_f[k]:
                 lane_files["A"] = hand_off_a(files[k - 1], slots["A"], lane_files["A"], hand_f[k], frames[k] + tails[k],
-                                             cfg, workdir, k)
+                                             cfg, workdir, k, sc.get("band_a"))
         all_slots.append(slots)
         files.append(compose_scene(sc, slots, div, lane_files, frames[k], tails[k], cfg, workdir, k))
         # Where its sound comes from: lane A's clip from where to where (and how fast), or the B parts.
@@ -1621,20 +1622,25 @@ def render_carry(carry, frames, cfg, base_dir, keep_audio, workdir, k, fill):
     return out
 
 
-def band_offset(slot, w, h):
-    """Where A's slot sits in the full frame when the solo frame moves into
-    it: the middle band of that frame, of the slot's size."""
+BAND_DEFAULT = (0.5, 1.0)   # a full-frame shot moving into a half slot shows its bottom (hands are low in glasses footage)
+
+
+def band_offset(slot, w, h, focus=None):
+    """Which band of a full frame a slot shows when a full-frame shot moves
+    into it (or grows out of it): a band of the slot's size, placed by focus
+    (x, y: 0 = left/top, 1 = right/bottom; the bottom by default)."""
     sw, sh = slot[:2]
-    return ((w - sw) // 2 // 2 * 2, 0) if w > h else (0, (h - sh) // 2 // 2 * 2)
+    fx, fy = (min(max(float(v), 0.0), 1.0) for v in (focus or BAND_DEFAULT))
+    return (round((w - sw) * fx) // 2 * 2, 0) if w > h else (0, round((h - sh) * fy) // 2 * 2)
 
 
-def hand_off_a(prev_file, slot, a_file, hold, frames, cfg, workdir, k):
+def hand_off_a(prev_file, slot, a_file, hold, frames, cfg, workdir, k, band=None):
     """Lane A for a scene handed off from a Solo B scene: the middle band of
     that scene's last frame fills A's slot for `hold` frames, then dissolves
     into A (whose sound starts with it)."""
     fps, w, h = cfg["fps"], cfg["width"], cfg["height"]
     sw, sh = slot[:2]
-    ox, oy = band_offset(slot, w, h)
+    ox, oy = band_offset(slot, w, h, band)
     last = workdir / f"scene{k:02d}_from.png"
     run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-sseof", "-0.2", "-i", str(prev_file),
          "-update", "1", "-vf", f"crop={sw}:{sh}:{ox}:{oy}", str(last)])

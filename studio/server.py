@@ -1192,6 +1192,13 @@ def build_config(reel, rows, grid_bpm=None):
         elif sc["layout"] != "soloB" and not lane_rows:
             sc = {**sc, "layout": "soloB"}   # a relay that lost the shot before it, and no lane A
             entry_sc["layout"] = "soloB"
+        # Which band of a full-frame shot a half slot shows as it moves in or
+        # out: the shot handed into A's slot, and B's in a relay (its framing
+        # there, the bottom until it's framed).
+        if sc.get("into") == "handoff" and prev and prev["layout"] == "soloB" and prev["parts"]:
+            entry_sc["band_a"] = scenes_mod.band_of(by_id[prev["parts"][-1]])
+        if relay and sc.get("parts"):
+            entry_sc["band_b"] = scenes_mod.band_of(by_id[sc["parts"][0]])
         if sc["layout"] != "soloB" and not relay:
             a, row = sc["a"], lane_rows[sc["a"]["item"]]
             fx, fy, zoom = scenes_mod.frame_for(row, scenes_mod.slot_shape(sc, "A"), "A")
