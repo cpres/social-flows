@@ -58,7 +58,7 @@ sys.path.insert(0, str(HERE))
 def load_dotenv(*files):
     """KEY=value lines from .env files (the repo's, then studio's) into the
     environment, for API keys kept out of git. Never overrides what the shell
-    already set; # comments, `export ` and quotes are allowed."""
+    already set to something; # comments, `export ` and quotes are allowed."""
     for f in files:
         if not f.is_file():
             continue
@@ -72,7 +72,7 @@ def load_dotenv(*files):
                 v = v[1:-1]
             elif " #" in v:
                 v = v.split(" #", 1)[0].rstrip()
-            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k) and k not in os.environ:
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k) and not os.environ.get(k):   # unset, or set but empty
                 os.environ[k] = v
 
 
