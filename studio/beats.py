@@ -180,6 +180,10 @@ def sections(beat, length, edges):
 VARIATIONS = [("tighter drums", ["tight, punchy drums", "crisp hi-hats"]),
               ("more bass, warmer", ["warm, round bass up front", "warmer tone"]),
               ("sparser, more space", ["sparse arrangement", "more space and air"])]
+# One take at a time: a direction to lean another take (a fresh seed, the
+# settings as they are); "fresh" leans nowhere.
+LEANS = {"drums": VARIATIONS[0], "bass": VARIATIONS[1], "space": VARIATIONS[2],
+         "fresh": ("another take", [])}
 # Adapting a take: ways to change it, each a label, words for the music,
 # lever nudges, and how the energy curve moves. The take keeps its seed and
 # tempo (so it stays close, and still fits the cut).
@@ -517,8 +521,9 @@ def run_job(job, ctx, home, lyria=None):
                     job.say(f"Take {job.takes[i]['n']} didn't come: {msg}", "error")
         ok = sum(t["state"] == "done" for t in job.takes)
         if ok:
-            job.say(f"Done in {time.time() - job.started:.0f}s: {ok} take{'s' if ok != 1 else ''} ready. "
-                    "Play them below; Use in reel puts one on the reel.", "done")
+            job.say(f"Done in {time.time() - job.started:.0f}s: " + (
+                "the take is ready. Play it below; Use in reel puts it on the reel, or try another direction."
+                if ok == 1 else f"{ok} takes ready. Play them below; Use in reel puts one on the reel."), "done")
             job.status = "done"
         else:
             job.status = "failed"

@@ -132,8 +132,10 @@ python3 studio/server.py --open
     *Hits on scene changes*, *End on the last frame*); ten *vibe levers*
     with four presets; the tempo and key they point to (or yours); and the
     prompt, which you can edit.
-  - *Generate 3 takes* makes three, each leaning a different way (tighter
-    drums / more bass, warmer / sparser, more space). *What's happening*
+  - *Generate a take* makes one, from your settings as they are (one at a
+    time, so you only pay for what you listen to). Then *Try another
+    direction* makes one more, leaning a way (tighter drums / more bass,
+    warmer / sparser, more space / just another). *What's happening*
     says what's going on as it goes: the sections laid out, the song
     listened to, each take composing, its audio arriving (how much of it),
     and how it was landed on the last frame.

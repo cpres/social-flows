@@ -17,7 +17,7 @@
         >{{ e.label }}</button>
       </div>
       <button class="btn primary go" :disabled="running || !ready || !!preview?.error" @click="generate()">
-        {{ running ? (job?.takes?.length === 1 ? 'Making a take…' : 'Making takes…') : 'Generate 3 takes' }}
+        {{ running ? (job?.takes?.length === 1 ? 'Making a take…' : 'Making takes…') : 'Generate a take' }}
       </button>
     </header>
 
@@ -61,7 +61,14 @@
             Takes <small class="muted">each exactly the reel's length; the take in the reel is its song</small>
             <button v-if="takes.some((t) => t.starred)" class="link starfilter" :aria-pressed="starOnly" @click="starOnly = !starOnly">{{ starOnly ? 'Show all' : '★ Starred only' }}</button>
           </h3>
-          <p v-if="!takes.length && !running" class="muted small">No takes yet. <b>Generate 3 takes</b> makes three, each leaning a different way.</p>
+          <p v-if="!takes.length && !running" class="muted small">
+            No takes yet. <b>Generate a take</b> makes one from your settings. Listen to it, then try another direction,
+            or <b>Adapt…</b> it to change just one thing.
+          </p>
+          <div v-if="takes.length && !running" class="directions">
+            <span class="muted small">Try another direction</span>
+            <button v-for="d in DIRECTIONS" :key="d.v" class="btn small" :title="d.hint" @click="generate({ lean: d.v })">{{ d.label }}</button>
+          </div>
           <ul>
             <!-- takes being made right now -->
             <li v-for="p in pending" :key="`p${p.n}`" class="take pending" :class="p.state">
@@ -143,6 +150,13 @@ const ENGINES = [
   { v: 'lyria', label: 'Lyria', hint: 'Google Lyria 3 through your OpenRouter account: about $0.08 a take, follows the timing loosely, no seed.' },
 ]
 
+// One take at a time; then another, leaning a direction (a fresh take with the settings as they are).
+const DIRECTIONS = [
+  { v: 'drums', label: 'Tighter drums', hint: 'One more take from your settings, with tight, punchy drums' },
+  { v: 'bass', label: 'More bass, warmer', hint: 'One more take from your settings, warmer with the bass up front' },
+  { v: 'space', label: 'Sparser, more space', hint: 'One more take from your settings, sparer with more air' },
+  { v: 'fresh', label: 'Just another', hint: 'One more take from your settings as they are, started fresh' },
+]
 const reel = ref(null)
 const shelf = ref({ tracks: [] })
 const beat = ref(null)
@@ -469,6 +483,7 @@ onBeforeUnmount(() => {
 .adapt .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .adapt input { font: inherit; font-size: 13px; padding: 6px 8px; }
 .adapt .row { display: flex; gap: 6px; }
+.directions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; padding: 8px 10px; border-radius: 8px; background: rgb(111 147 196 / 10%); }
 .x { margin-left: auto; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 14px; }
 .x:hover { color: var(--danger); }
 </style>

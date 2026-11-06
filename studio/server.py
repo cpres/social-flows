@@ -1699,7 +1699,8 @@ def beat_preview(reel_id: int):
 
 @app.post("/api/reels/{reel_id}/beat/generate")
 def beat_generate(reel_id: int, body: dict = Body(default={})):
-    """Make takes: three from the reel's beat settings; or one Adapted from a
+    """Make a take from the reel's beat settings (body.lean: one of LEANS to
+    lean it a direction; body.count: 3 for three leaning each way); or one Adapted from a
     take (body.adapt: {take, tweaks: [ADAPTS keys], note}: its seed, tempo
     and plan, changed that way); or Rebuild to new length (body.rebuild: the
     take in use, at the reel's length now; it replaces that take in the reel
@@ -1730,7 +1731,8 @@ def beat_generate(reel_id: int, body: dict = Body(default={})):
         else:
             beat = beats_mod.clean(base["beat"])   # the same beat, only longer or shorter
             label = "rebuilt for the new cut"
-    n = 1 if base else 3
+    lean = body.get("lean") if body.get("lean") in beats_mod.LEANS else None
+    n = 1 if base or body.get("count") != 3 else 3
     first = max([t.get("n") or 0 for t in all_takes] + [0]) + 1   # numbered on from the last take
     if engine == "elevenlabs":
         try:
@@ -1771,10 +1773,14 @@ def beat_generate(reel_id: int, body: dict = Body(default={})):
             ctx["from"], ctx["fromN"] = base["id"], base.get("n")
             job.say(f"{'Adapting' if adapt else 'Rebuilding'} take {base.get('n')} ({base.get('label')}): "
                     f"{label}, with its seed and tempo ({base['tempo']} BPM)")
-        else:
+        elif n == 3:
             ctx["seeds"] = [random.randrange(2 ** 31) for _ in range(n)]
             ctx["variations"] = [v for _, v in beats_mod.VARIATIONS]
             ctx["labels"] = [label for label, _ in beats_mod.VARIATIONS]
+        else:   # one take: as set, or leaning one way
+            ctx["seeds"] = [random.randrange(2 ** 31)]
+            ctx["variations"] = [beats_mod.LEANS[lean][1] if lean else []]
+            ctx["labels"] = [beats_mod.LEANS[lean][0] if lean else "as set"]
         beats_mod.run_job(job, ctx, lib.home, lyria)
         if body.get("rebuild") and job.status == "done":
             use_take(reel_id, job.takes[0]["take"])
