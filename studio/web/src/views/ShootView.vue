@@ -11,11 +11,9 @@
         </p>
       </div>
       <button
-        class="btn" @click="weave" :disabled="!media.some((m) => m.kind === 'video')"
-        :title="draftAt ? `Pick up the weave you started (saved ${savedAt(draftAt)})` : 'Cut the clips into parts and interleave them into a reel'"
-      >
-        {{ draftAt ? '⧉ Continue weave draft' : '⧉ Weave a reel' }}
-      </button>
+        v-if="draftAt" class="btn" @click="weave"
+        :title="`Pick up the weave you started (saved ${savedAt(draftAt)})`"
+      >⧉ Continue weave draft</button>
       <button class="btn" @click="makingReel = true" title="Make a reel from everything in this folder, in a style you pick">
         {{ hasSidecar ? 'Turn earlier trims into a reel' : 'Make a reel from this folder' }}
       </button>

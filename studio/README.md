@@ -424,8 +424,10 @@ footage, a poem or an idea, with its words on screen as they're said.
   lines, on the reel's clock. *Play reel* plays the voice with the song lowered
   under it and shows the captions over the frame.
 
-**Weave.** Long clips are dull watched end to end. *Weave a reel* (on a shoot's
-page, or offered right after an import) cuts each clip into a few parts and
+**Weave.** Long clips are dull watched end to end. The *Weave* style (in *Make
+a reel from this folder* on a shoot's page, or offered right after an import;
+a weave left part way is picked up with *Continue weave draft*) cuts each clip
+into a few parts and
 interleaves them: a bit of clip 1, an early bit of clip 2, of clip 3, then back
 for later bits (`1a 2a 3a ▣ 1b 2b ▣ 1c 2c ▣`), so several things seem to happen
 at once. It's a four-step wizard that makes a normal reel:
