@@ -1365,16 +1365,20 @@ watch(() => settings.music, () => { stopListening(); loadBeats() })
 // The song position (seconds into the file) where the reel begins.
 const songT0 = computed(() => (synced.value && grid.value ? grid.value.songT0 : Number(settings.musicStart) || 0))
 
+// The song ran out before the reel: the clock carries on from there without it.
+let songOver = null   // {t, at}: where the song ended on the reel's clock, and when
 function startSong(at) {
   const a = audioEl.value
   if (!a) return
+  songOver = null
   a.volume = songOut(at)
   a.currentTime = songT0.value + at
-  a.play().catch(() => {})
+  if (a.duration && songT0.value + at >= a.duration - 0.05) songOver = { t: at, at: performance.now() }   // past the song's end
+  else a.play().catch(() => {})
   cancelAnimationFrame(songRaf)
   const tick = () => {
     if (!reelOn.value) return
-    const t = a.currentTime - songT0.value
+    const t = songOver ? songOver.t + (performance.now() - songOver.at) / 1000 : a.currentTime - songT0.value
     songClock.value = t
     a.volume = songOut(t)   // its level under the voice, and the music fader as it moves
     const k = reelIdx.value
@@ -1384,8 +1388,12 @@ function startSong(at) {
   songRaf = requestAnimationFrame(tick)
 }
 function onSongEnded() {
-  if (reelOn.value) { stopReel(); restart = true }
   listening.value = false
+  if (!reelOn.value) return
+  // More reel than song: keep playing to the end of the reel, on the clock alone.
+  const t = (audioEl.value?.duration || 0) - songT0.value
+  if (t < reelLength.value - 0.05) songOver = { t, at: performance.now() }
+  else { stopReel(); restart = true }
 }
 function listen() {
   const a = audioEl.value
