@@ -109,45 +109,40 @@ python3 studio/server.py --open
   `MUSIC_DIR`), then pick one under the reel's *Settings → Music*. Set where the
   song starts, and *Listen* to check it. Play reel plays the song and moves
   through the parts in time with it.
-- **Make a track for this reel** (✨ under *Settings → Music*) has AI music
-  made to fit the reel: Google's Lyria 3 through OpenRouter, as long as the
-  reel runs, building up and breaking down across it (intro, build, drop,
-  breakdown, outro, scaled to the length, on whole bars). Pick songs from the
-  shelf to take the feel from. Lyria only takes words, so the songs are
-  measured here (tempo, key, tone, how beat-driven) and described; nothing
-  is uploaded. The reel's length comes from the engine's own plan at that
-  tempo (beats when cutting on the beat, else your lengths, plus the end
-  card), so pick your parts first. *Show the plan* shows the length, the arc
-  and the prompt, which you can edit before *Make it*. The track lands on
-  the shelf (category *AI*, its prompt in the file's comment tag) and
-  becomes the reel's song. *Pro* (about $0.08 a song) follows the reel's
-  length; *Clip* is always 30s (about $0.04), for trying prompts. Needs
-  `OPENROUTER_API_KEY` set in the shell that runs `run.sh` (or the key in
-  `~/.config/openrouter/key`), and `--beat` for measuring the songs.
-  OpenRouter's replies are kept in `~/Footage/.studio/music/ai/`. To try
-  prompts without the studio: `python3 studio/compose.py --seconds 30 --ref
-  song.mp3 --dry-run`.
-- **Generate a beat** (the second tab under *Settings → Music*, next to
-  *Library*) plans a beat made for this reel. *Start from* a song category
-  (its first song, or pick one), a song with no category, or *From
-  scratch*: the song only sets the groove and sound (measured here: tempo,
-  key, tone; needs `--beat`), it's never copied. *Energy over the reel* is
-  a curve from calm to peak across the reel's exact length, with your
-  scenes under it and dashed lines at the scene changes: *Follow my scenes*
-  (low while A plays alone, building through splits, peaking on Solo B,
-  cooling at the end), *Arc*, *Slow build*, *Two peaks* or *Steady*; drag a
-  point, click the curve to add one, double-click (or `Delete`) to remove
-  one, arrow keys to nudge. *Hits on scene changes* puts a fill, riser or
-  drop on each; *End on the last frame* resolves the last bar exactly at
-  the end (else it fades out). Ten *vibe levers* (Funky … Earthy, 0–5;
-  click a notch, click the top one again to lower it) and four presets
-  (Garden morning, Ecstatic dance, Street grit, Lo-fi chill) set the
-  sound; the tempo (88 + 7·Upbeat − 5·Chill + 3·Ecstatic + Funky) and key
-  (major from Happy 3, dorian at 1–2, minor at 0, on the song's tonic)
-  follow from them unless you type your own. When cutting on the beat, the
-  reel's length is worked out at that tempo. *What gets asked for* shows
-  the prompt, which you can edit. It's all kept with the reel. Making the
-  takes comes next (ElevenLabs).
+- **Make a beat for this reel** (✨ under *Settings → Music*) opens the
+  **beat studio**, a full-screen page (`Esc` or ← goes back to the reel)
+  for AI music made to the reel's exact length.
+  - Across the top, a picture of the music: the planned sections (Intro,
+    Build, Peak…), your energy curve, the hits on your scene changes, and
+    bars pulsing at the beat's tempo. While takes are made it shows each one
+    arriving; playing a take shows its waveform, a playhead (click to jump)
+    and live frequencies.
+  - Under it, the plan: *Start from* a song category, a song or scratch (the
+    song sets the groove and sound, measured here: tempo, key, tone; needs
+    `--beat`; never copied or sent); *Energy over the reel* (*Follow my
+    scenes*, *Arc*, *Slow build*, *Two peaks*, *Steady*, or drag the points;
+    *Hits on scene changes*, *End on the last frame*); ten *vibe levers*
+    with four presets; the tempo and key they point to (or yours); and the
+    prompt, which you can edit.
+  - *Generate 3 takes* makes three, each leaning a different way (tighter
+    drums / more bass, warmer / sparser, more space). *What's happening*
+    says what's going on as it goes: the sections laid out, the song
+    listened to, each take composing, its audio arriving (how much of it),
+    and how it was landed on the last frame.
+  - **ElevenLabs** (the default) gets a composition plan: a section per
+    stretch of the curve, cut at your scene changes, each exactly as long as
+    asked, so the take is the reel's length and the hits land on the cuts.
+    It needs `ELEVENLABS_API_KEY` in `.env` (next to `studio/`) and a paid
+    ElevenLabs plan (the free plan can't use Music). **Lyria** (through
+    OpenRouter, `OPENROUTER_API_KEY`, about $0.08 a take) is the other
+    engine: it follows the timing loosely.
+  - Every take is cut or padded to exactly the reel's length (the last bar
+    resolving on the last frame, or a fade if you'd rather) and kept in
+    `~/Footage/.studio/beats/<reel>/` with what it was asked for and its
+    seed. *More like this* makes one more with a take's seed and today's
+    levers. *Use in reel* puts it on the music shelf (category *AI*) as the
+    reel's song. If the cut changes after, the take in the reel offers
+    *Rebuild to* the new length (same seed), which replaces it in the reel.
 - **Song names and categories:** songs show by name and artist, read from the
   file's tags or, for Pixabay downloads (`artist-title-words-123456.mp3`), from
   the file name. ✎ next to the song gives it your own name and categories (a

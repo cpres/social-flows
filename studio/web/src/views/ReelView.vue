@@ -78,12 +78,8 @@
       <div class="sgroup music">
         <div class="musichead">
           <h3>Music</h3>
-          <div class="musictabs" role="tablist">
-            <button role="tab" class="btn small" :class="{ primary: musicTab === 'library' }" :aria-selected="musicTab === 'library'" @click="musicTab = 'library'">Library · {{ shelf.tracks.length }} song{{ shelf.tracks.length === 1 ? '' : 's' }}</button>
-            <button role="tab" class="btn small" :class="{ primary: musicTab === 'generate' }" :aria-selected="musicTab === 'generate'" @click="openBeat">Generate a beat</button>
-          </div>
+          <RouterLink class="btn small primary beatbtn" :to="`/reel/${id}/beat`" @click="saver.flushAll()" title="Make a beat for this reel: its exact length, building up and cooling down with your scenes">✨ Make a beat for this reel</RouterLink>
         </div>
-        <template v-if="musicTab === 'library'">
         <div class="musicrow">
           <div class="field song">
             <label for="reel-song">Song</label>
@@ -108,7 +104,9 @@
           <template v-else-if="beatData"> {{ Math.round(beatData.bpm) }} bpm · one beat = {{ (60 / beatData.bpm).toFixed(2) }}s.</template>
           <span v-if="musicError" class="warn"> {{ musicError }}</span>
         </p>
-        <ComposePanel :reel-id="id" :shelf="shelf" :before-ask="() => saver.flushAll()" @made="composed" />
+        <p v-if="settings.beat?.inUse && settings.music && settings.music.startsWith('Beat ')" class="small">
+          ♪ A beat from the <RouterLink :to="`/reel/${id}/beat`">beat studio</RouterLink> is this reel's song.
+        </p>
         <div class="musicrow" v-if="settings.music">
           <label class="field check">
             <span><input type="checkbox" v-model="settings.beatSync" :disabled="!shelf.beatDetection" /> Cut on the beat</span>
@@ -128,12 +126,6 @@
             <small v-else>Cut to the song, but leave it out, to add the same song in Instagram (which licenses it).</small>
           </label>
         </div>
-        </template>
-        <BeatBuilder
-          v-else-if="settings.beat" v-model="settings.beat" :reel-id="id" :reel-name="reel.name" :shelf="shelf"
-          :scenes="sceneList.map((sc, k) => ({ layout: sc.layout, start: sceneTimes[k].start, end: sceneTimes[k].end }))"
-          :reel-length="reelLength"
-        />
       </div>
       <div class="sgroup cards">
         <h3>Title &amp; end card</h3>
@@ -833,9 +825,6 @@ import VoicePanel from '../components/VoicePanel.vue'
 import ClipCard from '../components/ClipCard.vue'
 import SendToPhone from '../components/SendToPhone.vue'
 import SongPicker from '../components/SongPicker.vue'
-import ComposePanel from '../components/ComposePanel.vue'
-import BeatBuilder from '../components/BeatBuilder.vue'
-import { newBeat, sceneFractions } from '../beat'
 import ReelFrame from '../components/ReelFrame.vue'
 import { SHAPES, shapeOf, shapeRatio } from '../shapes'
 import { quietCut, topSource } from '../stack'
@@ -861,14 +850,6 @@ const loading = ref(true)
 const error = ref('')
 const saveState = ref('')
 const showSettings = ref(false)
-// Settings › Music: the songs on the shelf, or the beat builder.
-const musicTab = ref('library')
-function openBeat() {
-  if (!settings.beat) {
-    settings.beat = newBeat(sceneFractions(sceneList.value.map((sc, k) => ({ layout: sc.layout, ...sceneTimes.value[k] })), reelLength.value))
-  }
-  musicTab.value = 'generate'
-}
 const showVoice = ref(false)
 const LOGO_CHOICES = [{ v: '', label: 'None' }, { v: 'oufp', label: 'OUFP' },
   { v: 'garden-steward', label: 'Garden Steward' }, { v: 'both', label: 'Both' }]
@@ -1359,13 +1340,6 @@ function setMusicStart(e) {
   const t = parseTime(e.target.value)
   if (!isNaN(t) && t >= 0) settings.musicStart = Math.round(t * 100) / 100
   e.target.value = fmtTime(settings.musicStart || 0)
-}
-
-// A track made for this reel (ComposePanel): on the shelf now, and the reel's song.
-function composed(made) {
-  shelf.value = made.shelf
-  settings.music = made.file
-  settings.musicStart = 0
 }
 
 async function loadShelf() {
@@ -2422,7 +2396,7 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .settings { display: block; }
 .musichead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .musichead h3 { margin: 0; }
-.musictabs { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 10px; }
+.beatbtn { text-decoration: none; }
 .settings .wide { grid-column: span 2; }
 .field.check span { display: flex; gap: 6px; align-items: center; color: var(--ink); font-size: 14px; }
 .field.check small { font-size: 12px; }

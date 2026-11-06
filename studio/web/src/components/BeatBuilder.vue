@@ -1,15 +1,5 @@
 <template>
   <div class="beatb">
-    <header class="bhead">
-      <div>
-        <h4>Beat for {{ reelName }}</h4>
-        <p class="muted small">
-          Made to the reel's exact length · <b class="mono">{{ fmtTime(length) }}</b>
-          <template v-if="synced"> at {{ tempo }} BPM (its parts are whole beats)</template> · rebuilds if you change the cut
-        </p>
-      </div>
-    </header>
-
     <!-- 1 · Start from -->
     <section class="bsec">
       <h5>1 · Start from <small class="muted">a song in your Reels folder sets the groove and sound palette; nothing is copied note for note</small></h5>
@@ -135,21 +125,14 @@
           <textarea rows="6" :value="prompt" @input="beat.prompt = $event.target.value"></textarea>
           <small v-if="beat.prompt != null" class="muted">Edited: changes above won't change it until you go back to the built one.</small>
         </label>
-        <button class="btn primary gen" disabled title="Generating comes in the next step: it needs ELEVENLABS_API_KEY">Generate 3 takes</button>
-        <p class="muted small">Three takes per run. Changing one lever and pressing “More like this” on a take keeps its seed, so only that quality shifts.</p>
       </section>
     </div>
 
-    <!-- 4 · Takes -->
-    <section class="bsec">
-      <h5>4 · Takes <small class="muted">each one is exactly the reel's length; the music row in the editor shows the one in use</small></h5>
-      <p class="muted small empty">No takes yet. <b>Generate 3 takes</b> makes three, each {{ fmtTime(length) }} long.</p>
-    </section>
   </div>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { api } from '../api'
 import { fmtTime } from '../time'
 import {
@@ -160,8 +143,8 @@ const props = defineProps({
   reelId: { type: Number, required: true },
   reelName: { type: String, default: '' },
   shelf: { type: Object, required: true },
-  scenes: { type: Array, default: () => [] },   // [{ layout, start, end }] on the reel's clock now
-  reelLength: { type: Number, default: 0 },      // its length now (with the song it has)
+  // The reel at the beat's tempo, from the server: { seconds, synced, scenes: [{ layout, start, end }] }.
+  timeline: { type: Object, default: () => ({ seconds: 0, scenes: [] }) },
 })
 const beat = defineModel({ type: Object, required: true })
 
@@ -213,23 +196,11 @@ function setTempo(v) {
 }
 function setKey(v) { beat.value.key = String(v).trim() || null }
 
-// The reel's length at this tempo: the server's plan (parts are whole beats when cutting on the beat).
-const length = ref(props.reelLength)
-const synced = ref(false)
-let lenTimer
-watch(() => [tempo.value, props.reelLength, props.scenes.length], () => {
-  clearTimeout(lenTimer)
-  lenTimer = setTimeout(async () => {
-    try {
-      const r = await api.beatLength(props.reelId, tempo.value)
-      if (r?.seconds) { length.value = r.seconds; synced.value = r.synced }
-    } catch { length.value = props.reelLength }
-  }, 250)
-}, { immediate: true })
-onBeforeUnmount(() => clearTimeout(lenTimer))
+// The reel's length at this tempo (the studio asks the server: parts are whole beats when cutting on the beat).
+const length = computed(() => props.timeline.seconds || 0)
 
 // ---------------------------------------------------------------- the curve
-const fractions = computed(() => sceneFractions(props.scenes, props.reelLength))
+const fractions = computed(() => sceneFractions(props.timeline.scenes || [], props.timeline.seconds))
 const edges = computed(() => fractions.value.slice(1).map((s) => s.a))
 const roles = computed(() => fractions.value.map((s, k) => sceneRole(beat.value.curve, s, k, fractions.value.length)))
 // "Follow my scenes" follows them as they change.
@@ -314,14 +285,12 @@ const built = computed(() => beatPrompt({
   length: length.value, edges: edges.value.map((f) => f * length.value),
 }))
 const prompt = computed(() => beat.value.prompt ?? built.value)
-defineExpose({ built, length, tempo, key })
+defineExpose({ built, prompt, length, tempo, key, keyFrom, tempoFrom })
 </script>
 
 <style scoped>
 .beatb { --b-blue: #6f93c4; --b-blue-soft: rgb(111 147 196 / 18%); display: flex; flex-direction: column; gap: 14px; margin-top: 10px; }
 :root[data-theme='dark'] .beatb { --b-blue: #8fb0dc; --b-blue-soft: rgb(143 176 220 / 16%); }
-.bhead h4 { margin: 0; color: var(--forest); font-size: 20px; }
-.bhead p { margin: 2px 0 0; }
 .bsec { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--paper); }
 .bsec h5 { margin: 0 0 10px; font-size: 14px; }
 .bsec h5 small { font-weight: 400; margin-left: 6px; }
@@ -378,6 +347,4 @@ defineExpose({ built, length, tempo, key })
 .dcard input.big { font-size: 22px; font-weight: 700; border: 0; background: transparent; color: inherit; padding: 0; width: 100%; }
 .dcard small .link { margin-left: 6px; }
 .under textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; line-height: 1.45; }
-.gen { width: 100%; padding: 10px; font-size: 15px; }
-.empty { margin: 0; }
 </style>

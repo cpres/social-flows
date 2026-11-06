@@ -72,6 +72,15 @@ export const api = {
   voiceEnvelope: (folder, file) => fetch(`/api/voice/envelope/${enc(folder)}/${enc(file)}`).then(json),
   // The beat builder: the reel's length at a tempo, and a song's measured style.
   beatLength: (reelId, bpm) => fetch(`/api/reels/${reelId}/beat/length?bpm=${bpm}`).then(json),
+  beatPreview: (reelId) => fetch(`/api/reels/${reelId}/beat/preview`).then(json),
+  beatGenerate: (reelId, body = {}) => send('POST', `/api/reels/${reelId}/beat/generate`, body),
+  beatJob: (jobId) => fetch(`/api/beat/jobs/${jobId}`).then(json),
+  beatLastJob: (reelId) => fetch(`/api/reels/${reelId}/beat/job`).then(json),
+  beatTakes: (reelId) => fetch(`/api/reels/${reelId}/beat/takes`).then(json),
+  beatTakeAudio: (reelId, take) => `/api/reels/${reelId}/beat/takes/${take}/audio`,
+  beatTakeEnvelope: (reelId, take) => fetch(`/api/reels/${reelId}/beat/takes/${take}/envelope`).then(json),
+  beatUse: (reelId, take) => send('POST', `/api/reels/${reelId}/beat/takes/${take}/use`),
+  beatDelete: (reelId, take) => send('DELETE', `/api/reels/${reelId}/beat/takes/${take}`),
   musicStyle: (name) => fetch(`/api/music/${enc(name)}/style`).then(json),
   // Weave's draft for a shoot ({ folder }) or a reel being re-woven ({ reel }).
   weaveDraft: (q) => fetch(`/api/weave/draft?${new URLSearchParams(q)}`).then(json),

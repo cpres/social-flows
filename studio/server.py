@@ -21,11 +21,13 @@ import hashlib
 import json
 import math
 import os
+import random
 import re
 import shutil
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
@@ -1481,6 +1483,35 @@ def reel_length(reel_id, bpm):
     return round(engine.top_length(top, under) if top else under, 2), bool(beats)
 
 
+def reel_timeline(reel_id, bpm):
+    """The reel at this tempo, as the engine plans it: (seconds, synced,
+    [{layout, start, end}] per scene)."""
+    import montage as engine
+    reel, rows = reel_and_rows(reel_id)
+    cfg = build_config(reel, rows, grid_bpm=bpm)
+    if not cfg["sources"]:
+        raise HTTPException(400, "Nothing is kept in this reel yet.")
+    cfg.update({"fps": 30})
+    try:
+        voice = engine.load_voice(cfg, ROOT)
+        beats = [i * 60.0 / bpm for i in range(4000)] if settings_of(reel).get("beatSync") else None
+        plan, _ = engine.build_plan(cfg, ROOT, beats, voice)
+    except SystemExit as e:
+        raise HTTPException(400, str(e))
+    scenes, t = [], 0.0
+    layouts = [sc.get("layout", "soloB") for sc in cfg.get("scenes") or []]
+    for seg in plan:
+        k = seg.get("scene") or 0
+        if not scenes or scenes[-1]["k"] != k:
+            scenes.append({"k": k, "layout": layouts[k] if k < len(layouts) else "soloB", "start": round(t, 3)})
+        t += seg["length"]
+        scenes[-1]["end"] = round(t, 3)
+    seconds, synced = reel_length(reel_id, bpm)
+    if scenes:
+        scenes[-1]["end"] = seconds
+    return seconds, synced, [{k: v for k, v in sc.items() if k != "k"} for sc in scenes]
+
+
 def reference(names):
     """The shelf songs to take the style from, measured, plus their categories."""
     shelf_now = {t["name"]: t for t in music_shelf()["tracks"]}
@@ -1527,8 +1558,8 @@ def beat_length(reel_id: int, bpm: float = 100):
     beats when cutting on the beat): {seconds, synced}."""
     if not beats_mod.TEMPO_RANGE[0] <= bpm <= beats_mod.TEMPO_RANGE[1]:
         raise HTTPException(400, "Pick a tempo between 60 and 180 bpm.")
-    seconds, synced = reel_length(reel_id, bpm)
-    return {"seconds": seconds, "synced": synced, "bpm": bpm}
+    seconds, synced, scenes = reel_timeline(reel_id, bpm)
+    return {"seconds": seconds, "synced": synced, "bpm": bpm, "scenes": scenes}
 
 
 @app.get("/api/music/{name}/style")
@@ -1543,6 +1574,214 @@ def music_style(name: str):
         raise
     r = refs[0]
     return {"measured": True, "bpm": r["bpm"], "key": r["key"], "words": r["words"]}
+
+
+# ---------------------------------------------------------------- the beat studio
+
+beat_jobs = {}   # job id -> beats.Job; and reel id -> its latest job id
+beat_latest = {}
+
+
+def beat_context(reel_id, beat, length=None, measure=True, say=None):
+    """What a run of takes needs from the reel: the length and scene edges at
+    the beat's tempo, and the style (the reference song measured, its
+    categories, the levers' words, tempo and key)."""
+    reel, _ = reel_and_rows(reel_id)
+    ref, genres, ref_line = None, [], ""
+    src = beat["from"]
+    if src["kind"] == "song" and measure:
+        track = next((t for t in music_shelf()["tracks"] if t["name"] == src["name"]), None)
+        genres = [c for c in (track or {}).get("categories", []) if c.lower() != "ai"]
+        try:
+            path = shelf.path_of(src["name"])
+            if say and path and path.exists() and shelf.cache_file(path).name not in measured:
+                say(f"Listening to {(track or {}).get('title') or src['name']} for its tempo, key and tone "
+                    "(the first time takes a little while)…")
+            ref = reference([src["name"]])[0][0]
+            ref_line = (f"Taking the groove from {ref['title']}: "
+                        + (f"{round(ref['bpm'])} BPM, " if ref["bpm"] >= 40 else "")
+                        + f"{ref['key']}, {', '.join(ref['words'])}")
+        except HTTPException:
+            ref_line = f"Taking the style from {src.get('category') or src['name']} (its categories; measuring it needs --beat)"
+    tempo = beats_mod.tempo_of(beat)
+    key = beats_mod.key_of(beat, ref["key"] if ref else "")
+    seconds, _, scenes = reel_timeline(reel_id, tempo)
+    style = {"genres": genres, "words": ref["words"] if ref else [], "levers": beats_mod.lever_words(beat),
+             "tempo": tempo, "key": key}
+    return {"beat": beat, "length": length or seconds, "edges": [sc["start"] for sc in scenes[1:]],
+            "style": style, "ref_line": ref_line, "reel_name": reel["name"]}
+
+
+def beat_prompt_text(ctx):
+    s = ctx["style"]
+    head = f"{s['tempo']} BPM, {s['key']}"
+    if s["genres"]:
+        head += f", {', '.join(s['genres'])}"
+    return ". ".join(x for x in [head, ", ".join(s["levers"] + s["words"])] if x) + "."
+
+
+@app.get("/api/reels/{reel_id}/beat/preview")
+def beat_preview(reel_id: int):
+    """The beat as it would be asked for now: the reel's length and scenes at
+    its tempo, and the sections the music is cut into (the same plan a run
+    uses), for the studio's picture of it."""
+    reel, _ = reel_and_rows(reel_id)
+    beat = beats_mod.clean(settings_of(reel).get("beat"))
+    if not beat:
+        raise HTTPException(400, "No beat set up yet")
+    tempo = beats_mod.tempo_of(beat)
+    seconds, synced, scenes = reel_timeline(reel_id, tempo)
+    try:
+        secs = beats_mod.sections(beat, seconds, [sc["start"] for sc in scenes[1:]])
+    except beats_mod.BeatError as e:
+        secs, err = [], str(e)
+    else:
+        err = None
+    return {"seconds": seconds, "synced": synced, "tempo": tempo, "scenes": scenes, "sections": secs, "error": err}
+
+
+@app.post("/api/reels/{reel_id}/beat/generate")
+def beat_generate(reel_id: int, body: dict = Body(default={})):
+    """Make takes: three from the reel's beat settings, or one More like this
+    (body.like: a take, keeping its seed and lean with today's levers), or
+    Rebuild to new length (body.rebuild: the take in use, at the reel's
+    length now; it replaces that take in the reel when done)."""
+    reel, _ = reel_and_rows(reel_id)
+    s = settings_of(reel)
+    beat = beats_mod.clean(s.get("beat"))
+    if not beat:
+        raise HTTPException(400, "Open the beat studio and set up a beat first.")
+    running = beat_jobs.get(beat_latest.get(reel_id))
+    if running and running.status == "running":
+        return running.view()
+    engine = body.get("engine") if body.get("engine") in beats_mod.ENGINES else beat["engine"]
+    base = None
+    if body.get("like") or body.get("rebuild"):
+        tid = str(body.get("like") or body.get("rebuild"))
+        base = next((t for t in beats_mod.list_takes(lib.home, reel_id) if t["id"] == tid), None)
+        if not base:
+            raise HTTPException(404, "No such take")
+        engine = base["engine"]
+        if body.get("rebuild"):
+            beat = beats_mod.clean(base["beat"])   # the same beat, only longer or shorter
+    n = 1 if base else 3
+    if engine == "elevenlabs":
+        try:
+            beats_mod.eleven_key()
+        except beats_mod.BeatError as e:
+            raise HTTPException(400, str(e))
+    job = beats_mod.Job(reel_id, engine, n)
+    beat_jobs[job.id] = job
+    beat_latest[reel_id] = job.id
+
+    def lyria(text):
+        try:
+            audio, _ = compose.call(text, compose.MODELS["pro"], lib.home / "music" / "ai")
+            return audio
+        except compose.ComposeError as e:
+            raise beats_mod.BeatError(str(e))
+
+    def go():
+        # Working out the reel and the song can take a while (measuring a song
+        # the first time): the run has started, and says so, meanwhile.
+        try:
+            ctx = beat_context(reel_id, beat, say=job.say)
+        except (beats_mod.BeatError, HTTPException) as e:
+            job.status, job.error = "failed", getattr(e, "detail", None) or str(e)
+            job.say(job.error, "error")
+            job.finished = time.time()
+            return
+        ctx["prompt"] = beat_prompt_text(ctx)
+        if base:
+            ctx["seeds"] = [base.get("seed") or random.randrange(2 ** 31)]
+            ctx["variations"] = [base.get("variation") or []]
+            ctx["labels"] = [("rebuilt to " + beats_mod.clock(ctx["length"])) if body.get("rebuild")
+                             else f"more like {base['label']}"]
+        else:
+            ctx["seeds"] = [random.randrange(2 ** 31) for _ in range(n)]
+            ctx["variations"] = [v for _, v in beats_mod.VARIATIONS]
+            ctx["labels"] = [label for label, _ in beats_mod.VARIATIONS]
+        beats_mod.run_job(job, ctx, lib.home, lyria)
+        if body.get("rebuild") and job.status == "done":
+            use_take(reel_id, job.takes[0]["take"])
+            job.say("The rebuilt take is in the reel now.", "done")
+    threading.Thread(target=go, daemon=True).start()
+    return job.view()
+
+
+@app.get("/api/beat/jobs/{job_id}")
+def beat_job(job_id: str):
+    job = beat_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "No such run (the studio restarted?)")
+    return job.view()
+
+
+@app.get("/api/reels/{reel_id}/beat/job")
+def beat_last_job(reel_id: int):
+    """The reel's latest run, if the studio has one (to pick it up after a reload)."""
+    job = beat_jobs.get(beat_latest.get(reel_id))
+    return job.view() if job else None
+
+
+@app.get("/api/reels/{reel_id}/beat/takes")
+def beat_takes(reel_id: int):
+    keep = ("id", "run", "n", "label", "engine", "model", "seed", "length", "generated", "tempo", "key",
+            "prompt", "sections", "created", "took")
+    return [{k: t.get(k) for k in keep} for t in beats_mod.list_takes(lib.home, reel_id)]
+
+
+def beat_take_path(reel_id, take_id):
+    if not re.fullmatch(r"[\w-]{1,40}", take_id):
+        raise HTTPException(404, "No such take")
+    p = beats_mod.takes_dir(lib.home, reel_id) / f"{take_id}.mp3"
+    if not p.exists():
+        raise HTTPException(404, "No such take")
+    return p
+
+
+@app.get("/api/reels/{reel_id}/beat/takes/{take_id}/audio")
+def beat_take_audio(reel_id: int, take_id: str):
+    return FileResponse(beat_take_path(reel_id, take_id), media_type="audio/mpeg")
+
+
+@app.get("/api/reels/{reel_id}/beat/takes/{take_id}/envelope")
+def beat_take_envelope(reel_id: int, take_id: str):
+    return audio.envelope(beat_take_path(reel_id, take_id), CACHE)
+
+
+def use_take(reel_id, take_id):
+    """Put a take on the reel: copied to the music shelf (category AI) and
+    made the reel's song, from its start."""
+    src = beat_take_path(reel_id, take_id)
+    meta = json.loads(src.with_suffix(".json").read_text())
+    reel, _ = reel_and_rows(reel_id)
+    safe = re.sub(r"[^\w\- ]+", "", reel["name"]).strip()[:40] or "reel"
+    name = f"Beat {safe} take {meta['n']} {take_id}.mp3"
+    shelf.folder.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, shelf.folder / name)
+    with lib.connect() as db:
+        db.execute("INSERT OR REPLACE INTO songs (name, title, artist, categories) VALUES (?, ?, ?, ?)",
+                   (name, f"Beat · {reel['name']} · {meta['label']}", "ElevenLabs" if meta["engine"] == "elevenlabs"
+                    else "Lyria", json.dumps(["AI"])))
+    s = settings_of(reel)
+    beat = beats_mod.clean(s.get("beat")) or {}
+    beat["inUse"] = {"take": take_id, "length": meta["length"], "tempo": meta["tempo"]}
+    update_reel(reel_id, {"settings": {"music": name, "musicStart": 0, "beat": beat}})
+    return name
+
+
+@app.post("/api/reels/{reel_id}/beat/takes/{take_id}/use")
+def beat_use(reel_id: int, take_id: str):
+    return {"music": use_take(reel_id, take_id)}
+
+
+@app.delete("/api/reels/{reel_id}/beat/takes/{take_id}")
+def beat_delete(reel_id: int, take_id: str):
+    p = beat_take_path(reel_id, take_id)
+    p.unlink()
+    p.with_suffix(".json").unlink(missing_ok=True)
+    return {"ok": True}
 
 
 @app.post("/api/reels/{reel_id}/compose/plan")
