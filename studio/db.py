@@ -114,7 +114,8 @@ DEFAULT_SETTINGS = {
     "musicVolume": 0.8,
     "musicInVideo": True,   # False: cut to the song but leave it out (add it in Instagram)
     "beatSync": False,      # when on, parts are whole beats long
-    "beatsPerCut": 4,       # default beats per part
+    "beatsPerCut": 4,       # beats per part when beatsFit is "fixed"
+    "beatsFit": "nearest",  # parts without their own beats: the whole beats nearest their length
     "fit": "fill",
     "shape": "tall",        # tall (9:16) | wide (16:9, YouTube) | portrait (4:5) | square (1:1); a wide Stack is side by side
     "transition": "cut",    # between parts, unless a part picks its own

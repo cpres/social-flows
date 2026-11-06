@@ -227,6 +227,7 @@ def clean_settings(db, reel_id, s):
         s["glassesAudio"] = glasses_of(s)
         s["originalAudio"] = s["glassesAudio"] != "off"   # what older code reads
     s["duckMusic"] = bool(s.get("duckMusic", True))
+    s["beatsFit"] = "fixed" if s.get("beatsFit") == "fixed" else "nearest"
     for layer, k in MIX_KEYS.items():
         if k in s:
             s[k] = mix_of(s, layer)
@@ -265,8 +266,30 @@ def unit(v):
 
 def beats_of(v):
     """A part's beats: whole ones, or ½ and ¼ for quick photos (0 = the reel's)."""
-    n = round(min(max(float(v or 0), 0.0), 64.0) * 4) / 4
+    n = round(min(max(float(v or 0), 0.0), 2048.0) * 4) / 4
     return int(n) if n == int(n) else n
+
+
+def nearest_beats(length, period, photo=False):
+    """The whole number of beats nearest a part's length (at least one; a
+    photo can be ½ or ¼). The same as nearestBeats in ReelView.vue."""
+    v = float(length or 0) / period if period else 0
+    if photo and v < 0.375:
+        return 0.25
+    if photo and v < 0.75:
+        return 0.5
+    return int(min(max(round(v), 1), 2048))
+
+
+def beat_period(track, start):
+    """One beat of a song, as the reel page measures it: the median gap
+    between its beats from where the reel starts in it."""
+    a = shelf.analyze(track)
+    b = [x for x in a.get("beats") or [] if x >= start - 0.02]
+    if len(b) >= 4:
+        steps = sorted(y - x for x, y in zip(b, b[1:]))
+        return steps[len(steps) // 2]
+    return 60.0 / float(a["bpm"])
 
 
 def pane_of(v):
@@ -1142,6 +1165,12 @@ def build_config(reel, rows, grid_bpm=None):
         raise HTTPException(400, "Add parts to this reel first.")
     track = shelf.path_of(s.get("music")) if grid_bpm is None else None
     synced = bool((track or grid_bpm) and s.get("beatSync"))
+    period = None   # one beat, for rounding parts to their nearest whole beats
+    if synced:
+        try:
+            period = 60.0 / grid_bpm if grid_bpm else beat_period(track, float(s.get("musicStart") or 0))
+        except (ImportError, KeyError, OSError, ValueError, ZeroDivisionError):
+            period = None
     sources, seen, scene_cfg = [], {}, []
     kept_ids = [r["id"] for r in kept]
     for k, sc in enumerate(scenes):
@@ -1206,8 +1235,11 @@ def build_config(reel, rows, grid_bpm=None):
                 entry["hold"] = round(row["length"], 2)
                 entry["in_round"] = "all"
             if synced:
+                # A part's own beats; else the whole beats nearest its length (or the reel's fixed count)
+                fixed = s.get("beatsFit") == "fixed" or not period
                 entry["hold_beats" if row["kind"] == "photo" else "beats"] = (
-                    beats_of(row["beats"]) or int(s.get("beatsPerCut", 4)))
+                    beats_of(row["beats"]) or (int(s.get("beatsPerCut", 4)) if fixed
+                                               else nearest_beats(row["length"], period, row["kind"] == "photo")))
             if n + 1 < len(kept):
                 entry["transition"] = row["transition"] or s.get("transition") or "cut"
             sources.append(entry)

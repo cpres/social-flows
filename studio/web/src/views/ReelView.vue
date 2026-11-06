@@ -115,10 +115,12 @@
             <small v-else>Your lengths are used exactly; the song plays underneath.</small>
           </label>
           <label class="field" v-if="settings.beatSync">
-            Beats per part (default)
-            <select v-model.number="settings.beatsPerCut">
-              <option v-for="b in BEAT_CHOICES" :key="b" :value="b">{{ b }}{{ period ? ` ≈ ${(b * period).toFixed(1)}s` : '' }}</option>
+            Beats per part
+            <select :value="settings.beatsFit === 'fixed' ? settings.beatsPerCut : 'nearest'" @change="setBeatsFit($event.target.value)">
+              <option value="nearest">Nearest to each part's length</option>
+              <option v-for="b in BEAT_CHOICES" :key="b" :value="b">{{ b }} each{{ period ? ` ≈ ${(b * period).toFixed(1)}s` : '' }}</option>
             </select>
+            <small class="muted">{{ settings.beatsFit === 'fixed' ? 'Parts without beats of their own get this many.' : 'Each part keeps about its length, rounded to whole beats.' }}</small>
           </label>
           <label class="field check">
             <span><input type="checkbox" v-model="settings.musicInVideo" /> Put the song in the video</span>
@@ -689,6 +691,10 @@
               >{{ fmtBeats(b) }}</button>
               <button class="btn small" @click="beatsAll(beatsOf(current))" :title="`Make every part ${fmtBeats(beatsOf(current))} beats`">Use on every part</button>
             </div>
+            <small class="muted">
+              {{ fmtBeats(beatsOf(current)) }} beat{{ beatsOf(current) === 1 ? '' : 's' }} ≈ {{ (beatsOf(current) * period).toFixed(1) }}s<template v-if="!current.beats && fitsNearest"> · the nearest to its {{ current.length.toFixed(1) }}s</template>
+              <button v-if="current.beats && fitsNearest" class="link" @click="setBeats(current, 0)" :title="`Back to the whole beats nearest its length (${fmtBeats(nearestBeats(current))})`">↺ nearest to its length ({{ fmtBeats(nearestBeats(current)) }})</button>
+            </small>
           </div>
           <div class="tpick" v-if="!synced && !isA(current) && current.media.kind === 'video'">
             <span class="muted">Length {{ len(current).toFixed(1) }}s</span>
@@ -1217,7 +1223,17 @@ const beatAt = (i) => {
   const k = Math.floor(i)
   return i === k ? at(k) : at(k) + (i - k) * (at(k + 1) - at(k))
 }
-const beatsOf = (p) => p.beats || Number(settings.beatsPerCut) || 4
+// A part's beats when cutting on the beat: its own; else the whole beats
+// nearest its length (a photo can be ½ or ¼), or the reel's fixed count.
+// The same as nearest_beats in server.py.
+function nearestBeats(p) {
+  const v = period.value ? p.length / period.value : 0
+  if (p.media.kind === 'photo' && v < 0.375) return 0.25
+  if (p.media.kind === 'photo' && v < 0.75) return 0.5
+  return Math.min(Math.max(Math.round(v), 1), 2048)
+}
+const fitsNearest = computed(() => settings.beatsFit !== 'fixed' && period.value > 0)
+const beatsOf = (p) => p.beats || (fitsNearest.value ? nearestBeats(p) : Number(settings.beatsPerCut) || 4)
 
 // The reel's stretches, in order: each scene's parts, and for a Solo A
 // scene the time A plays alone (whole beats when cutting on the beat). Each
@@ -1277,6 +1293,10 @@ const beatTicks = computed(() => {
   return out
 })
 
+function setBeatsFit(v) {
+  if (v === 'nearest') settings.beatsFit = 'nearest'
+  else { settings.beatsFit = 'fixed'; settings.beatsPerCut = Number(v) }
+}
 function setBeats(p, n) {
   p.beats = n
   saver.queue(p.id, { beats: n })
