@@ -90,7 +90,20 @@
       <div class="sgroup music">
         <div class="musichead">
           <h3>Music</h3>
-          <RouterLink class="btn small primary beatbtn" :to="`/reel/${id}/beat`" @click="saver.flushAll()" title="Make a beat for this reel: its exact length, building up and cooling down with your scenes">✨ Make a beat for this reel</RouterLink>
+          <div class="beatbtns">
+            <RouterLink
+              v-if="songTake" class="btn small primary beatbtn" :to="`/reel/${id}/beat?take=${songTake}`" @click="saver.flushAll()"
+              title="Open this beat in the beat studio with its settings, to change it a bit more"
+            >✨ Edit this beat</RouterLink>
+            <RouterLink
+              v-else-if="settings.music" class="btn small primary beatbtn" :to="`/reel/${id}/beat?from=${encodeURIComponent(settings.music)}`" @click="saver.flushAll()"
+              title="Make a beat for this reel starting from this song: its groove, tempo and key"
+            >✨ Make a beat from this song</RouterLink>
+            <RouterLink
+              class="btn small beatbtn" :class="{ primary: !settings.music }" :to="`/reel/${id}/beat`" @click="saver.flushAll()"
+              title="Make a beat for this reel: its exact length, building up and cooling down with your scenes"
+            >{{ settings.music ? 'Beat studio' : '✨ Make a beat for this reel' }}</RouterLink>
+          </div>
         </div>
         <div class="musicrow">
           <div class="field song">
@@ -145,13 +158,13 @@
         <h3>Title &amp; end card</h3>
         <p class="muted small">Laid over your footage on a dim, see-through layer with cream text. Grey text is a suggestion: <kbd>Tab</kbd> takes it.</p>
         <div class="cardgrid">
-          <div class="cardbox">
+          <div class="cardbox" :class="{ off: !titleOn }">
             <header>
-              <strong>Title</strong>
+              <label class="check"><input type="checkbox" :checked="titleOn" @change="settings.titleCard = $event.target.checked" /> <strong>Title</strong></label>
               <small class="muted">over the opening shots</small>
-              <button class="btn small" @click="previewCard('title')" :disabled="!settings.titleText">Preview</button>
+              <button v-if="titleOn" class="btn small" @click="previewCard('title')" :disabled="!settings.titleText">Preview</button>
             </header>
-            <div class="cardfields">
+            <div class="cardfields" v-if="titleOn">
               <label class="field span2">
                 Title
                 <input v-model="settings.titleText" placeholder="3rd Sundays" @keydown.tab="takeHint($event, 'titleText')" />
@@ -167,13 +180,13 @@
                 </select>
               </label>
             </div>
-            <CardShot v-if="cardShot.kind === 'title'" />
+            <CardShot v-if="titleOn && cardShot.kind === 'title'" />
           </div>
           <div class="cardbox" :class="{ off: !settings.endCard }">
             <header>
               <label class="check"><input type="checkbox" v-model="settings.endCard" /> <strong>End card</strong></label>
               <small class="muted">over the last part</small>
-              <button class="btn small" @click="previewCard('end_card')" :disabled="!settings.endCard">Preview</button>
+              <button v-if="settings.endCard" class="btn small" @click="previewCard('end_card')">Preview</button>
             </header>
             <div class="cardfields" v-if="settings.endCard">
               <label class="field span2">
@@ -199,8 +212,7 @@
                 </select>
               </label>
             </div>
-            <p v-else class="muted small">Off. Tick it to add a card with your logo, a few lines and “presented by”.</p>
-            <CardShot v-if="cardShot.kind === 'end_card'" />
+            <CardShot v-if="settings.endCard && cardShot.kind === 'end_card'" />
           </div>
         </div>
       </div>
@@ -903,6 +915,13 @@ async function previewCard(kind) {
   }
 }
 // Turning the end card on starts it with the suggested lines, to edit.
+// The reel's song, if it's a take made in the beat studio for this reel: its id (in the file name).
+const songTake = computed(() => {
+  const m = /(\d{8}-\d{6}-[0-9a-f]{4})\.mp3$/.exec(settings.music || '')
+  return m && String(settings.music).startsWith('Beat ') ? m[1] : null
+})
+// The title is on when ticked (reels from before: when it has text).
+const titleOn = computed(() => settings.titleCard ?? !!(settings.titleText || '').trim())
 watch(() => settings.endCard, (on) => { if (on && ready && !settings.endLines) settings.endLines = endHint })
 function closeCard() {
   if (cardShot.url) URL.revokeObjectURL(cardShot.url)
@@ -2728,6 +2747,7 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .musichead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .musichead h3 { margin: 0; }
 .beatbtn { text-decoration: none; }
+.beatbtns { display: flex; flex-wrap: wrap; gap: 6px; }
 .settings .wide { grid-column: span 2; }
 .field.check span { display: flex; gap: 6px; align-items: center; color: var(--ink); font-size: 14px; }
 .field.check small { font-size: 12px; }
@@ -2751,7 +2771,8 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .sgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 16px 20px; align-items: start; }
 .cardgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; align-items: start; }
 .cardbox { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px 14px; background: var(--cream); }
-.cardbox.off { background: transparent; }
+.cardbox.off { background: transparent; padding-bottom: 12px; }
+.cardbox.off header { margin-bottom: 0; }
 .cardbox header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .cardbox header strong { color: var(--ink); font-size: 15px; }
 .cardbox header .btn { margin-left: auto; }

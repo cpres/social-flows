@@ -88,7 +88,8 @@ python3 studio/server.py --open
   with *Use on every part* to match the rest. It lifts shadows and midtones
   rather than flat brightness, so shade opens up without blowing out the sky.
   The preview shows it live; parts with it on get a ☀ in the list.
-- **Title & end card** (*Settings*): a title (with an optional line under it,
+- **Title & end card** (*Settings*, each with a tick: untick it and the
+  card folds away and isn't in the video): a title (with an optional line under it,
   like "October Edition") over the opening shots, and an end card over the
   last part, which holds 2, 4 or 8 beats longer for it, so the reel runs that
   much longer. The end card has a logo, a few lines (the first one big) and a
@@ -110,7 +111,9 @@ python3 studio/server.py --open
   song starts, and *Listen* to check it. Play reel plays the song and moves
   through the parts in time with it.
 - **Make a beat for this reel** (✨ under *Settings → Music*) opens the
-  **beat studio**, a full-screen page (`Esc` or ← goes back to the reel)
+  **beat studio**. With a song chosen it offers *Make a beat from this song*
+  (starting from it: its groove, tempo and key); with a beat from the studio
+  as the song, *Edit this beat* (its settings loaded, Adapt open on it). The studio is a full-screen page (`Esc` or ← goes back to the reel)
   for AI music made to the reel's exact length.
   - Across the top, a picture of the music: the planned sections (Intro,
     Build, Peak…), your energy curve, the hits on your scene changes, and

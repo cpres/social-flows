@@ -439,7 +439,7 @@ const built = computed(() => beatPrompt({
   length: length.value, edges: edges.value.map((f) => f * length.value), ceiling: beat.value.ceiling,
 }))
 const prompt = computed(() => beat.value.prompt ?? built.value)
-defineExpose({ built, prompt, length, tempo, key, keyFrom, tempoFrom })
+defineExpose({ built, prompt, length, tempo, key, keyFrom, tempoFrom, pickSong })
 </script>
 
 <style scoped>

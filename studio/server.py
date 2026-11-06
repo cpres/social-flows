@@ -1314,7 +1314,7 @@ def build_config(reel, rows, grid_bpm=None):
         cfg["captions"] = {"style": s.get("captionStyle"), "font": s.get("captionFont"),
                            "background": s.get("captionBg"), "size": float(s.get("captionSize") or 1),
                            "title": (s.get("captionTitle") or "").strip(), "lines": lines}
-    if (s.get("titleText") or "").strip():
+    if (s.get("titleText") or "").strip() and s.get("titleCard", True) is not False:   # ticked (or from before the tick)
         cfg["title"] = {"text": s["titleText"].strip()}
         if (s.get("titleSub") or "").strip():
             cfg["title"]["sub"] = s["titleSub"].strip()
@@ -1834,7 +1834,7 @@ def beat_last_job(reel_id: int):
 @app.get("/api/reels/{reel_id}/beat/takes")
 def beat_takes(reel_id: int):
     keep = ("id", "run", "n", "label", "engine", "model", "seed", "length", "generated", "tempo", "key",
-            "prompt", "sections", "created", "took", "from", "fromN", "starred")
+            "prompt", "sections", "created", "took", "from", "fromN", "starred", "beat")
     return [{k: t.get(k) for k in keep} for t in beats_mod.list_takes(lib.home, reel_id)]
 
 

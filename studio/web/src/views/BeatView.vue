@@ -40,6 +40,7 @@
     </section>
 
     <p v-if="loadError" class="warn pad">{{ loadError }}</p>
+    <p v-if="opened" class="opened"><span>{{ opened }}</span><button class="x" @click="opened = ''" aria-label="Dismiss">✕</button></p>
     <div class="cols" v-if="ready">
       <div class="main">
         <BeatBuilder ref="builder" v-model="beat" :reel-id="id" :reel-name="reel.name" :shelf="shelf" :timeline="preview || { seconds: 0, scenes: [] }" />
@@ -80,7 +81,7 @@
                 <div class="pbar"><i :style="{ width: `${p.expected ? Math.min(100, (p.received / p.expected) * 100) : 0}%` }"></i></div>
               </div>
             </li>
-            <li v-for="t in shownTakes" :key="t.id" class="take" :class="{ inuse: inUse?.take === t.id, playing: playing === t.id, source: running && job?.source === t.id }">
+            <li v-for="t in shownTakes" :key="t.id" class="take" :class="{ inuse: inUse?.take === t.id, playing: playing === t.id, source: running && job?.source === t.id, 'adapting-open': adapting === t.id }">
               <button class="play" @click="toggle(t)" :aria-label="playing === t.id ? `Pause take ${t.n}` : `Play take ${t.n}`">{{ playing === t.id ? '❚❚' : '▶' }}</button>
               <div class="tinfo">
                 <div class="tname">
@@ -134,7 +135,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { fmtTime } from '../time'
 import { derivedTempo, newBeat, sceneFractions } from '../beat'
@@ -190,9 +191,37 @@ async function load() {
     takes.value = await api.beatTakes(id)
     const last = await api.beatLastJob(id)
     if (last) { job.value = last; if (last.status === 'running') poll() }
+    await startFromLink()
   } catch (e) {
     loadError.value = String(e.message || e)
   }
+}
+// Opened from the reel's song (Settings › Music): ?take=<id> loads that
+// beat's settings and opens Adapt on it; ?from=<song> starts from that song.
+const route = useRoute()
+const opened = ref('')
+async function startFromLink() {
+  const q = route.query
+  if (q.take) {
+    const t = takes.value.find((x) => x.id === q.take)
+    if (t?.beat) {
+      // Its settings, with the tempo and key it was made at (so they don't wait on the song being measured again).
+      beat.value = { ...beat.value, ...t.beat, tempo: t.tempo ?? t.beat.tempo, key: t.key || t.beat.key,
+                     engine: t.engine || beat.value.engine, inUse: beat.value.inUse }
+      opened.value = `Take ${t.n} · ${t.label}: its settings are loaded below. Adapt… it to change one thing (same seed), or change anything and generate a new take.`
+      await nextTick()
+      openAdapt(t)
+      await nextTick()
+      document.querySelector('.take.adapting-open')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    } else opened.value = 'That beat isn\'t one of this reel\'s takes any more; the studio has the reel\'s beat settings.'
+  } else if (q.from) {
+    await nextTick()
+    const name = String(q.from)
+    const track = shelf.value.tracks.find((x) => x.name === name)
+    builder.value?.pickSong(name, (track?.categories || []).find((c) => c.toLowerCase() !== 'ai') || '')
+    opened.value = `Starting from ${track?.title || name}, the reel's song: its groove, tempo and key set the levers below.`
+  }
+  if (q.take || q.from) router.replace({ path: route.path })   // once: a reload keeps what's set now
 }
 async function refreshPreview() {
   try { preview.value = await api.beatPreview(id) } catch (e) { loadError.value = String(e.message || e) }
@@ -437,6 +466,8 @@ onBeforeUnmount(() => {
 .pill.done { background: rgb(239 230 207 / 25%); }
 .pill.failed { background: rgb(224 128 56 / 35%); }
 .pad { padding: 12px 24px; }
+.opened { display: flex; align-items: center; gap: 10px; margin: 14px 24px 0; padding: 10px 14px; border-radius: 10px; background: rgb(111 147 196 / 16%); font-size: 14px; }
+.opened .x { margin-left: auto; }
 .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); gap: 20px; padding: 18px 24px 40px; align-items: start; }
 @media (max-width: 1000px) { .cols { grid-template-columns: 1fr; } }
 .side { position: sticky; top: 76px; display: flex; flex-direction: column; gap: 14px; }
