@@ -1049,8 +1049,58 @@ function setRange({ start, length }) {
   const r = p.media.kind === 'video'
     ? fitRange(start, length, p.media.duration)
     : { start: 0, length: Math.max(0.2, Math.round(length * 100) / 100) }
+  const moved = Math.abs(r.start - p.start) > 0.005
   Object.assign(p, r)
   saver.queue(p.id, r)
+  keepFlow(moved ? p : null)
+}
+
+// A relay is one clip carrying on through several parts: full frame, then
+// on top while something comes in under it (the shot carrying on is the
+// part before, played on), then full frame again. So each part of a clip
+// starts where its last one left off, plus the time it carried on in A's
+// slot; and a newcomer's part full frame starts where its part underneath
+// ended. These links, in order: [{ from, to, gap }] (to.start = from's end + gap).
+const flowLinks = computed(() => {
+  const scs = sceneList.value
+  const out = []
+  scs.forEach((sc, k) => {
+    if (!isRelay(scs, k)) return
+    const next = scs[k + 1]
+    if (!next || next.layout !== 'soloB' || next.into !== 'takeover') return
+    const top = byId.value.get(scs[k - 1].parts[scs[k - 1].parts.length - 1])
+    const under = sc.parts.map((id) => byId.value.get(id)).filter(Boolean)
+    const after = byId.value.get(next.parts[0])
+    if (!top || !after || !under.length || after.media.kind !== 'video') return
+    const last = under[under.length - 1]
+    if ((next.grow === 'A' || after.mediaId !== last.mediaId) && after.mediaId === top.mediaId) {
+      out.push({ from: top, to: after, under })   // the host carried on over the split
+    } else if (after.mediaId === last.mediaId) {
+      out.push({ from: last, to: after, under: [] })   // the newcomer, now full frame
+    }
+  })
+  return out
+})
+// Keep the relay's parts flowing on from each other after an edit. moved:
+// a part whose start was just changed: the part before it in the flow
+// ends there instead (rather than the start snapping back).
+function keepFlow(moved = null) {
+  const links = flowLinks.value
+  if (!links.length) return
+  const gapOf = (l) => l.under.reduce((s, q) => s + len(q), 0)
+  const fix = (q, r) => { Object.assign(q, r); saver.queue(q.id, r) }
+  const back = moved && links.find((l) => l.to === moved)
+  if (back && back.from.media.kind === 'video') {
+    const length = Math.round((moved.start - gapOf(back) - back.from.start) * 100) / 100
+    if (length >= 0.2) fix(back.from, { length })
+  }
+  for (const l of links) {
+    const dur = l.to.media.duration || Infinity
+    const want = Math.round((l.from.start + len(l.from) + gapOf(l)) * 100) / 100
+    if (Math.abs(want - l.to.start) < 0.01) continue
+    const start = Math.min(want, Math.max(0, dur - 0.2))
+    fix(l.to, { start, length: Math.round(Math.max(0.2, Math.min(l.to.length, dur - start)) * 100) / 100 })
+  }
 }
 
 function setIn() {
@@ -1126,6 +1176,7 @@ function lengthAll(len) {
     Object.assign(p, r)
     saver.queue(p.id, r)
   }
+  keepFlow()
 }
 
 async function remove(p) {
@@ -1343,6 +1394,8 @@ const beatTicks = computed(() => {
   return out
 })
 
+// Cutting on the beat changes how long parts play, so the relay flow follows.
+watch(() => [synced.value, period.value, settings.beatsFit, settings.beatsPerCut], () => { if (ready) keepFlow() })
 function setBeatsFit(v) {
   if (v === 'nearest') settings.beatsFit = 'nearest'
   else { settings.beatsFit = 'fixed'; settings.beatsPerCut = Number(v) }
@@ -1350,6 +1403,7 @@ function setBeatsFit(v) {
 function setBeats(p, n) {
   p.beats = n
   saver.queue(p.id, { beats: n })
+  keepFlow()
 }
 function beatsAll(n) {
   for (const p of items.value) if (p.beats !== n) setBeats(p, n)
@@ -1380,6 +1434,7 @@ async function smartHolds() {
       Object.assign(p, r)
       saver.queue(p.id, r)
     })
+    keepFlow()   // photo lengths are cameo and handoff lengths in a relay
     const count = (s) => photos.filter((p) => styles.get(p.mediaId).style === s).length
     smartNote.value = `${count('medium')} Medium · ${count('small')} Small · ${count('burst')} in bursts`
       + (anyA.value ? ` · two lanes, so none under ${TWO_LANE_FLOOR}s` : '')
