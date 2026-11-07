@@ -70,6 +70,11 @@ const props = defineProps({
   out: { type: Number, default: REEL },             // the shape this clip fills: a Stack reel's pane is wider than 9:16
   maxH: { type: Number, default: 0 },              // fit inside this height (a Stack pane) instead of the window's
   bindVideo: { type: Function, default: () => {} },
+  // A band of the clip's full-frame framing, instead of its own framing in
+  // this slot (a relay's shot carrying on in A's slot, as the engine draws
+  // it): { focusX, focusY, zoom, out (the full frame's shape), axis (x | y),
+  // frac (the slot's share of the frame along it), at (0..1, where the band sits) }.
+  band: { type: Object, default: null },
 })
 const emit = defineEmits(['focus', 'play', 'pause', 'ended', 'error', 'toggle', 'loaded'])
 
@@ -190,15 +195,27 @@ const backdrop = computed(() =>
 const MAX_ZOOM = 3
 const CORNERS = ['nw', 'ne', 'sw', 'se']
 const zoom = computed(() => clamp(props.zoom || 1, 1, MAX_ZOOM))
-const win = computed(() => {
-  const a = aspect.value
+function windowOf(a, out, z, fx, fy) {
   let w = 100
   let h = 100
-  if (a > OUT.value) w = (OUT.value / a) * 100
-  else h = (a / OUT.value) * 100
-  w /= zoom.value
-  h /= zoom.value
-  return { w, h, left: (100 - w) * props.focusX, top: (100 - h) * props.focusY }
+  if (a > out) w = (out / a) * 100
+  else h = (a / out) * 100
+  w /= z
+  h /= z
+  return { w, h, left: (100 - w) * fx, top: (100 - h) * fy }
+}
+const win = computed(() => {
+  const b = props.band
+  if (b) {
+    const full = windowOf(aspect.value, b.out, clamp(b.zoom || 1, 1, MAX_ZOOM), b.focusX, b.focusY)
+    if (b.axis === 'x') {
+      const w = full.w * b.frac
+      return { ...full, w, left: full.left + (full.w - w) * b.at }
+    }
+    const h = full.h * b.frac
+    return { ...full, h, top: full.top + (full.h - h) * b.at }
+  }
+  return windowOf(aspect.value, OUT.value, zoom.value, props.focusX, props.focusY)
 })
 const movable = computed(() => win.value.w < 99.5 || win.value.h < 99.5)
 const windowStyle = computed(() => ({

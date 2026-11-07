@@ -526,7 +526,7 @@
               />
               <ReelFrame
                 v-else-if="aNow" :key="`a-${aNow.part.id}`" :media="aNow.part.media" :fit="slotFit('A')" :out="out" :max-h="maxH"
-                cropped muted :lighten="aNow.part.lighten" v-bind="focusProps(aNow.part, 'A')"
+                cropped muted :lighten="aNow.part.lighten" v-bind="focusProps(aNow.part, 'A')" :band="carryBand"
                 :poster-time="aNow.t" :bind-video="bindA"
               />
             </template>
@@ -1890,17 +1890,36 @@ const aNow = computed(() => {
   if (k > 0 && intoNow.value?.type === 'morph' && intoNow.value.from?.A && !showsA(sceneList.value[k]) && !isRelay(sceneList.value, k)) {
     const prevCarry = carryOf(k - 1)
     const run = sceneSecs.value[k - 1] + within
-    if (prevCarry) return { part: prevCarry, t: prevCarry.media.kind === 'video' ? prevCarry.start + prevCarry.length + run : 0, rate: 1, playing: true }
+    if (prevCarry) return { part: prevCarry, t: prevCarry.media.kind === 'video' ? prevCarry.start + prevCarry.length + run : 0, rate: 1, playing: true, carry: true, k: k - 1 }
     const prevPlan = aPlans.value[k - 1]
     if (prevPlan) return { part: byId.value.get(sceneList.value[k - 1].a.item), t: topSource(prevPlan, run - handoffs.value[k - 1]), rate: prevPlan.rate, playing: true }
   }
   const carry = carryOf(k)
-  if (carry) return { part: carry, t: carry.media.kind === 'video' ? carry.start + carry.length + within : 0, rate: 1, playing: true, carry: true }
+  if (carry) return { part: carry, t: carry.media.kind === 'video' ? carry.start + carry.length + within : 0, rate: 1, playing: true, carry: true, k }
   const plan = aPlans.value[k]
   if (!plan) return null
   const hand = handoffs.value[k]
   return { part: byId.value.get(sceneList.value[k].a.item), t: topSource(plan, Math.max(0, within - hand)), rate: plan.rate,
            playing: within >= hand }
+})
+// A relay's carried shot keeps the framing it had full frame: A's slot
+// shows a band of that (the bottom, unless it's framed in a half slot), as
+// the engine draws it (montage.py render_carry, band_offset). Not over a
+// blur, where the full frame is the whole picture.
+const carryBand = computed(() => {
+  const n = aNow.value
+  if (!n?.carry) return null
+  const sc = sceneList.value[n.k]
+  const prev = sceneList.value[n.k - 1]
+  const sl = sc && sceneSlots(sc, frameW.value, frameH.value, Number(settings.dividerPx) || 0)
+  if (!sl?.A || !prev) return null
+  const fit = ['fill', 'blur'].includes(n.part.layout) ? n.part.layout : soloFitOf(prev)
+  if (fit !== 'fill') return null
+  const f = frameFor(n.part, 'full', 'B')
+  const b = frameFor(n.part, 'half', 'B')
+  const y = sl.axis === 'y'
+  return { focusX: f.x, focusY: f.y, zoom: f.zoom, out: frameW.value / frameH.value, axis: y ? 'y' : 'x',
+           frac: y ? sl.A.h / frameH.value : sl.A.w / frameW.value, at: y ? b.y : b.x }
 })
 // While a scene is handed off: the Solo B shot before it, held in A's slot.
 const handoffShot = computed(() => {
