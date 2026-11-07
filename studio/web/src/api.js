@@ -1,4 +1,4 @@
-import { lowQuality } from './quality'
+import { lowMade, lowQuality } from './quality'
 const enc = encodeURIComponent
 
 async function json(res) {
@@ -121,7 +121,8 @@ export const api = {
       return URL.createObjectURL(await res.blob())
     }),
 
-  media: (folder, file) => `/api/media/${enc(folder)}/${enc(file)}${lowQuality.value ? '?q=low' : ''}`,
+  media: (folder, file) =>
+    `/api/media/${enc(folder)}/${enc(file)}${lowQuality.value && lowMade.has(`${folder}/${file}`) ? '?q=low' : ''}`,
   // Make low-quality copies of a reel's videos: -> { ready, total }.
   lowCopies: (reelId) => send('POST', `/api/reels/${reelId}/low-copies`),
   thumb: (folder, file, t = 0, w = 480) =>

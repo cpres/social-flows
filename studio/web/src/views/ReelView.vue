@@ -838,7 +838,7 @@
 
 <script setup>
 import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { lowQuality } from '../quality'
+import { lowQuality, noteLowMade } from '../quality'
 import { useRoute, useRouter } from 'vue-router'
 import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
@@ -2401,11 +2401,12 @@ const lowProgress = ref(null)
 let lowTimer = null
 async function checkLowCopies() {
   clearTimeout(lowTimer)
-  if (!lowQuality.value || !reel.value?.id) { lowProgress.value = null; return }
-  try { lowProgress.value = await api.lowCopies(reel.value.id) } catch { lowProgress.value = null; return }
+  if (!lowQuality.value || !props.id) { lowProgress.value = null; return }
+  try { lowProgress.value = await api.lowCopies(props.id) } catch { lowProgress.value = null; return }
+  noteLowMade(lowProgress.value.made)
   if (lowProgress.value.ready < lowProgress.value.total) lowTimer = setTimeout(checkLowCopies, 3000)
 }
-watch([lowQuality, () => reel.value?.id], checkLowCopies, { immediate: true })
+watch([lowQuality, () => props.id], checkLowCopies, { immediate: true })
 onBeforeUnmount(() => clearTimeout(lowTimer))
 // The ruler over the lanes: a mark every 5, 15 or 30 seconds (or minute).
 const rulerTicks = computed(() => {

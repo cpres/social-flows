@@ -17,7 +17,7 @@
       </svg>
       <div class="media" :style="[mediaStyle, liftStyle]">
         <video
-          v-if="media.kind === 'video'" :ref="bindVideo" :src="api.media(media.folder, media.file)"
+          v-if="media.kind === 'video'" :ref="onVideoEl" :src="src"
           :poster="api.thumb(media.folder, media.file, posterTime, 640)"
           preload="auto" playsinline :muted="muted" @loadedmetadata="onMeta" @play="$emit('play')" @pause="$emit('pause')"
           @ended="$emit('ended')" @playing="firePending"
@@ -94,9 +94,36 @@ const aspect = computed(() => {
   const hgt = natural.h || props.media.height
   return w && hgt ? w / hgt : OUT.value
 })
+// The video's source: the original, or its small copy (Display low quality)
+// once that's made. Switching between them, the same clip carries on from
+// where it was rather than loading afresh.
+const src = computed(() => api.media(props.media.folder, props.media.file))
+let videoEl = null
+function onVideoEl(el) {
+  videoEl = el
+  props.bindVideo(el)
+}
+let resume = null
+watch(src, () => {
+  const v = videoEl
+  resume = v && v.readyState > 0 ? { t: v.currentTime, playing: !v.paused, rate: v.playbackRate } : null
+}, { flush: 'pre' })
+watch(() => props.bindVideo, (bind) => { if (videoEl) bind(videoEl) })
+watch(() => props.media.id, () => { resume = null })
 function onMeta(e) {
-  natural.w = e.target.videoWidth
-  natural.h = e.target.videoHeight
+  // the copy has the original's shape, smaller: keep the size measured from the first
+  if (!resume || !natural.w) {
+    natural.w = e.target.videoWidth
+    natural.h = e.target.videoHeight
+  }
+  if (resume) {
+    const { t, playing, rate } = resume
+    resume = null
+    e.target.currentTime = t
+    e.target.playbackRate = rate
+    if (playing) e.target.play().catch(() => {})
+    return
+  }
   emit('loaded', e)
 }
 function onImg(e) {

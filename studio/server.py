@@ -2281,14 +2281,15 @@ def low_copy(path, start=True):
 @app.post("/api/reels/{reel_id}/low-copies")
 def reel_low_copies(reel_id: int):
     """Make low-quality copies of a reel's videos (those not made yet are
-    queued): {ready, total}. Call again to see how far it's got."""
+    queued): {ready, total, made (the folder/file of each one made)}. Call
+    again to see how far it's got."""
     with lib.connect() as db:
         reel_row(db, reel_id)
         paths = sorted({r["path"] for r in db.execute(
             "SELECT DISTINCT m.path FROM reel_items i JOIN media m ON m.id = i.media_id "
             "WHERE i.reel_id = ? AND m.kind = 'video' AND m.missing = 0", (reel_id,))})
-    ready = sum(1 for p in paths if low_copy(ROOT / p))
-    return {"ready": ready, "total": len(paths)}
+    made = [p for p in paths if low_copy(ROOT / p)]
+    return {"ready": len(made), "total": len(paths), "made": made}
 
 
 @app.get("/api/thumb/{name}/{file}")
