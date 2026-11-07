@@ -71,9 +71,10 @@ const props = defineProps({
   maxH: { type: Number, default: 0 },              // fit inside this height (a Stack pane) instead of the window's
   bindVideo: { type: Function, default: () => {} },
   // A band of the clip's full-frame framing, instead of its own framing in
-  // this slot (a relay's shot carrying on in A's slot, as the engine draws
-  // it): { focusX, focusY, zoom, out (the full frame's shape), axis (x | y),
-  // frac (the slot's share of the frame along it), at (0..1, where the band sits) }.
+  // this slot (a relay's shots, as the engine draws them): { focusX, focusY,
+  // zoom, out (the full frame's shape), axis (x | y), at (0..1, where the
+  // band sits) }. The band is as big as this box, so as a slot grows or
+  // shrinks in a move the picture is revealed or covered, never rescaled.
   band: { type: Object, default: null },
 })
 const emit = defineEmits(['focus', 'play', 'pause', 'ended', 'error', 'toggle', 'loaded'])
@@ -209,10 +210,10 @@ const win = computed(() => {
   if (b) {
     const full = windowOf(aspect.value, b.out, clamp(b.zoom || 1, 1, MAX_ZOOM), b.focusX, b.focusY)
     if (b.axis === 'x') {
-      const w = full.w * b.frac
+      const w = full.w * Math.min(1, OUT.value / b.out)
       return { ...full, w, left: full.left + (full.w - w) * b.at }
     }
-    const h = full.h * b.frac
+    const h = full.h * Math.min(1, b.out / OUT.value)
     return { ...full, h, top: full.top + (full.h - h) * b.at }
   }
   return windowOf(aspect.value, OUT.value, zoom.value, props.focusX, props.focusY)

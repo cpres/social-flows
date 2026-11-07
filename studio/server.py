@@ -2223,8 +2223,72 @@ def rendered_share(name: str):
 # ---------------------------------------------------------------- files
 
 @app.get("/api/media/{name}/{file}")
-def media(name: str, file: str):
-    return FileResponse(resolve(name, file))
+def media(name: str, file: str, q: str = ""):
+    """A file, as it is. q=low: a small copy of a video for a quicker
+    preview (made once in the background; the original until it's ready).
+    Renders always use the originals."""
+    path = resolve(name, file)
+    if q == "low" and Library.kind_of(path) == "video":
+        low = low_copy(path)
+        if low:
+            return FileResponse(low, media_type="video/mp4")
+        return FileResponse(path, headers={"Cache-Control": "no-store"})   # so the copy is picked up next time
+    return FileResponse(path)
+
+
+LOW_HEIGHT = 540   # a low-quality copy's shorter side, in pixels
+_low_pool = ThreadPoolExecutor(max_workers=2)
+_low_jobs = {}     # copy path -> its Future, while it's being made
+_low_lock = threading.Lock()
+
+
+def low_path(path):
+    key = hashlib.sha1(f"low{LOW_HEIGHT}|{path}|{path.stat().st_mtime}".encode()).hexdigest()
+    return CACHE / "low" / f"{key}.mp4"
+
+
+def make_low(path, out):
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(f"{out.stem}.{uuid.uuid4().hex}.tmp.mp4")   # never served half-written
+    s = LOW_HEIGHT   # the shorter side, never larger than it was
+    scale = f"scale='if(gt(iw,ih),-2,min({s},iw))':'if(gt(iw,ih),min({s},ih),-2)'"
+    try:
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(path),
+                        "-vf", f"{montage.hdr_fix(path)}{scale},format=yuv420p",
+                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-g", "15",
+                        "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(tmp)],
+                       check=True, capture_output=True, timeout=1800)
+        tmp.replace(out)
+    finally:
+        tmp.unlink(missing_ok=True)
+        with _low_lock:
+            _low_jobs.pop(out, None)
+
+
+def low_copy(path, start=True):
+    """The low-quality copy of a video if it's made, else None (and, with
+    start, it's queued to be made)."""
+    out = low_path(path)
+    if out.exists():
+        return out
+    if start:
+        with _low_lock:
+            if out not in _low_jobs:
+                _low_jobs[out] = _low_pool.submit(make_low, path, out)
+    return None
+
+
+@app.post("/api/reels/{reel_id}/low-copies")
+def reel_low_copies(reel_id: int):
+    """Make low-quality copies of a reel's videos (those not made yet are
+    queued): {ready, total}. Call again to see how far it's got."""
+    with lib.connect() as db:
+        reel_row(db, reel_id)
+        paths = sorted({r["path"] for r in db.execute(
+            "SELECT DISTINCT m.path FROM reel_items i JOIN media m ON m.id = i.media_id "
+            "WHERE i.reel_id = ? AND m.kind = 'video' AND m.missing = 0", (reel_id,))})
+    ready = sum(1 for p in paths if low_copy(ROOT / p))
+    return {"ready": ready, "total": len(paths)}
 
 
 @app.get("/api/thumb/{name}/{file}")

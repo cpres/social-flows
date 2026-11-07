@@ -537,7 +537,7 @@
               />
               <ReelFrame
                 v-else-if="shownPart" :key="`b-${shownPart.id}`" :media="shownPart.media" fit="fill" :out="out" :max-h="maxH"
-                cropped muted :lighten="shownPart.lighten" v-bind="focusProps(shownPart, 'B')" :poster-time="shownPart.start"
+                cropped muted :lighten="shownPart.lighten" v-bind="focusProps(shownPart, 'B')" :band="bBand" :poster-time="shownPart.start"
               />
               <div v-else class="underidle">
                 <img v-if="shownPart" :src="api.thumb(shownPart.media.folder, shownPart.media.file, shownPart.start, 480)" alt="" />
@@ -568,6 +568,10 @@
             </button>
           </div>
           <label class="guides-toggle muted" v-if="tall"><input type="checkbox" v-model="guides" /> Show Instagram overlays <kbd>G</kbd></label>
+          <label class="guides-toggle muted" title="Plays small copies of the videos here so the preview keeps up. The render always uses the originals.">
+            <input type="checkbox" v-model="lowQuality" /> Display low quality
+            <small v-if="lowQuality && lowProgress && lowProgress.ready < lowProgress.total">(making small copies: {{ lowProgress.ready }} of {{ lowProgress.total }}; the originals play until each is ready)</small>
+          </label>
           <audio ref="audioEl" v-if="musicUrl" :src="musicUrl" preload="auto" @ended="onSongEnded"></audio>
           <video
             v-if="reelOn && nextMedia" class="preload" muted preload="auto"
@@ -834,6 +838,7 @@
 
 <script setup>
 import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { lowQuality } from '../quality'
 import { useRoute, useRouter } from 'vue-router'
 import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
@@ -1888,38 +1893,51 @@ const aNow = computed(() => {
   const within = reelOn.value && reelTime.value !== null ? reelTime.value - sceneTimes.value[k].start : 0
   // A going (a scene without it coming in): the scene before's A, playing on as it slides out.
   if (k > 0 && intoNow.value?.type === 'morph' && intoNow.value.from?.A && !showsA(sceneList.value[k]) && !isRelay(sceneList.value, k)) {
+    if (sceneList.value[k].grow === 'A' && isRelay(sceneList.value, k - 1)) {
+      // a cameo over: the guest slides out as the host grows back
+      const prev = sceneList.value[k - 1]
+      const g = byId.value.get(prev.parts[prev.parts.length - 1])
+      if (g) return { part: g, t: g.media.kind === 'video' ? g.start + g.length : 0, rate: 1, playing: true, band: true }
+    }
     const prevCarry = carryOf(k - 1)
     const run = sceneSecs.value[k - 1] + within
-    if (prevCarry) return { part: prevCarry, t: prevCarry.media.kind === 'video' ? prevCarry.start + prevCarry.length + run : 0, rate: 1, playing: true, carry: true, k: k - 1 }
+    if (prevCarry) return { part: prevCarry, t: prevCarry.media.kind === 'video' ? prevCarry.start + prevCarry.length + run : 0, rate: 1, playing: true, band: true }
     const prevPlan = aPlans.value[k - 1]
     if (prevPlan) return { part: byId.value.get(sceneList.value[k - 1].a.item), t: topSource(prevPlan, run - handoffs.value[k - 1]), rate: prevPlan.rate, playing: true }
   }
   const carry = carryOf(k)
-  if (carry) return { part: carry, t: carry.media.kind === 'video' ? carry.start + carry.length + within : 0, rate: 1, playing: true, carry: true, k }
+  if (carry) return { part: carry, t: carry.media.kind === 'video' ? carry.start + carry.length + within : 0, rate: 1, playing: true, carry: true, band: true }
   const plan = aPlans.value[k]
   if (!plan) return null
   const hand = handoffs.value[k]
   return { part: byId.value.get(sceneList.value[k].a.item), t: topSource(plan, Math.max(0, within - hand)), rate: plan.rate,
            playing: within >= hand }
 })
-// A relay's carried shot keeps the framing it had full frame: A's slot
-// shows a band of that (the bottom, unless it's framed in a half slot), as
-// the engine draws it (montage.py render_carry, band_offset). Not over a
-// blur, where the full frame is the whole picture.
-const carryBand = computed(() => {
-  const n = aNow.value
-  if (!n?.carry) return null
-  const sc = sceneList.value[n.k]
-  const prev = sceneList.value[n.k - 1]
-  const sl = sc && sceneSlots(sc, frameW.value, frameH.value, Number(settings.dividerPx) || 0)
-  if (!sl?.A || !prev) return null
-  const fit = ['fill', 'blur'].includes(n.part.layout) ? n.part.layout : soloFitOf(prev)
+// A relay's shots keep the framing they have full frame: a half slot shows
+// a band of it (the bottom, unless the part is framed in a half slot), as
+// the engine draws them (montage.py render_carry, band_offset; server.py
+// frames relay parts full). That's the shot carrying on in A's slot, the
+// one coming in under it, and each through the moves in and out. Not over
+// a blur, where the full frame is the whole picture.
+function bandOf(p, k) {
+  const sc = sceneList.value[k]
+  if (!p || !sc) return null
+  const solo = sc.layout === 'soloB' ? sc : sceneList.value[k - 1]
+  const fit = ['fill', 'blur'].includes(p.layout) ? p.layout : soloFitOf(solo || sc)
   if (fit !== 'fill') return null
-  const f = frameFor(n.part, 'full', 'B')
-  const b = frameFor(n.part, 'half', 'B')
-  const y = sl.axis === 'y'
-  return { focusX: f.x, focusY: f.y, zoom: f.zoom, out: frameW.value / frameH.value, axis: y ? 'y' : 'x',
-           frac: y ? sl.A.h / frameH.value : sl.A.w / frameW.value, at: y ? b.y : b.x }
+  const f = frameFor(p, 'full', 'B')
+  const b = frameFor(p, 'half', 'B')
+  const y = !wide.value
+  return { focusX: f.x, focusY: f.y, zoom: f.zoom, out: frameW.value / frameH.value, axis: y ? 'y' : 'x', at: y ? b.y : b.x }
+}
+const carryBand = computed(() => (aNow.value?.band ? bandOf(aNow.value.part, shownScene.value) : null))
+// B: in a relay split, and in the Solo B just after one (growing out of its slot).
+const bBand = computed(() => {
+  const k = shownScene.value
+  if (isRelay(sceneList.value, k) || (k && isRelay(sceneList.value, k - 1) && sceneList.value[k].layout === 'soloB')) {
+    return bandOf(shownPart.value, k)
+  }
+  return null
 })
 // While a scene is handed off: the Solo B shot before it, held in A's slot.
 const handoffShot = computed(() => {
@@ -1953,6 +1971,7 @@ const intoNow = computed(() => {
     const before = sceneSlots(prev, frameW.value, frameH.value, Number(settings.dividerPx) || 0)
     const from = { ...before }
     if (sc.into === 'handoff' && before.B) { from.A = before.B; delete from.B }
+    if (sc.into === 'takeover' && sc.grow === 'A' && before.A && before.B) { from.B = before.A; from.A = before.B }
     // A shown both sides but a different clip (or a relay's carried shot): it comes in fresh, from its side.
     if (sc.into !== 'handoff' && showsA(sc) && !(showsA(prev) && prev.a?.item === sc.a?.item && !isRelay(sceneList.value, k - 1))) delete from.A
     return { type: 'morph', p, from }
@@ -2377,6 +2396,17 @@ function setAIn(k, e) {
   if (!isNaN(t) && t >= 0) editA(k, { in: Math.round(t * 100) / 100, ...(fitted(sceneList.value[k]) ? { out: null } : {}) })
   e.target.value = fmtTime(aRanges.value[k]?.[0] ?? 0)
 }
+// Display low quality: get the reel's small copies made, and say how far that's got.
+const lowProgress = ref(null)
+let lowTimer = null
+async function checkLowCopies() {
+  clearTimeout(lowTimer)
+  if (!lowQuality.value || !reel.value?.id) { lowProgress.value = null; return }
+  try { lowProgress.value = await api.lowCopies(reel.value.id) } catch { lowProgress.value = null; return }
+  if (lowProgress.value.ready < lowProgress.value.total) lowTimer = setTimeout(checkLowCopies, 3000)
+}
+watch([lowQuality, () => reel.value?.id], checkLowCopies, { immediate: true })
+onBeforeUnmount(() => clearTimeout(lowTimer))
 // The ruler over the lanes: a mark every 5, 15 or 30 seconds (or minute).
 const rulerTicks = computed(() => {
   const L = reelLength.value || 0
