@@ -1352,10 +1352,14 @@ def join_scenes(files, scenes, frames, tails, cfg, workdir, slots=None, hand_f=N
                 pass
             elif into == "takeover":
                 # B grows from its slot to the full frame (the next scene is its
-                # shot alone, full frame) while A and the divider slide out.
-                aw, ah, ax, ay = slots[k - 1]["A"]
-                bw, bh, bx, by = slots[k - 1]["B"]
-                ox, oy = band_offset(slots[k - 1]["B"], w, h, scenes[k - 1].get("band_b"))
+                # shot alone, full frame) while A and the divider slide out. With
+                # grow A (a relay's cameo over), it's the other way round: the
+                # shot carrying on in A's slot grows back as B slides out.
+                grow_a = scenes[k].get("grow") == "A"
+                aw, ah, ax, ay = slots[k - 1]["B" if grow_a else "A"]
+                bw, bh, bx, by = slots[k - 1]["A" if grow_a else "B"]
+                ox, oy = band_offset(slots[k - 1]["A" if grow_a else "B"], w, h,
+                                     scenes[k - 1].get("band_a" if grow_a else "band_b"))
                 if axis == "x":
                     a0, a1 = min(ax, bx + bw), max(ax + aw, bx)      # A and the divider beside it
                     block = (a1 - a0, h, a0, 0)
@@ -1451,7 +1455,8 @@ def scene_report(cfg, plan, base_dir):
         if sc.get("relay") and sc.get("carry") and moves_in(scenes, k) == "handoff":
             line += f"  (relay: {Path(sc['carry']['file']).name} carries on in A's slot)"
         elif moves_in(scenes, k) == "takeover":
-            line += "  (take over: B grows to the full frame)"
+            line += ("  (cameo over: the shot in A's slot grows back to the full frame)" if sc.get("grow") == "A"
+                     else "  (take over: B grows to the full frame)")
         elif hands[k]:
             line += f"  (hand off: the last frame in A's slot {hands[k]:.1f}s)"
         elif k and sc.get("into", "cut") != "cut":
@@ -1541,6 +1546,8 @@ def render_scenes(plan, segs_of, cfg, base_dir, keep_audio, workdir):
         now, before = sources[k], sources[k - 1]
         if now[0] == "carry":
             return before[0] == "B"
+        if before[0] == "carry" and now[0] == "B" and scenes[k].get("grow") == "A" and moves_in(scenes, k) == "takeover":
+            return True   # a cameo over: the shot that carried on in A's slot plays on, full frame"
         return (now[0] == "A" and before[0] == "A" and now[1] == before[1] and not now[5]
                 and abs(now[2] - before[3]) < 0.05)
     switches = [k > 0 and not carries_on(k) for k in range(len(files))]

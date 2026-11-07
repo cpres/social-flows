@@ -268,33 +268,42 @@ folder* (a shoot) ask for a name and a style:
 - **Weave:** opens the Weave wizard (below).
 - **Stack:** the longest clip goes in lane A, on top the whole way at real
   speed, with the others underneath.
-- **Relay:** single, split, single, split… for long-form reels. Each clip
-  plays alone, then moves up into A's slot and carries on (3s by default)
-  while the next clip comes in underneath. The next clip then takes over the
-  full frame as the first one finishes, and so on, in the order the clips
-  were shot. **Long clips** (10s or more) get their own length: all of the
-  clip, or the long stretch you picked on the shoot page, or up to 20, 30 or
-  60s if you cap them. *Skip quiet moments in long clips* cuts out where
-  nothing much happens, at real speed. **Photos and short clips** play alone
-  for a set few seconds (3s by default), like clips between the long pieces.
-  **Single or split** sets how much of the relay has two clips on screen:
-  *Mostly single* (each clip mostly on its own, with a short split you
-  choose, 1 to 5s, between them), *Even* (about half single, half split)
-  or *Mostly split* (short moments single, long stretches of two at once).
-  For Even and Mostly split, each split's length comes from the long clips
-  on either side, and a photo stays up as long as the splits beside it
-  need. A long clip's time alone is held to the mix too (about as long as
-  its splits for Even, a quarter of that for Mostly split), so the first
-  and last clips, which only share with one neighbour, stay split like the
-  rest: such a clip plays less of itself and ends sooner, with no jump.
-  Every clip keeps at least a second alone.
-  The dialog shows about how long the reel will run, and how much of it is
-  split. Every move is seamless:
-  the shot moving up is exactly what was on screen, and B grows from its
-  slot to the full frame. In the reel it's ordinary scenes (Solo B, then a
-  split with *Relay* ticked that comes in with *Hand off*, then Solo B coming
-  in with *Take over*), so you can trim, reorder and change any of it.
-  Ticking *Relay* on any split after a Solo B scene does the same by hand.
+- **Relay:** long-form reels that stitch themselves. The rule: when one of
+  the two things on screen runs out of time, it leaves and the other takes
+  the full frame. Clips go in the order they were shot. Near a clip's end
+  the next comes in underneath (a **handoff**), the first finishes, and the
+  next takes over the full frame. **Long clips** (10s or more) get their
+  own length: all of the clip, or the long stretch you picked on the shoot
+  page, or up to 20, 30 or 60s if you cap them. *Skip quiet moments in long
+  clips* cuts out where nothing much happens, at real speed. **Short clips**
+  play their own length. **Photos stay on screen for** 2, 3, 4 (default)
+  or 6s in all, full frame and split together, so a photo never sits next
+  to running video for long.
+  A long clip can also host **cameos**: a photo or short clip comes in under
+  it for its whole time, slides out, and the long clip grows back to the
+  full frame, its sound playing straight through. A photo shot while a long
+  clip was recording comes in at that moment of the clip (the nearest kept
+  moment, if that bit was cut as quiet). Turned up to 6 or more, the photos
+  and short clips right after a long clip are pulled into its back half as
+  cameos too, spaced out (further apart at lower settings).
+  **Split screen: less ↔ more** (1 to 10, 5 by default) says how much is
+  split: 1 never splits; long clip with long clip can share from 2, with a
+  photo or short clip from 3, short clips together from 5, two photos from
+  7; 10 splits whenever two things can share. It's a preference, not a
+  promise: with mostly photos even 10 gives short splits, since photos run
+  out fast. Turning it up never splits less. The bar above the slider
+  shows the plan as you move it, and the line under the settings says how
+  many of each there are, how many are cameos, about how long it runs and
+  how much is split. The planner is `studio/relay.py` (its constants are at
+  the top, to tune; tests in `studio/tests`: `python3 -m unittest discover
+  studio/tests`). Reels made with the old *Single or split* choice read
+  as 3 (Mostly single), 5 (Even) or 8 (Mostly split).
+  Every move is seamless: the shot moving up is exactly what was on
+  screen, and the one staying grows from its slot to the full frame. In
+  the reel it's ordinary scenes (Solo B, then a split with *Relay* ticked
+  that comes in with *Hand off*, then Solo B coming in with *Take over*),
+  so you can trim, reorder and change any of it. Ticking *Relay* on any
+  split after a Solo B scene does the same by hand.
 
 **Lanes and scenes.** A reel has two lanes of footage and a row of scenes
 over them. Lanes say what's playing; scenes say what's on screen.

@@ -14,7 +14,8 @@ visible, one after another (the reel's `scenes`):
             instead of lane A),
      into: cut | slide | push | dissolve | handoff | takeover (how it comes in;
            takeover, into Solo B after a split: B grows to the full frame
-           as A slides out;
+           as A slides out (grow: "A", after a relay's cameo: the
+           shot carrying on in A's slot grows back as B slides out);
            handoff, after a Solo B scene: its last frame moves into A's
            slot as B comes in, stays `handoff` seconds, then dissolves
            into A, which starts then),
@@ -188,6 +189,8 @@ def clean(scenes, s):
             c["handoff"] = round(min(max(float(sc.get("handoff") or HANDOFF_DEFAULT), 0.5), 10.0), 2)
         if sc.get("relay") and sc["layout"] in ("stack", "swap"):
             c["relay"] = True
+        if sc.get("grow") == "A" and sc["layout"] == "soloB":
+            c["grow"] = "A"
         if sc.get("fill") in ("fill", "blur"):
             c["fill"] = sc["fill"]
         a = sc.get("a")
@@ -201,122 +204,4 @@ def clean(scenes, s):
     return out
 
 
-LONG_CLIP = 10.0   # a relay plays videos this long or longer in full (or up to its cap)
-
-
-RELAY_MIX = {"single": None, "even": 0.5, "split": 0.8}   # about how much of the reel is split
-ALONE_MIN = 1.0   # every clip is alone at least this long
-
-
-def relay_overlaps(clips, overlap, solo, cap, mix):
-    """How long each pair of neighbours shares the frame (the split between
-    clip i and i+1). Mostly single: `overlap` each. Even or mostly split:
-    about that share of the reel is split. A long clip gives q = 2f/(1+f)
-    of its time to splits (a split shows two clips at once), shared between
-    its sides, and keeps at least ALONE_MIN alone; a photo stays up as long
-    as the splits beside it need; a short video as long as its footage
-    lasts. Also returns each clip's time alone."""
-    f = RELAY_MIX.get(mix)
-    n = len(clips)
-    if f is None:
-        return [overlap] * max(n - 1, 0), [None] * n
-    q = 2 * f / (1 + f)
-    times = [relay_time(c, solo, cap) for c in clips]
-    sides = [(i > 0) + (i < n - 1) for i in range(n)]
-    want = [q * times[i] / sides[i] if clips[i]["long"] and sides[i] else None for i in range(n)]
-    out = []
-    for i in range(n - 1):
-        w = [x for x in (want[i], want[i + 1]) if x is not None]
-        out.append(sum(w) / len(w) if w else q * solo)
-    short_alone = max(ALONE_MIN, solo * (1 - q))
-    for _ in range(3):   # keep each clip's time alone, and short videos within their footage
-        for i, c in enumerate(clips):
-            left = out[i - 1] if i else 0
-            right = out[i] if i < n - 1 else 0
-            if c["long"]:
-                room = times[i] - ALONE_MIN
-            elif c["row"]["kind"] == "video":
-                room = max(c["row"]["duration"] - short_alone, 1.0)
-            else:
-                continue
-            if left + right > room:
-                k = max(room, 1.0) / (left + right)
-                if i:
-                    out[i - 1] *= k
-                if i < n - 1:
-                    out[i] *= k
-    out = [round(max(o, 0.5), 3) for o in out]
-    # A long clip's time alone is held to the mix: at most (1-f)/f of its time
-    # split. The first and last share with only one neighbour, so this is
-    # what keeps them split too; such a clip plays less of itself (it ends
-    # sooner, no jump).
-    alone = []
-    for i, c in enumerate(clips):
-        if c["long"]:
-            split = (out[i - 1] if i else 0) + (out[i] if i < n - 1 else 0)
-            alone.append(max(ALONE_MIN, min(times[i] - split, split * (1 - f) / f)))
-        else:
-            alone.append(short_alone)
-    return out, alone
-
-
-def relay_time(c, solo, cap):
-    """A long clip's own time on screen in a relay: its length, to its cap."""
-    if c["long"]:
-        return c["avail"] if cap is None else min(c["avail"], cap)
-    return solo
-
-
-def relay_plan(clips, overlap=3.0, solo=4.0, cap=None, quiet=None, mix="single"):
-    """A relay reel from clips in order: each plays alone, then moves into
-    A's slot and carries on while the next comes in underneath, which then
-    takes over the full frame.
-
-    clips: [{row, start, avail, long}]: where each starts and how much of it
-    there is to play from there. A long clip (a video of LONG_CLIP seconds or
-    more) gets its own length: all of `avail` (up to `cap`), less what it
-    plays underneath the clip before and carries on over the next. mix sets
-    how much is split: single (photos and short clips alone for `solo`, an
-    `overlap` between clips), even (about half of each clip's time split) or
-    split (mostly split, short moments alone). quiet(row, start, length),
-    when given, splits a long clip's time alone into pieces with its lulls
-    taken out.
-
-    Returns ([(row, start, length, kind)]: the parts: under (beneath the
-    clip before), alone, and more (the rest of a quiet-cut stretch alone)),
-    and a function making the scenes from their new ids."""
-    parts = []
-    n = len(clips)
-    shared, alones = relay_overlaps(clips, overlap, solo, cap, mix)
-    for i, c in enumerate(clips):
-        r, start = c["row"], float(c["start"])
-        under = shared[i - 1] if i else 0.0
-        after = shared[i] if i + 1 < n else 0.0
-        if alones[i] is not None:
-            alone = alones[i]
-        elif c["long"]:
-            alone = max(solo, relay_time(c, solo, cap) - under - after)
-        else:
-            alone = solo
-        if not c["long"] and r["kind"] == "video":   # room for all of it before the clip ends, if it can
-            start = min(start, max(0.0, r["duration"] - under - alone - after))
-        if i:
-            parts.append((r, round(start, 3), under, "under"))
-            start += under
-        pieces = quiet(r, start, alone) if quiet and c["long"] else [(start, alone)]
-        for j, (ps, pl) in enumerate(pieces):
-            parts.append((r, round(ps, 3), round(pl, 3), "alone" if j == 0 else "more"))
-
-    def scenes(ids):
-        out = []
-        for (r, _, _, kind), pid in zip(parts, ids):
-            if kind == "more":
-                continue   # more of the same clip alone, in the same scene
-            if kind == "alone":
-                out.append({"id": new_id(), "layout": "soloB", "from": pid,
-                            "into": "takeover" if out else "cut"})
-            else:
-                out.append({"id": new_id(), "layout": "stack", "from": pid, "split": 0.5,
-                            "relay": True, "into": "handoff"})
-        return out
-    return parts, scenes
+# Relay reels are planned in relay.py.

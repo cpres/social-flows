@@ -28,6 +28,7 @@ from datetime import datetime
 from pathlib import Path
 
 import montage  # the engine; reused for its file-type lists
+import relay  # Relay settings from before the dial
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS media (
@@ -414,4 +415,9 @@ def now():
 
 
 def settings_of(row):
-    return {**DEFAULT_SETTINGS, **json.loads(row["settings"] or "{}")}
+    s = {**DEFAULT_SETTINGS, **json.loads(row["settings"] or "{}")}
+    r = s.get("relay")
+    if isinstance(r, dict) and "dial" not in r:   # a Relay reel from before the dial
+        s["relay"] = {"dial": relay.dial_of(None, r.get("mix") or "single"), "photo": r.get("solo"),
+                      "cap": r.get("cap"), "quiet": bool(r.get("quiet"))}
+    return s

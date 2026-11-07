@@ -19,6 +19,8 @@ export const api = {
   home: () => fetch('/api/folders').then(json),
   folder: (name) => fetch(`/api/folders/${enc(name)}`).then(json),
   folderToReel: (name, reelName, opts = {}) => send('POST', `/api/folders/${enc(name)}/to-reel`, { name: reelName, ...opts }),
+  // A Relay reel from a folder at each dial setting: { photo, cap, quiet } -> { plans: [{ dial, stats, bar }], approx }.
+  relayPlan: (name, opts = {}) => send('POST', `/api/folders/${enc(name)}/relay-plan`, opts),
   // Move files to another shoot folder: { files, to, create } -> { folder, moved, failed, emptied }.
   moveFiles: (name, body) => send('POST', `/api/folders/${enc(name)}/move`, body),
 

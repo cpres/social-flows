@@ -29,15 +29,18 @@
       </div>
 
       <div v-if="style === 'relay'" class="opts">
-        <div class="mixes">
-          <span class="muted">Single or split</span>
-          <button
-            v-for="m in MIXES" :key="m.v" class="mix" :class="{ active: mix === m.v }" @click="mix = m.v" :title="m.hint"
-          >
-            <span class="mixbar"><i v-for="(seg, j) in m.bar" :key="j" :class="seg[0]" :style="{ flexGrow: seg[1] }"></i></span>
-            <b>{{ m.label }}</b>
-            <small>{{ m.hint }}</small>
-          </button>
+        <div class="dial">
+          <span class="mixbar" :title="plan ? `${plan.stats.splitPct}% split` : ''">
+            <i v-for="(seg, j) in planBar" :key="j" :class="seg[1] ? 'ab' : 'b'" :style="{ flexGrow: seg[0] }"></i>
+          </span>
+          <label class="slider">
+            <span class="muted">Split screen</span>
+            <small class="muted">less</small>
+            <input type="range" min="1" max="10" step="1" v-model.number="dial" />
+            <small class="muted">more</small>
+            <b class="dialv">{{ dial }}</b>
+          </label>
+          <small class="muted">{{ DIAL_HINT }}</small>
         </div>
         <div class="tbtns">
           <span class="muted">Long clips ({{ LONG }}s or more) play</span>
@@ -51,20 +54,15 @@
           <small class="muted">(real speed; where nothing much happens is cut out)</small>
         </label>
         <div class="tbtns">
-          <span class="muted">Photos and short clips: alone for</span>
-          <button v-for="x in [2, 3, 4, 6]" :key="x" class="btn small" :class="{ active: solo === x }" @click="solo = x">{{ x }}s</button>
+          <span class="muted">Photos stay on screen for</span>
+          <button v-for="x in [2, 3, 4, 6]" :key="x" class="btn small" :class="{ active: photo === x }" @click="photo = x">{{ x }}s</button>
+          <small class="muted">(short clips play their own length)</small>
         </div>
-        <div class="tbtns" v-if="mix === 'single'">
-          <span class="muted">Each one carries on above the next for</span>
-          <button v-for="x in [1, 2, 3, 5]" :key="x" class="btn small" :class="{ active: overlap === x }" @click="overlap = x">{{ x }}s</button>
-        </div>
-        <p v-if="estimate" class="estimate">
-          <b>{{ estimate.long }}</b> long clip{{ estimate.long === 1 ? '' : 's' }} at their own length,
-          <b>{{ estimate.short }}</b> photo{{ estimate.short === 1 ? '' : 's' }} and short clip{{ estimate.short === 1 ? '' : 's' }}:
-          about <b>{{ fmtTime(estimate.total) }}</b>{{ quiet ? ' (less, with quiet moments skipped)' : '' }},
-          <b>{{ Math.round((estimate.split / (estimate.total || 1)) * 100) }}%</b> of it split.
+        <p v-if="summary" class="estimate">
+          {{ summary }}<i v-if="plan.stats.limitedBy === 'photos'" class="limited">Mostly photos, so splits stay short.</i>
+          <small v-if="approx" class="muted"> (a little less once quiet moments are measured)</small>
         </p>
-        <small class="muted">In the order they were shot. A long clip plays from its start, or from the long stretch you picked on the shoot page; you can trim any of it in the reel afterwards.</small>
+        <small class="muted">In the order they were shot. A photo shot while a long clip was recording comes in under it at that moment. A long clip plays from its start, or from the long stretch you picked on the shoot page; you can trim any of it in the reel afterwards.</small>
       </div>
       <p v-if="error" class="warn small">{{ error }}</p>
       <div class="controls">
@@ -80,13 +78,13 @@
 //   standard  one part after another, full frame
 //   weave     the Weave wizard: clips cut into parts and interleaved
 //   stack     the longest clip on top (lane A) the whole way, the rest under it
-//   relay     each clip alone, then it carries on in the top slot while the
-//             next comes in underneath and takes over: single, split, single…
+//   relay     clips hand the frame on (the next comes in underneath and takes
+//             over), and photos come in under long clips as cameos; planned
+//             by studio/relay.py, the dial says how much is split
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
 import { fmtTime, folderTitle } from '../time'
-import { relayEstimate } from '../scenes'
 
 const props = defineProps({
   folder: { type: String, default: '' },     // making it from this shoot
@@ -100,44 +98,54 @@ const STYLES = [
   { v: 'standard', label: 'Standard', hint: 'One part after another, full frame.', frames: ['b', 'b', 'b'] },
   { v: 'weave', label: 'Weave', hint: 'Clips cut into parts and interleaved: a bit of each, then back for more.', frames: ['b', 'a1', 'b'], footage: true },
   { v: 'stack', label: 'Stack', hint: 'The longest clip on top the whole way, the others underneath, at real speed.', frames: ['ab', 'ab', 'ab'], footage: true },
-  { v: 'relay', label: 'Relay', hint: 'Long-form: each clip plays alone at its own length, then moves up and carries on while the next comes in under it and takes over.', frames: ['b', 'ab', 'b', 'ab'], footage: true },
+  { v: 'relay', label: 'Relay', hint: 'Long-form: each clip plays at its own length and hands the frame on to the next; photos come in under long clips for a moment.', frames: ['b', 'ab', 'b', 'ab'], footage: true },
 ]
 const name = ref(props.defaultName)
 const from = ref('')
 const source = computed(() => props.folder || from.value)
 const style = ref('standard')
-const solo = ref(3)
-const overlap = ref(3)
 const busy = ref(false)
 const error = ref('')
-const LONG = 10   // as scenes.py LONG_CLIP
+const LONG = 10   // as relay.py LONG_THRESHOLD
 const CAPS = [{ v: 0, label: 'Their full length' }, { v: 20, label: 'Up to 20s' }, { v: 30, label: 'Up to 30s' }, { v: 60, label: 'Up to 60s' }]
 const cap = ref(0)
 const quiet = ref(false)
-// The shoot's files, for the length estimate.
-const files = ref([])
-watch(source, async (f) => {
-  files.value = []
-  if (!f) return
-  try { files.value = (await api.folder(f)).media } catch { /* no estimate */ }
+const photo = ref(4)
+// How much is split, 1 (never) to 10 (whenever two things are there to share
+// the frame). A preference: photos can't sit on running video for long.
+const dial = ref(5)
+const DIAL_HINT = 'Long clips hand the frame on to the next; photos come in under them for a moment, then the clip takes the frame back.'
+// The plan at every dial setting (relay.py), fetched when the footage or the
+// other settings change, so the bar follows the slider as it moves.
+const plans = ref([])
+const approx = ref(false)
+let asked = 0
+let timer = null
+watch([source, style, photo, cap, quiet], () => {
+  clearTimeout(timer)
+  if (style.value !== 'relay' || !source.value) { plans.value = []; return }
+  timer = setTimeout(async () => {
+    const n = ++asked
+    try {
+      const r = await api.relayPlan(source.value, { photo: photo.value, cap: cap.value || null, quiet: quiet.value })
+      if (n === asked) { plans.value = r.plans; approx.value = r.approx }
+    } catch { if (n === asked) plans.value = [] }
+  }, 150)
 }, { immediate: true })
-// How much is split: mostly single (an overlap between clips), even, or mostly split.
-const MIXES = [
-  { v: 'single', label: 'Mostly single', hint: 'Each clip mostly on its own, short splits between', bar: [['b', 5], ['ab', 1], ['b', 5], ['ab', 1], ['b', 5]] },
-  { v: 'even', label: 'Even', hint: 'About half single, half split', bar: [['b', 3], ['ab', 3], ['b', 3], ['ab', 3], ['b', 3]] },
-  { v: 'split', label: 'Mostly split', hint: 'Short moments single, long stretches of two at once', bar: [['b', 1], ['ab', 5], ['b', 1], ['ab', 5], ['b', 1]] },
-]
-const mix = ref('single')
-const estimate = computed(() => {
-  const list = files.value
-  if (!list.length) return null
-  const clips = list.map((m) => {
-    const long = m.kind === 'video' && m.duration >= LONG
-    return { long, kind: m.kind, duration: m.duration || 0, avail: long && m.pick && m.pick.length >= LONG ? m.pick.length : m.duration || 0 }
-  })
-  const { total, split } = relayEstimate(clips, { overlap: overlap.value, solo: solo.value, cap: cap.value, mix: mix.value })
-  const long = clips.filter((c) => c.long).length
-  return { long, short: list.length - long, total, split }
+const plan = computed(() => plans.value.find((p) => p.dial === dial.value) || null)
+const planBar = computed(() => plan.value?.bar?.length ? plan.value.bar : [[1, false]])
+const count = (n, one, many) => `${n} ${n === 1 ? one : many}`
+// 9 long clips, 5 photos (3 as cameos) · about 4:43.6 · 61% split
+const summary = computed(() => {
+  const s = plan.value?.stats
+  if (!s) return ''
+  const bits = []
+  if (s.longCount) bits.push(count(s.longCount, 'long clip', 'long clips'))
+  if (s.shortCount) bits.push(count(s.shortCount, 'short clip', 'short clips'))
+  if (s.photoCount) bits.push(count(s.photoCount, 'photo', 'photos'))
+  const list = bits.length > 1 ? `${bits.slice(0, -1).join(', ')} and ${bits[bits.length - 1]}` : bits.join('')
+  const what = list + (s.cameoCount ? ` (${s.cameoCount} as cameo${s.cameoCount === 1 ? '' : 's'})` : '')
+  return `${what} · about ${fmtTime(s.totalSeconds)} · ${s.splitPct}% split`
 })
 const nameEl = ref(null)
 onMounted(() => nextTick(() => nameEl.value?.focus()))
@@ -152,8 +160,8 @@ async function make() {
   busy.value = true
   try {
     const r = source.value
-      ? await api.folderToReel(source.value, name.value.trim(), { style: style.value, solo: solo.value, overlap: overlap.value,
-                                                                  cap: cap.value || null, quiet: quiet.value, mix: mix.value })
+      ? await api.folderToReel(source.value, name.value.trim(), { style: style.value, dial: dial.value, photo: photo.value,
+                                                                  cap: cap.value || null, quiet: quiet.value })
       : await api.createReel(name.value.trim())
     router.push(`/reel/${r.id}`)
   } catch (e) {
@@ -186,17 +194,13 @@ async function make() {
 .controls { display: flex; justify-content: flex-end; gap: 8px; }
 .check { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .estimate { margin: 0; }
-.mixes { display: grid; grid-template-columns: auto repeat(3, 1fr); gap: 8px; align-items: stretch; }
-.mixes > .muted { align-self: center; }
-.mix {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 8px 10px; text-align: left;
-  border: 1px solid var(--line); border-radius: 10px; background: transparent; color: inherit; font: inherit; cursor: pointer;
-}
-.mix small { color: var(--muted); font-size: 11px; line-height: 1.3; }
-.mix.active { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
-.mixbar { display: flex; gap: 2px; width: 100%; height: 14px; }
+.limited { margin-left: 0.4em; }
+.dial { display: flex; flex-direction: column; gap: 6px; }
+.slider { display: flex; align-items: center; gap: 8px; }
+.slider input { flex: 1; accent-color: var(--sage); }
+.dialv { min-width: 1.5em; text-align: right; font-variant-numeric: tabular-nums; }
+.mixbar { display: flex; gap: 2px; width: 100%; height: 18px; }
 .mixbar i { display: flex; flex-direction: column; border-radius: 2px; min-width: 3px; }
 .mixbar i.b { background: var(--lane-b, #e9b27a); }
 .mixbar i.ab { background: linear-gradient(var(--lane-a, #b8cfa8) 0 48%, transparent 48% 52%, var(--lane-b, #e9b27a) 52%); }
-@media (max-width: 700px) { .mixes { grid-template-columns: 1fr; } }
 </style>

@@ -84,6 +84,7 @@ from db import DEFAULT_SETTINGS, Library, default_start, now, settings_of  # noq
 import audio  # noqa: E402
 import beats as beats_mod  # noqa: E402
 import compose  # noqa: E402
+import relay as relay_mod  # noqa: E402
 import scenes as scenes_mod  # noqa: E402
 import montage  # noqa: E402
 from music import AUDIO_EXTS, Shelf, beat_detection_available  # noqa: E402
@@ -384,22 +385,17 @@ def folder_to_reel(name: str, body: dict = Body(default={})):
     """Make a reel from a folder: its old studio trims if any, else every file.
 
     {name, style}: standard (one part after another), stack (the longest
-    video is lane A, the rest play under it at real speed) or relay (each
-    clip plays alone, then carries on in A's slot while the next comes in
-    underneath and takes over; {overlap, solo} seconds).
+    video is lane A, the rest play under it at real speed) or relay
+    (relay.py: clips hand the frame on, photos come in under long clips as
+    cameos; {dial: 1..10, photo: seconds, cap, quiet}; an old {mix} maps to
+    the dial).
 
     Files that are copies of originals in another shoot folder point at the
     original, so per-concept folders of copied files can be retired.
     """
     folder = resolve(name)
     lib.scan()
-    side = {}
-    if (folder / SIDECAR).exists():
-        try:
-            side = json.loads((folder / SIDECAR).read_text())
-        except ValueError:
-            side = {}
-    saved = side.get("clips", {})
+    side = folder_sidecar(folder)
     settings = {**DEFAULT_SETTINGS, **side.get("settings", {})}
     reel_name = (body.get("name") or name).strip()
     with lib.connect() as db:
@@ -408,20 +404,7 @@ def folder_to_reel(name: str, body: dict = Body(default={})):
         cur = db.execute("INSERT INTO reels (name, settings, created_at, updated_at) "
                          "VALUES (?, ?, ?, ?)", (reel_name, json.dumps(settings), now(), now()))
         reel_id = cur.lastrowid
-        rows = db.execute("SELECT * FROM media WHERE folder = ? AND missing = 0 "
-                          "ORDER BY captured_at", (name,)).fetchall()
-        for pos, m in enumerate(rows):
-            s = saved.get(m["name"], {})
-            if not s.get("keep", True):
-                continue
-            # An old trim wins; else the part picked in the shoot; else the default.
-            pick = pick_of(db, m["id"]) or {}
-            if m["kind"] == "video":
-                length = float(s.get("length", pick.get("length", min(settings["defaultLength"], m["duration"]))))
-                start = float(s.get("start", pick.get("start", default_start(m["duration"], length))))
-                start, length = fit(start, length, m["duration"])
-            else:
-                length, start = float(s.get("length", pick.get("length", settings["defaultHold"]))), 0.0
+        for pos, m, start, length, pick in folder_parts(db, name, side):
             db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length, "
                        "focus_x, focus_y, zoom, layout, frames) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '{}')",
                        (reel_id, lib.original_of(db, m["id"]), pos, start, length,
@@ -433,9 +416,111 @@ def folder_to_reel(name: str, body: dict = Body(default={})):
     return {"id": reel_id}
 
 
+def folder_sidecar(folder):
+    """A shoot folder's old studio file (its trims and settings), or {}."""
+    if (folder / SIDECAR).exists():
+        try:
+            return json.loads((folder / SIDECAR).read_text())
+        except ValueError:
+            pass
+    return {}
+
+
+def folder_parts(db, name, side):
+    """A folder's files as a new reel's parts, in shot order: [(position,
+    media row, start, length, pick)]. An old trim wins; else the part
+    picked in the shoot; else the default. Files the old trims dropped are
+    left out."""
+    saved = side.get("clips", {})
+    settings = {**DEFAULT_SETTINGS, **side.get("settings", {})}
+    rows = db.execute("SELECT * FROM media WHERE folder = ? AND missing = 0 "
+                      "ORDER BY captured_at", (name,)).fetchall()
+    out = []
+    for pos, m in enumerate(rows):
+        s = saved.get(m["name"], {})
+        if not s.get("keep", True):
+            continue
+        pick = pick_of(db, m["id"]) or {}
+        if m["kind"] == "video":
+            length = float(s.get("length", pick.get("length", min(settings["defaultLength"], m["duration"]))))
+            start = float(s.get("start", pick.get("start", default_start(m["duration"], length))))
+            start, length = fit(start, length, m["duration"])
+        else:
+            length, start = float(s.get("length", pick.get("length", settings["defaultHold"]))), 0.0
+        out.append((pos, m, start, length, pick))
+    return out
+
+
+def relay_opts(body):
+    """The Relay settings asked for: the dial (or an old Single or split
+    choice), how long photos stay, the long-clip cap, quiet moments."""
+    return {"dial": relay_mod.dial_of(body.get("dial"), body.get("mix")),
+            "photo_seconds": min(max(float(body.get("photo") or body.get("solo") or relay_mod.PHOTO_SECONDS), 0.5), 30),
+            "cap": float(body["cap"]) if body.get("cap") else None,
+            "quiet": bool(body.get("quiet"))}
+
+
+def relay_items(db, parts, opts, cached_only=False):
+    """What the relay planner needs of each part: [{kind, duration, start,
+    length, avail, shot_at, keep}]. parts: dicts with kind, duration, start,
+    length, media_id, path, captured_at. A long clip plays from its start,
+    or the long stretch picked in its shoot (a short one all of itself, or
+    the stretch picked); with quiet moments skipped,
+    `keep` is that stretch (to the cap) with its lulls out. cached_only: use
+    only movement already measured (for a quick estimate). Also returns
+    whether any was missing."""
+    items, missing = [], False
+    for p in parts:
+        it = {"kind": p["kind"], "duration": float(p["duration"] or 0), "start": float(p["start"]),
+              "length": float(p["length"]), "shot_at": float(p["captured_at"] or 0)}
+        if p["kind"] == "video" and it["duration"] >= relay_mod.LONG_THRESHOLD:
+            pick = pick_of(db, p["media_id"])
+            if pick and pick["length"] >= relay_mod.LONG_THRESHOLD:
+                it["start"], it["avail"] = float(pick["start"]), float(pick["length"])
+            else:
+                it["start"], it["avail"] = 0.0, it["duration"]
+            if opts.get("quiet"):
+                window = min(it["avail"], opts["cap"]) if opts.get("cap") else it["avail"]
+                path = ROOT / p["path"]
+                try:
+                    act = activity_cached(path) if cached_only else activity_of(path)
+                except Exception:
+                    act = None
+                if act:
+                    it["keep"] = montage.quiet_cut([(float(a), float(b)) for a, b in act["points"]], it["start"], window)
+                else:
+                    missing = True
+        elif p["kind"] == "video":   # a short clip plays all of itself, or the stretch picked in its shoot
+            pick = pick_of(db, p["media_id"])
+            it["start"], it["length"] = (float(pick["start"]), float(pick["length"])) if pick else (0.0, it["duration"])
+        items.append(it)
+    return items, missing
+
+
+@app.post("/api/folders/{name}/relay-plan")
+def relay_preview(name: str, body: dict = Body(default={})):
+    """What a Relay reel from this folder would look like at each dial
+    setting, for the New reel dialog: {plans: [{dial, stats, bar}] (dial 1
+    to 10), approx: quiet moments not measured yet for some clips}."""
+    folder = resolve(name)
+    opts = relay_opts(body)
+    side = folder_sidecar(folder)
+    with lib.connect() as db:
+        parts = [{"kind": m["kind"], "duration": m["duration"], "start": start, "length": length,
+                  "media_id": lib.original_of(db, m["id"]), "path": m["path"], "captured_at": m["captured_at"]}
+                 for _, m, start, length, _ in folder_parts(db, name, side)]
+        items, missing = relay_items(db, parts, opts, cached_only=True)
+    plans = []
+    for d in range(relay_mod.DIAL_MIN, relay_mod.DIAL_MAX + 1):
+        plan = relay_mod.plan_relay(items, {**opts, "dial": d})
+        plans.append({"dial": d, "stats": plan["stats"], "bar": relay_mod.bar(plan)})
+    return {"plans": plans, "approx": missing}
+
+
 def apply_style(db, reel_id, style, body):
     """Lay a new reel out in a style (see folder_to_reel)."""
-    rows = db.execute("""SELECT i.*, m.kind, m.duration FROM reel_items i JOIN media m ON m.id = i.media_id
+    rows = db.execute("""SELECT i.*, m.kind, m.duration, m.captured_at, m.path FROM reel_items i
+                         JOIN media m ON m.id = i.media_id
                          WHERE i.reel_id = ? AND i.keep = 1 ORDER BY i.position, i.id""", (reel_id,)).fetchall()
     s = settings_of(db.execute("SELECT settings FROM reels WHERE id = ?", (reel_id,)).fetchone())
     if style == "stack":
@@ -449,44 +534,29 @@ def apply_style(db, reel_id, style, body):
         s["scenes"] = [{"id": scenes_mod.new_id(), "layout": "stack", "from": rest[0]["id"], "split": 0.5, "into": "cut",
                         "a": {"item": top["id"], "in": None, "out": None, "timing": "real", "speed": 1}}]
     else:
-        overlap = min(max(float(body.get("overlap") or 3), 0.5), 10)
-        solo = min(max(float(body.get("solo") or 4), 0.5), 30)
-        cap = float(body["cap"]) if body.get("cap") else None
-        clips = []
-        for r in rows:
-            long = r["kind"] == "video" and r["duration"] >= scenes_mod.LONG_CLIP
-            if long:
-                # A long clip plays in full: from the start, or the long stretch picked in its shoot.
-                pick = pick_of(db, r["media_id"])
-                if pick and pick["length"] >= scenes_mod.LONG_CLIP:
-                    start, avail = pick["start"], pick["length"]
-                else:
-                    start, avail = 0.0, r["duration"]
-            else:
-                start, avail = r["start"], r["length"]
-            clips.append({"row": r, "start": start, "avail": avail, "long": long})
-
-        def quiet(r, start, length):   # a long clip's time alone, its lulls taken out
-            path = ROOT / db.execute("SELECT path FROM media WHERE id = ?", (r["media_id"],)).fetchone()["path"]
-            try:
-                points = activity_of(path)["points"]
-            except Exception:
-                return [(start, length)]
-            return montage.quiet_cut([(float(t), float(v)) for t, v in points], start, length)
-
-        mix = body.get("mix") if body.get("mix") in scenes_mod.RELAY_MIX else "single"
-        parts, make = scenes_mod.relay_plan(clips, overlap, solo, cap, quiet if body.get("quiet") else None, mix)
+        opts = relay_opts(body)
+        items, _ = relay_items(db, rows, opts)
+        plan = relay_mod.plan_relay(items, opts)
         db.execute("DELETE FROM reel_items WHERE reel_id = ?", (reel_id,))
         ids = []
-        for pos, (r, start, length, _) in enumerate(parts):
-            cols = [c for c in ITEM_COLUMNS if c not in ("position", "start", "length")]
+        cols = [c for c in ITEM_COLUMNS if c not in ("position", "start", "length")]
+        for pos, part in enumerate(plan["lanes"]["B"]):
+            r = rows[part["item"]]
             cur = db.execute(f"INSERT INTO reel_items (reel_id, position, start, length, {', '.join(cols)}) "
                              f"VALUES (?, ?, ?, ?, {', '.join('?' * len(cols))})",
-                             (reel_id, pos, start, length, *[r[c] for c in cols]))
+                             (reel_id, pos, part["start"], part["length"], *[r[c] for c in cols]))
             ids.append(cur.lastrowid)
+        split = s.get("stackSplit") or 0.5
         s["laneA"] = []
-        s["scenes"] = make(ids)
-        s["relay"] = {"overlap": overlap, "solo": solo, "cap": cap, "quiet": bool(body.get("quiet")), "mix": mix}
+        s["scenes"] = []
+        for sc in plan["scenes"]:
+            out = {"id": scenes_mod.new_id(), "layout": sc["layout"], "from": ids[sc["parts"][0]], "into": sc["into"]}
+            if sc["layout"] == "stack":
+                out.update(split=split, relay=True)
+            if sc.get("grow"):
+                out["grow"] = sc["grow"]
+            s["scenes"].append(out)
+        s["relay"] = {"dial": opts["dial"], "photo": opts["photo_seconds"], "cap": opts["cap"], "quiet": opts["quiet"]}
     db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), reel_id))
 
 
@@ -1203,7 +1273,8 @@ def build_config(reel, rows, grid_bpm=None):
     for k, sc in enumerate(scenes):
         entry_sc = {"layout": sc["layout"], "split": sc.get("split", 0.5),
                     "into": sc.get("into", "cut") if k else "cut", **({"fill": sc["fill"]} if sc.get("fill") else {}),
-                    **({"handoff": sc.get("handoff", scenes_mod.HANDOFF_DEFAULT)} if sc.get("into") == "handoff" else {})}
+                    **({"handoff": sc.get("handoff", scenes_mod.HANDOFF_DEFAULT)} if sc.get("into") == "handoff" else {}),
+                    **({"grow": "A"} if sc.get("grow") == "A" and sc["layout"] == "soloB" else {})}
         prev = scenes[k - 1] if k else None
         relay = (sc.get("relay") and sc["layout"] in ("stack", "swap") and sc.get("into") == "handoff"
                  and prev and prev["layout"] == "soloB" and prev["parts"])
@@ -2181,6 +2252,13 @@ def activity_of(path):
         tmp.write_text(json.dumps({"points": movement(path)}))
         tmp.replace(out)
     return json.loads(out.read_text())
+
+
+def activity_cached(path):
+    """activity_of's result if it's been measured already, else None."""
+    key = hashlib.sha1(f"activity|{path}|{path.stat().st_mtime}".encode()).hexdigest()
+    out = CACHE / f"{key}.json"
+    return json.loads(out.read_text()) if out.exists() else None
 
 
 @app.post("/api/envelopes")
