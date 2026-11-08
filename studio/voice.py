@@ -118,9 +118,14 @@ class Voice:
         job = self._jobs.get(self.key(path))
         return dict(job) if job else {"status": "none", "progress": 0.0}
 
-    def start(self, path):
-        """Transcribe the take in the background (once)."""
+    def start(self, path, again=False):
+        """Transcribe the take in the background (once, unless again)."""
         key = self.key(path)
+        if again:
+            with self._guard:
+                if (self._jobs.get(key) or {}).get("status") != "running":
+                    self.transcript_file(path).unlink(missing_ok=True)
+                    self._jobs.pop(key, None)
         with self._guard:
             job = self._jobs.get(key)
             if self.transcript_file(path).exists() or (job and job["status"] == "running"):

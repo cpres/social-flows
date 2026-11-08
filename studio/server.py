@@ -1273,11 +1273,12 @@ def voice_envelope(folder: str, file: str):
 
 
 @app.post("/api/voice/transcribe/{folder}/{file}")
-def voice_transcribe(folder: str, file: str):
+def voice_transcribe(folder: str, file: str, again: bool = False):
+    """Transcribe a take (once; again=true throws away what it heard and listens again)."""
     path = take_path(folder, file)
-    if not voice.transcript(path) and not transcription_available():
+    if (again or not voice.transcript(path)) and not transcription_available():
         raise HTTPException(503, "Transcribing isn't installed: start the studio with ./studio/run.sh --voice")
-    return voice.start(path)
+    return voice.start(path, again=again)
 
 
 @app.get("/api/voice/transcript/{folder}/{file}")

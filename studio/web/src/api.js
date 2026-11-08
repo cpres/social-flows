@@ -110,7 +110,7 @@ export const api = {
   voiceTakes: (folder) => fetch(`/api/voice/takes/${enc(folder)}`).then(json),
   voiceAudio: (folder, file) => `/api/voice/audio/${enc(folder)}/${enc(file)}`,
   voicePeaks: (folder, file) => fetch(`/api/voice/peaks/${enc(folder)}/${enc(file)}`).then(json),
-  transcribe: (folder, file) => send('POST', `/api/voice/transcribe/${enc(folder)}/${enc(file)}`),
+  transcribe: (folder, file, again = false) => send('POST', `/api/voice/transcribe/${enc(folder)}/${enc(file)}${again ? '?again=true' : ''}`),
   transcript: (folder, file) => fetch(`/api/voice/transcript/${enc(folder)}/${enc(file)}`).then(json),
   // Time pasted text to a stretch of a take: { folder, file, start, end, text } -> { lines }.
   alignText: (body) => send('POST', '/api/voice/align', body),

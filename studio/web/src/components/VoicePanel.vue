@@ -283,24 +283,34 @@
         <p v-if="!pieces.length"><b>No captions yet.</b> Add a piece of a recording under <em>Voice</em>, and its words show up here.</p>
         <template v-else>
           <p><b>No captions yet:</b> the voice has no lines.</p>
-          <p v-for="w in waiting" :key="w.key" class="small">
-            <span class="mono">{{ w.file }}</span>:
-            <template v-if="w.status === 'running'">
-              {{ w.stage === 'loading' ? 'loading the speech model (the first time, it downloads about 1.6 GB)…' : `transcribing… ${Math.round((w.progress || 0) * 100)}%` }}
-              Its lines appear here when it's done.
-            </template>
-            <template v-else-if="w.status === 'failed'">
-              <span class="warn">couldn't transcribe ({{ w.error }}).</span>
-              <button class="link" @click="transcribePiece(w)">Try again</button>
-            </template>
-            <template v-else-if="w.status === 'done'">nothing was heard in the part you're using. Check its <em>From</em> and <em>To</em>, or paste the text.</template>
-            <template v-else-if="canTranscribe">
-              not transcribed yet. <button class="btn small primary" @click="transcribePiece(w)">Transcribe</button>
-            </template>
-            <template v-else>
-              transcribing isn't installed: quit the studio and start it with <code>./studio/run.sh --voice</code>.
-            </template>
-          </p>
+          <div v-for="w in waiting" :key="w.key" class="wtake">
+            <span class="mono">{{ w.file }}</span>
+            <span class="small">
+              <template v-if="w.busy">getting its words…</template>
+              <template v-else-if="w.status === 'running'">
+                {{ w.stage === 'loading' ? 'loading the speech model (the first time, it downloads about 1.6 GB)…' : `transcribing… ${Math.round((w.progress || 0) * 100)}%` }}
+                The captions fill in when it's done.
+              </template>
+              <template v-else-if="w.status === 'failed'"><span class="warn">couldn't transcribe: {{ w.error }}</span></template>
+              <template v-else-if="w.status === 'done' && !w.words">the transcript has no words in it.</template>
+              <template v-else-if="w.status === 'done' && !w.inside">
+                it heard {{ w.words }} words, but none between {{ fmtTime(w.start) }} and {{ fmtTime(w.end) }}, the part of the take this piece uses.
+              </template>
+              <template v-else-if="w.status === 'done'">it heard {{ w.words }} words ({{ w.inside }} in this piece).</template>
+              <template v-else-if="!canTranscribe">transcribing isn't installed: quit the studio and start it with <code>./studio/run.sh --voice</code>.</template>
+              <template v-else>not transcribed yet.</template>
+            </span>
+            <span class="wbtns">
+              <button
+                v-if="w.status !== 'running' && (canTranscribe || w.status === 'done')" class="btn small primary"
+                @click="captureLines(w)" :disabled="w.busy"
+              >Make captions from what's said</button>
+              <button
+                v-if="canTranscribe && (w.status === 'done' || w.status === 'failed')" class="link"
+                @click="captureLines(w, true)" :disabled="w.busy" title="Throw away what it heard and listen again"
+              >Transcribe again</button>
+            </span>
+          </div>
           <p class="small muted">Or type the words yourself: open the piece's <em>Lines</em> and use <em>Paste the written text</em>.</p>
         </template>
       </div>
@@ -547,15 +557,48 @@ const pickEnd = computed(() => pickBounds.value[1])
 // lines you clear yourself stay cleared.
 const pieceStates = ref({})   // "folder/file" -> what transcribing it says
 const keyOf = (p) => `${p.folder}/${p.file}`
+// With no captions at all: every take the voice uses, and what its transcript says.
 const waiting = computed(() => {
   const seen = new Set()
-  return pieces.value.filter((p) => !p.lines?.length && !seen.has(keyOf(p)) && seen.add(keyOf(p)))
-    .map((p) => ({ key: keyOf(p), folder: p.folder, file: p.file, status: 'none', ...(pieceStates.value[keyOf(p)] || {}) }))
+  return pieces.value.filter((p) => !seen.has(keyOf(p)) && seen.add(keyOf(p))).map((p) => {
+    const st = pieceStates.value[keyOf(p)] || {}
+    const words = st.words || []
+    const inside = words.filter((w) => w.e > p.start && w.s < p.end).length
+    return { key: keyOf(p), folder: p.folder, file: p.file, start: p.start, end: p.end, status: 'none', ...st,
+             words: words.length, inside }
+  })
 })
+// The button: the take's words become the lines of every piece that uses it
+// (transcribing it first if it hasn't been, or again if asked).
+const forced = new Set()
+async function captureLines(w, again = false) {
+  pieceStates.value = { ...pieceStates.value, [w.key]: { ...(pieceStates.value[w.key] || {}), busy: true } }
+  try {
+    let r = await api.transcript(w.folder, w.file)
+    if (again || r.status !== 'done') {
+      await api.transcribe(w.folder, w.file, again)
+      r = await api.transcript(w.folder, w.file)
+    }
+    pieceStates.value = { ...pieceStates.value, [w.key]: r }
+    forced.add(w.key)
+    fillLines()
+  } catch (e) {
+    pieceStates.value = { ...pieceStates.value, [w.key]: { status: 'failed', error: e.message } }
+  }
+}
+// What each take's transcript says, for the message above (once there are no captions).
+async function checkTakes() {
+  if (tl.value.lines.length) return
+  for (const w of waiting.value) {
+    if (pieceStates.value[w.key]) continue
+    const r = await api.transcript(w.folder, w.file).catch(() => null)
+    if (r) pieceStates.value = { ...pieceStates.value, [w.key]: r }
+  }
+}
 let fillTimer
 async function fillLines() {
   clearTimeout(fillTimer)
-  const empty = pieces.value.filter((p) => !p.lines?.length && !p.linesFilled)
+  const empty = pieces.value.filter((p) => forced.has(keyOf(p)) || (!p.lines?.length && !p.linesFilled))
   let running = false
   for (const key of new Set(empty.map(keyOf))) {
     const p0 = empty.find((p) => keyOf(p) === key)
@@ -564,21 +607,14 @@ async function fillLines() {
     pieceStates.value = { ...pieceStates.value, [key]: r }
     if (r.status === 'running') running = true
     if (r.status !== 'done') continue
+    forced.delete(key)
     for (const p of empty.filter((q) => keyOf(q) === key)) {
       p.lines = copyLines(r.lines.filter((l) => l.e > p.start + 0.05 && l.s < p.end - 0.05))
       p.linesFilled = true
     }
   }
   if (running) fillTimer = setTimeout(fillLines, 2000)
-}
-async function transcribePiece(w) {
-  try {
-    pieceStates.value = { ...pieceStates.value, [w.key]: await api.transcribe(w.folder, w.file) }
-  } catch (e) {
-    pieceStates.value = { ...pieceStates.value, [w.key]: { status: 'failed', error: e.message } }
-    return
-  }
-  fillLines()
+  else checkTakes()
 }
 onMounted(fillLines)
 watch(() => pieces.value.map(keyOf).join('|'), () => fillLines())
@@ -906,4 +942,6 @@ li.gap { height: 8px; padding: 0; }
 .nolines { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; background: var(--sage-soft); font-size: 14px; }
 .nolines p { margin: 0 0 6px; }
 .nolines p:last-child { margin-bottom: 0; }
+.wtake { display: grid; gap: 4px; padding: 6px 0; border-top: 1px solid rgb(128 128 128 / 18%); }
+.wbtns { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 </style>
