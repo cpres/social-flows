@@ -147,7 +147,10 @@ python3 studio/server.py --open
     *Acoustic groove*: the same with a real beat, ~109 BPM); *Instruments*
     to ask for by name (nylon or steel-string guitar, upright bass, cajón,
     brushed drums, kalimba, cello, felt piano, Rhodes, strings, banjo,
-    marimba, synth pads; none lets the music choose); the tempo and key they point to (or yours); and the
+    marimba, synth pads; none lets the music choose); *Voices* (always
+    wordless, never lyrics): *None* (the default, keeping every kind of voice
+    out, angelic oohs and choirs too), *Male hums*, *Male chant*, *Female*,
+    *Choir*; a voice comes in at the builds and peaks; the tempo and key they point to (or yours); and the
     prompt, which you can edit.
   - *Generate a take* makes one, from your settings as they are (one at a
     time, so you only pay for what you listen to). Then *Try another

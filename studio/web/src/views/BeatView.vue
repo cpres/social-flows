@@ -356,6 +356,8 @@ function summary(t) {
   out.push({ text: b.end ? 'ends on the last frame' : 'fades out', kind: '' })
   const ins = (b.instruments || []).map((k) => instrumentNames.value[k] || k)
   if (ins.length) out.push({ text: ins.join(' · '), kind: 'ins' })
+  const VOICE_NAMES = { male: 'Male hums', chant: 'Male chant', female: 'Female voice', choir: 'Choir' }
+  out.push({ text: VOICE_NAMES[b.voices] ? `Voices: ${VOICE_NAMES[b.voices]} (wordless)` : 'No voices', kind: b.voices && b.voices !== 'none' ? 'voice' : '' })
   if (b.prompt) out.push({ text: 'your own prompt', kind: 'warn' })
   return out
 }
@@ -569,6 +571,7 @@ onBeforeUnmount(() => {
 .tsum .chip.src { background: rgb(111 147 196 / 18%); font-weight: 600; }
 .tsum .chip.energy { background: rgb(224 128 56 / 14%); }
 .tsum .chip.ins { background: rgb(138 163 124 / 18%); }
+.tsum .chip.voice { background: rgb(150 120 190 / 18%); }
 .tsum .chip.warn { background: rgb(224 128 56 / 22%); }
 .tsum .more { font-size: 11px; margin-left: 2px; }
 .tdetails { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 8px 0 0; font-size: 12px; }

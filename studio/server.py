@@ -2073,7 +2073,8 @@ def beat_prompt_text(ctx):
     calm = (ctx["beat"].get("ceiling") or 1) <= 0.65
     tail = "Stays relaxed and steady the whole way, a gentle lift, no big drops" if calm else ""
     feat = f"Featuring {', '.join(s['instruments'])}" if s.get("instruments") else ""
-    return ". ".join(x for x in [head, feat, ", ".join(s["levers"] + s["words"]), tail] if x) + "."
+    voice = beats_mod.voice_line(ctx["beat"]).rstrip(".")
+    return ". ".join(x for x in [head, feat, ", ".join(s["levers"] + s["words"]), tail, voice] if x) + "."
 
 
 @app.get("/api/reels/{reel_id}/beat/preview")
@@ -2289,6 +2290,12 @@ def beat_styles():
     return [{"v": f, "label": label, "styles": [
         {"v": k, "label": st[0], "words": st[1], "levers": st[2], "instruments": st[3], "tempo": st[4]}
         for k, st in styles.items()]} for f, (label, styles) in beats_mod.STYLES.items()]
+
+
+@app.get("/api/beat/voices")
+def beat_voices():
+    """Voices a beat can have, all wordless: [{v, label, words}]."""
+    return [{"v": k, "label": v[0], "words": v[1]} for k, v in beats_mod.VOICES.items()]
 
 
 @app.get("/api/beat/instruments")

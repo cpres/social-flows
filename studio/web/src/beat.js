@@ -214,13 +214,14 @@ export function peakOf(points) {
 
 // ---------------------------------------------------------------- the prompt
 
-export function beatPrompt({ tempo, key, from, levers: l, curve, hits, end, length, edges, ceiling, instruments = [] }) {
+export function beatPrompt({ tempo, key, from, levers: l, curve, hits, end, length, edges, ceiling, instruments = [], voices = [] }) {
   // Whole seconds, as people say them; tenths too in a short reel, where they matter.
   const t = (s) => (length < 30 ? fmtTime(s) : fmtTime(Math.round(s)).replace(/\.\d$/, ''))
   const parts = [`${tempo} BPM, ${key}`]
   if (from?.kind === 'song') parts[0] += from.category ? `, in the groove of your ${from.category} song` : `, in the groove of “${from.title || from.name}”`
   if (from?.kind === 'style' && from.words?.length) parts[0] += `, ${from.words.join(', ')}`
   const words = LEVERS.filter((x) => (l[x.v] || 0) >= 2).map((x) => (l[x.v] >= 4 ? x.strong : x.word))
+    .map((w) => (!voices.length && w === 'euphoric, with chants and swells' ? 'euphoric swells' : w))   // no chants without voices
   const lines = [`${parts[0]}.`]
   if (instruments.length) lines.push(`Featuring ${instruments.join(', ')}.`)
   if (words.length) lines.push(`${words.join(', ')}.`)
@@ -239,6 +240,7 @@ export function beatPrompt({ tempo, key, from, levers: l, curve, hits, end, leng
   if (hits && edges.length) shape.push(`hits at ${edges.map((e) => t(e)).join(', ')}`)
   shape.push(end ? `resolves on the last frame at ${t(length)}` : `fades out by ${t(length)}`)
   lines.push(`${shape.join(', ')}.`)
+  lines.push(voices.length ? `Voices: ${voices.join(', ')}; wordless, no lyrics.` : 'Instrumental, no voices of any kind.')
   return lines.join(' ')
 }
 
@@ -246,6 +248,6 @@ export function beatPrompt({ tempo, key, from, levers: l, curve, hits, end, leng
 export function newBeat(scenes) {
   return {
     from: { kind: 'scratch' }, curve: presetCurve('follow', scenes), preset: 'follow', hits: true, end: true,
-    levers: { ...VIBES[0].levers }, vibe: VIBES[0].v, tempo: null, key: null, prompt: null, ceiling: null, instruments: [],
+    levers: { ...VIBES[0].levers }, vibe: VIBES[0].v, tempo: null, key: null, prompt: null, ceiling: null, instruments: [], voices: 'none',
   }
 }

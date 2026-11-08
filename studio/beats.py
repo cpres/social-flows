@@ -146,6 +146,7 @@ def clean(beat):
     out["prompt"] = str(prompt)[:4000] if isinstance(prompt, str) and prompt.strip() else None
     ceil = beat.get("ceiling")
     out["ceiling"] = None if ceil in (None, "") or _num(ceil, 0.1, 1, 1) >= 0.995 else round(_num(ceil, 0.1, 1, 1), 2)
+    out["voices"] = voices_of(beat)
     out["engine"] = beat.get("engine") if beat.get("engine") in ENGINES else "elevenlabs"
     use = beat.get("inUse")
     out["inUse"] = ({"take": str(use["take"])[:40], "length": round(_num(use.get("length"), 0, 3600, 0), 2),
@@ -186,7 +187,10 @@ def key_of(beat, ref_key=""):
 
 
 def lever_words(beat):
-    return [WORDS[k][1] if v >= 4 else WORDS[k][0] for k, v in beat["levers"].items() if v >= 2]
+    words = [WORDS[k][1] if v >= 4 else WORDS[k][0] for k, v in beat["levers"].items() if v >= 2]
+    if voices_of(beat) == "none":   # no chants unless voices are wanted
+        words = ["euphoric swells" if w == WORDS["ecstatic"][1] else w for w in words]
+    return words
 
 
 def curve_at(points, x):
@@ -277,6 +281,8 @@ ADAPTS = {
     "grittier": ("grittier", ["grittier, more texture", "a little tape dirt"], {"grungy": 2}, 0),
     "simpler": ("simpler", ["simpler arrangement", "fewer layers"], {}, 0),
     "acoustic+": ("more acoustic", ["more acoustic guitar", "unplugged and organic"], {"acoustic": 2}, 0),
+    "voices-none": ("no voices", [], {}, 0),
+    "voices-male": ("male voices", [], {}, 0),
 }
 
 
@@ -290,6 +296,8 @@ def adapted(beat, tweaks, note):
             continue
         label, extra, nudges, lift = ADAPTS[k]
         labels.append(label)
+        if k.startswith("voices-"):
+            b["voices"] = "none" if k == "voices-none" else "male"
         words += extra
         for lever, d in nudges.items():
             b["levers"][lever] = int(min(max(b["levers"][lever] + d, 0), 5))
@@ -303,6 +311,25 @@ def adapted(beat, tweaks, note):
 
 
 NO_VOCALS = ["vocals", "singing", "lyrics", "spoken word", "rap"]
+# Voices in the music: always wordless (never lyrics). None keeps every kind
+# of voice out, angelic oohs and choirs included; the male ones keep female
+# and angelic voices out. id -> (label, words for the music, kept out).
+VOICES = {
+    "none": ("None", [], []),
+    "male": ("Male hums", ["wordless male vocals", "low, warm male hums and oohs", "baritone voice"],
+             ["female vocals", "soprano", "angelic female voice", "high falsetto"]),
+    "chant": ("Male chant", ["wordless deep male chanting", "low, droning male voices"],
+              ["female vocals", "soprano", "angelic female voice", "high falsetto"]),
+    "female": ("Female", ["wordless female vocals", "airy oohs"], ["male vocals"]),
+    "choir": ("Choir", ["wordless mixed choir", "soft choral swells"], []),
+}
+NO_VOICES = NO_VOCALS + ["female vocals", "male vocals", "angelic voices", "choir", "humming", "oohs and aahs",
+                         "vocal chops", "vocalise", "chanting"]
+WORDLESS = ["lyrics", "spoken word", "rap", "sung words"]
+
+
+def voices_of(beat):
+    return beat.get("voices") if beat.get("voices") in VOICES else "none"
 
 
 def composition_plan(beat, secs, style, variation):
@@ -312,7 +339,8 @@ def composition_plan(beat, secs, style, variation):
     length = secs[-1]["end"]
     ms = [round(s["end"] * 1000) - round(s["start"] * 1000) for s in secs]
     ms[-1] = round(length * 1000) - sum(ms[:-1])
-    negative = ["lead vocals", "lyrics", "spoken word", "rap"] if beat["levers"]["ecstatic"] >= 4 else list(NO_VOCALS)
+    voices = voices_of(beat)
+    negative = list(NO_VOICES) if voices == "none" else WORDLESS + VOICES[voices][2]
     calm = (beat.get("ceiling") or 1) <= 0.65   # kept low: relaxed and steady the whole way
     if beat["levers"].get("acoustic", 0) >= 4 and beat["levers"].get("futuristic", 0) <= 1:
         negative += ["heavy synths", "EDM drops", "distorted electric guitar"]   # keep it unplugged
@@ -325,13 +353,15 @@ def composition_plan(beat, secs, style, variation):
             directions.append("big hit on the first beat")
         directions.append({"up": "building up, layers stacking, rising energy",
                            "down": "winding down, layers falling away"}.get(s["trend"], energy_words(s["energy"])))
+        if voices != "none" and s["name"] in ("Build", "Peak", "Finale"):
+            directions.append(f"{VOICES[voices][1][1]} rise in, wordless")
         if s["edge_out"] and beat["hits"]:
             directions.append("drum fill into the next section")
         if i == len(secs) - 1:
             directions.append("resolves and ends on a final hit on the last beat" if beat["end"] else "fades out")
         styles = [energy_words(s["energy"])]
         if i == 0:
-            styles = (["instrumental"] + style["genres"] + style.get("instruments", []) + style["words"] + style["levers"]
+            styles = ((["instrumental"] if voices == "none" else VOICES[voices][1]) + style["genres"] + style.get("instruments", []) + style["words"] + style["levers"]
                       + [f"{style['tempo']} BPM", style["key"]] + styles + variation
                       + (["relaxed, steady vibe throughout", "gentle lift, never peaks"] if calm else [])
                       + ["great production quality"])
@@ -341,13 +371,19 @@ def composition_plan(beat, secs, style, variation):
     return {"chunks": chunks}
 
 
-def timestamped(prompt, secs):
+def voice_line(beat):
+    v = voices_of(beat)
+    return ("Instrumental, no voices of any kind." if v == "none" else
+            f"Voices: {', '.join(VOICES[v][1])}; wordless, no lyrics.")
+
+
+def timestamped(prompt, secs, beat):
     """The prompt with its sections as [m:ss - m:ss] lines (Lyria reads timestamps)."""
     clock = lambda t: f"{int(t // 60)}:{int(t % 60):02d}"
     return prompt + "\n" + "\n".join(
         f"[{clock(s['start'])} - {clock(s['end'])}] {s['name']}: {energy_words(s['energy'])}"
         + (", building up" if s["trend"] == "up" else ", winding down" if s["trend"] == "down" else "")
-        for s in secs) + "\nInstrumental, no vocals."
+        for s in secs) + "\n" + voice_line(beat)
 
 
 # ---------------------------------------------------------------- ElevenLabs
@@ -544,7 +580,7 @@ def run_job(job, ctx, home, lyria=None):
             if job.engine == "elevenlabs":
                 if edited:
                     body = {"model_id": ELEVEN_MODEL, "prompt": beat["prompt"], "music_length_ms": round(length * 1000),
-                            "force_instrumental": True}
+                            "force_instrumental": voices_of(beat) == "none"}
                 else:
                     body = {"model_id": ELEVEN_MODEL, "seed": seed,
                             "composition_plan": composition_plan(beat, secs, style, variation)}
@@ -563,7 +599,7 @@ def run_job(job, ctx, home, lyria=None):
                         job.say(f"Take {t['n']}: the first notes are in after {t['first']:.0f}s")
                 audio, song = eleven_stream(body, arrived)
             else:
-                text = timestamped(beat.get("prompt") or ctx["prompt"], secs) + f"\nLean: {', '.join(variation)}."
+                text = timestamped(beat.get("prompt") or ctx["prompt"], secs, beat) + f"\nLean: {', '.join(variation)}."
                 audio = lyria(text)
                 song = ""
                 body = {"prompt": text}

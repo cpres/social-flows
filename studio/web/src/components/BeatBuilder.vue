@@ -149,6 +149,16 @@
             >{{ o.label }}</button>
           </div>
         </div>
+        <div class="instruments voices" role="radiogroup" aria-label="Voices">
+          <span class="muted small">Voices <small>always wordless, never lyrics; None keeps every kind of voice out</small></span>
+          <div class="chips">
+            <button
+              v-for="o in voiceOptions" :key="o.v" class="btn small" role="radio" :aria-checked="(beat.voices || 'none') === o.v"
+              :class="{ primary: (beat.voices || 'none') === o.v }" :title="o.words.join(', ') || 'Instrumental: no voices of any kind'"
+              @click="beat.voices = o.v"
+            >{{ o.label }}</button>
+          </div>
+        </div>
       </section>
 
       <section class="bsec under">
@@ -477,6 +487,8 @@ function setVibe(v) {
   if (v.instruments) beat.value.instruments = [...v.instruments]
 }
 // Instruments to ask for by name (the list and its words are the server's: beats.py INSTRUMENTS).
+const voiceOptions = ref([{ v: 'none', label: 'None', words: [] }])
+api.beatVoices().then((o) => { voiceOptions.value = o }).catch(() => {})
 const instrumentOptions = ref([])
 api.beatInstruments().then((o) => { instrumentOptions.value = o }).catch(() => {})
 function toggleInstrument(k) {
@@ -492,6 +504,7 @@ const built = computed(() => beatPrompt({
   levers: beat.value.levers, curve: beat.value.curve, hits: beat.value.hits, end: beat.value.end,
   length: length.value, edges: edges.value.map((f) => f * length.value), ceiling: beat.value.ceiling,
   instruments: (beat.value.instruments || []).map((k) => instrumentOptions.value.find((o) => o.v === k)?.words).filter(Boolean),
+  voices: voiceOptions.value.find((o) => o.v === (beat.value.voices || 'none'))?.words || [],
 }))
 const prompt = computed(() => beat.value.prompt ?? built.value)
 defineExpose({ built, prompt, length, tempo, key, keyFrom, tempoFrom, pickSong })
