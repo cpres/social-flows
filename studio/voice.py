@@ -26,6 +26,34 @@ LINE_PAUSE = 0.35       # a pause this long ends a line
 STANZA_PAUSE = 1.2      # ... and this long (or a sentence end and 0.7s) starts a stanza
 
 
+MODEL_MB = {"large-v3-turbo": 1620, "turbo": 1620, "large-v3": 3090, "medium": 1530, "small": 485}
+
+
+def model_dir():
+    """Where Hugging Face keeps the model's files (it downloads them there once)."""
+    from faster_whisper.utils import _MODELS
+    from huggingface_hub.constants import HF_HUB_CACHE
+    repo = _MODELS.get(MODEL, MODEL)
+    return Path(HF_HUB_CACHE) / f"models--{repo.replace('/', '--')}"
+
+
+def model_mb_on_disk():
+    try:
+        return round(sum(f.stat().st_size for f in model_dir().rglob("*") if f.is_file() and not f.is_symlink()) / 1e6)
+    except Exception:
+        return 0
+
+
+def download_model():
+    """Fetch the speech model now, with progress (run.sh --voice does this)."""
+    from faster_whisper import download_model as fetch
+    print(f"  Downloading the speech model ({MODEL}, about {MODEL_MB.get(MODEL, '?')} MB, once) ...")
+    try:
+        print(f"  Ready: {fetch(MODEL)}")
+    except Exception as e:   # no network, Hugging Face down, disk full
+        raise SystemExit(f"  The download stopped: {type(e).__name__}: {e}")
+
+
 def transcription_available():
     try:
         import faster_whisper  # noqa: F401
@@ -44,6 +72,7 @@ class Voice:
         self._model = None
         self._model_lock = threading.Lock()
         self._durations = {}
+        self.download = None     # while the model loads: {mb on disk, totalMb}
 
     # ------------------------------------------------------------ files
 
@@ -116,7 +145,12 @@ class Voice:
         if self.transcript_file(path).exists():
             return {"status": "done", "progress": 1.0}
         job = self._jobs.get(self.key(path))
-        return dict(job) if job else {"status": "none", "progress": 0.0}
+        if not job:
+            return {"status": "none", "progress": 0.0}
+        out = dict(job)
+        if out["status"] == "running" and self.download and out.get("stage") in ("loading", "starting"):
+            out.update(stage="loading", downloadMb=self.download["mb"], totalMb=self.download["totalMb"])
+        return out
 
     def start(self, path, again=False):
         """Transcribe the take in the background (once, unless again)."""
@@ -138,10 +172,21 @@ class Voice:
         with self._model_lock:
             if self._model is None:
                 job["stage"] = "loading"   # the first time, this downloads the model (~1.6 GB)
-                from faster_whisper import WhisperModel
-                self._model = WhisperModel(MODEL, device="cpu", compute_type="int8",
-                                           cpu_threads=os.cpu_count() or 4)
+                done = threading.Event()
+                threading.Thread(target=self._watch_download, args=(done,), daemon=True).start()
+                try:
+                    from faster_whisper import WhisperModel
+                    self._model = WhisperModel(MODEL, device="cpu", compute_type="int8",
+                                               cpu_threads=os.cpu_count() or 4)
+                finally:
+                    done.set()
+                    self.download = None
             return self._model
+
+    def _watch_download(self, done):
+        """How much of the model is on disk, every second, while it loads."""
+        while not done.wait(1.0):
+            self.download = {"mb": model_mb_on_disk(), "totalMb": MODEL_MB.get(MODEL)}
 
     def _run(self, path, key):
         job = self._jobs[key]
@@ -247,3 +292,9 @@ def align(words, text, start, end):
             b["s"] = a["e"]
             b["e"] = max(b["e"], b["s"] + 0.2)
     return rows
+
+
+if __name__ == "__main__":
+    import sys
+    if sys.argv[1:] == ["download"]:
+        download_model()

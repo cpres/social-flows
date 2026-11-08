@@ -3,7 +3,7 @@
 #   ./studio/run.sh               # http://localhost:3009
 #   ./studio/run.sh --port 9000
 #   ./studio/run.sh --beat        # also install beat detection (for cutting on the beat)
-#   ./studio/run.sh --voice       # try installing transcribing (for captions) again, if it failed
+#   ./studio/run.sh --voice       # fetch the speech model now (and retry installing transcribing if that failed)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -70,12 +70,18 @@ if [ ! -f .venv/.voice-tried ] || [ requirements-voice.txt -nt .venv/.voice-trie
   echo "Installing transcribing (for captions) ..."
   if .venv/bin/python -m pip install --only-binary=:all: -r requirements-voice.txt > .venv/voice-install.log 2>&1; then
     echo ok > .venv/.voice-tried
-    echo "  The speech model (about 1.6 GB) downloads the first time you transcribe a take."
+    echo "  The speech model (about 1.6 GB) downloads the first time you transcribe a take,"
+    echo "  or now with:  ./studio/run.sh --voice"
   else
     echo failed > .venv/.voice-tried
     echo "  Transcribing isn't available for this Python on this Mac (details: studio/.venv/voice-install.log)." >&2
     echo "  Voice tracks still work; paste or type the captions. ./studio/run.sh --voice tries again." >&2
   fi
+fi
+# --voice also fetches the speech model now (once; about 1.6 GB, with progress),
+# so the first transcription doesn't sit on "loading the speech model".
+if [ "$VOICE" = 1 ] && [ "$(cat .venv/.voice-tried 2>/dev/null)" = ok ]; then
+  .venv/bin/python voice.py download || echo "  Couldn't download the speech model now; it'll try again when you transcribe." >&2
 fi
 # Finding people and animals in photos (Smart hold) uses macOS's own Vision
 # framework: small, so it's tried once on every Mac, but never required.

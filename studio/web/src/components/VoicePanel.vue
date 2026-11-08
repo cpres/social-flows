@@ -61,7 +61,7 @@
             </button>
             <span class="tstate muted small">
               <template v-if="t.status === 'done'">transcribed</template>
-              <template v-else-if="t.status === 'running'">{{ t.stage === 'loading' ? 'loading the speech model…' : `listening… ${Math.round((t.progress || 0) * 100)}%` }}</template>
+              <template v-else-if="t.status === 'running'">{{ progressText(t) }}</template>
               <template v-else-if="t.status === 'failed'"><span class="warn" :title="t.error">couldn't transcribe</span></template>
             </span>
           </li>
@@ -83,7 +83,7 @@
             and get captions. You can still use the whole take and trim it.
           </p>
           <p v-if="take.status === 'running'" class="muted small">
-            {{ take.stage === 'loading' ? 'Loading the speech model (the first time, it downloads about 1.6 GB)…' : `Listening… ${Math.round((take.progress || 0) * 100)}%` }}
+            {{ progressText(take) }}
           </p>
           <template v-if="transcript">
             <p class="muted small">Click the first line you want, then shift-click the last. ▶ plays a line.</p>
@@ -201,8 +201,7 @@
             <div class="lineacts">
               <span v-if="stateOf(p).busy" class="small muted">Starting…</span>
               <span v-else-if="stateOf(p).status === 'running'" class="small">
-                {{ stateOf(p).stage === 'loading' ? 'Loading the speech model (the first time, it downloads about 1.6 GB)…'
-                  : `Transcribing… ${Math.round((stateOf(p).progress || 0) * 100)}%` }}
+                {{ progressText(stateOf(p)) }}
                 <span class="muted">The lines fill in when it's done.</span>
               </span>
               <button
@@ -308,7 +307,7 @@
             <span class="small">
               <template v-if="w.busy">getting its words…</template>
               <template v-else-if="w.status === 'running'">
-                {{ w.stage === 'loading' ? 'loading the speech model (the first time, it downloads about 1.6 GB)…' : `transcribing… ${Math.round((w.progress || 0) * 100)}%` }}
+                {{ progressText(w) }}
                 The captions fill in when it's done.
               </template>
               <template v-else-if="w.status === 'failed'"><span class="warn">couldn't transcribe: {{ w.error }}</span></template>
@@ -568,6 +567,18 @@ const pickBounds = computed(() => {
 })
 const pickStart = computed(() => pickBounds.value[0])
 const pickEnd = computed(() => pickBounds.value[1])
+
+// What a running transcription is doing: fetching the model (once), loading it, or listening.
+function progressText(st) {
+  if (st.stage === 'loading') {
+    const total = st.totalMb || 1620
+    if (st.downloadMb != null && st.downloadMb < total * 0.97) {
+      return `Downloading the speech model (once): ${st.downloadMb.toLocaleString()} of about ${total.toLocaleString()} MB…`
+    }
+    return 'Loading the speech model…'
+  }
+  return `Transcribing… ${Math.round((st.progress || 0) * 100)}%`
+}
 
 // ---------------------------------------------------------------- lines from transcripts
 
