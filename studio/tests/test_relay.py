@@ -238,7 +238,7 @@ class Fixtures(unittest.TestCase):
                 self.assertTrue(all(cap is None or l <= cap + 1e-9 for _, l in st))
         self.assertEqual(relay.stretches(0, 40, None), [(2.0, 36.0)])
 
-    def test_stretches_of_a_clip_cut_straight_on(self):
+    def test_stretches_of_a_clip_relay_among_themselves(self):
         clip = video(at(1), 180.0)
         items = []
         st = relay.stretches(0, 180, 20)
@@ -249,8 +249,10 @@ class Fixtures(unittest.TestCase):
         for d in range(1, 11):
             plan = relay.plan_relay(items, {"dial": d})
             self.assertEqual(relay.check(plan, items, {"dial": d}), [])
-            for seg in splits(plan):
-                self.assertFalse(seg["top"] < 4 and seg["bottom"] is not None and seg["bottom"] < 4)
+            # each stretch hands on to the next: the later moment comes in under the earlier
+            hand = {(s["top"], s["bottom"]) for s in splits(plan)}
+            for k in range(3):
+                self.assertEqual((k, k + 1) in hand, d >= relay.PAIR_LONG_LONG, (d, k, hand))
             if d >= 3:   # the photo at 0:50, in the skip after 20..40, goes in the nearest stretch
                 c = cameos(plan)
                 self.assertEqual([(s["top"], s["bottom"]) for s in c][:1], [(1, 4)])

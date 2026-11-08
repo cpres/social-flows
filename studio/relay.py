@@ -26,8 +26,9 @@ part starts), length (its part), avail (a long clip's stretch from start,
 before the cap), shot_at (seconds, the file's capture time; a video's is
 when it started), keep (optional, a long clip's stretch with its quiet
 moments out: [(start, length)] in the file, already within the cap),
-clip (optional: stretches of one clip share it; they cut straight from one
-to the next, never split), match (optional, (from, to) file seconds: the
+clip (optional: stretches of one clip share it; they hand on to each other
+like any two long clips, the later moment coming in under the earlier, so
+the split skips ahead in the clip), match (optional, (from, to) file seconds: the
 moments a stretch claims for photos shot while its clip recorded)}].
 A capped long clip is several items, one per stretch (see stretches).
 
@@ -71,6 +72,7 @@ PAIR_SHORTS = 5        # short + short, short + photo
 PAIR_PHOTOS = 7        # photo + photo
 CAMEO_MATCH = 3        # photos shot while a long clip was recording, at that moment
 CAMEO_LOOK_AHEAD = 6   # the photos after a long clip pulled into its spare time
+HANDOFF_ROOM = 6.0     # cameos keep this far (at dial 10; 1s at 2) from a host's ends next to a long clip
 
 MIX_TO_DIAL = {"single": 3, "even": 5, "split": 8}   # the old Single or split choice
 
@@ -197,8 +199,8 @@ def place_matched(host, guest, at, gap):
     """Put a guest in its host at play time `at` (or as soon after as the
     spacing allows). False if it doesn't fit."""
     first = not host.cameos
-    start = max(at, MIN_SOLO if first else host.cameos[-1][2] + gap)
-    if start + guest.life > host.life - MIN_SOLO + 1e-9:
+    start = max(at, host.head if first else host.cameos[-1][2] + gap)
+    if start + guest.life > host.life - host.tail + 1e-9:
         return False
     host.cameos.append((guest, start, start + guest.life))
     return True
@@ -211,8 +213,8 @@ def place_look_ahead(host, cands, s, gap):
         return []
     guest_life = sum(c.life for c in cands) / len(cands)
     max_guests = math.floor(s * host.life / (guest_life + gap)) - len(host.cameos)
-    lo = max(host.life / 2, host.cameos[-1][2] + gap if host.cameos else MIN_SOLO)
-    hi = host.life - MIN_SOLO
+    lo = max(host.life / 2, host.cameos[-1][2] + gap if host.cameos else host.head)
+    hi = host.life - host.tail
     for k in range(min(max_guests, len(cands)), 0, -1):
         lives = [c.life for c in cands[:k]]
         space = (hi - lo - sum(lives)) / (k + 1)
@@ -230,6 +232,14 @@ def plan_cameos(entries, dial, s):
     gap = max(lerp(*CAMEO_GAP, s), MIN_SOLO)
     guests = set()
     hosts = [e for e in entries if e.kind == LONG]
+    # Room at a host's ends for handing on with a long clip beside it (its
+    # own next stretch, often): cameos keep out of it.
+    room = lerp(MIN_OVERLAP, HANDOFF_ROOM, s) if dial >= PAIR_LONG_LONG else 0.0
+    for h in hosts:
+        before = entries[h.idx - 1] if h.idx else None
+        after = entries[h.idx + 1] if h.idx + 1 < len(entries) else None
+        h.head = MIN_SOLO + (room if before is not None and before.kind == LONG else 0.0)
+        h.tail = MIN_SOLO + (room if after is not None and after.kind == LONG else 0.0)
     can_guest = lambda e: e.kind in (PHOTO, SHORT) and e.life >= MIN_SCENE   # noqa: E731
     if dial >= CAMEO_MATCH and hosts:
         last_host = -1
@@ -272,10 +282,6 @@ def plan_cameos(entries, dial, s):
 
 # ---------------------------------------------------------------- the plan
 
-def same_clip(a, b):
-    return a.clip is not None and a.clip == b.clip
-
-
 def plan_relay(items, opts=None):
     """The plan (see the top of this file). The dial is a preference: at
     the edges, a pairing turning on can squeeze a neighbour's split by more
@@ -304,8 +310,8 @@ def _plan(items, opts, dial):
     top = [e for e in entries if e.idx not in guests]
     for j in range(len(top) - 1):
         x, y = top[j], top[j + 1]
-        if not allowed(x.kind, y.kind, dial) or same_clip(x, y):
-            continue   # (one stretch of a clip cuts straight to its next)
+        if not allowed(x.kind, y.kind, dial):
+            continue
         if x.cameos:
             x_room = x.life - x.cameos[-1][2] - MIN_SOLO
         else:
@@ -314,7 +320,7 @@ def _plan(items, opts, dial):
             y_room = y.cameos[0][1] - MIN_SOLO
         else:
             y_room = y.life - MIN_SCENE
-            if j + 2 < len(top) and not same_clip(y, top[j + 2]) and y_room / 2 >= MIN_OVERLAP:
+            if j + 2 < len(top) and y_room / 2 >= MIN_OVERLAP:
                 y_room /= 2   # leave it room to hand on to the next (whatever the dial, so turning it up never squeezes this one)
         max_o = min(x.split_tol, y.split_tol, x_room, y_room)
         o = lerp(MIN_OVERLAP, max_o, s) if max_o >= MIN_OVERLAP else 0.0

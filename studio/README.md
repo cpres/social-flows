@@ -290,8 +290,11 @@ folder* (a shoot) ask for a name and a style:
   stretch you picked on the shoot page. With *Up to 20s* (or 30, 60) a long
   clip plays as several stretches of that length spread through it, centred,
   skipping 10s between them in a 1-minute clip up to 20s in a 3-minute one
-  (`relay.stretches`); one stretch cuts straight to the next, and a photo
-  shot in a skip goes in the nearest stretch. *Skip quiet moments in long
+  (`relay.stretches`). The stretches relay among themselves like any two
+  clips: the later moment comes in under the earlier one and takes over,
+  so the split skips ahead in the clip, and the next clip comes in the
+  same way, changing the scene. A photo shot in a skip goes in the
+  nearest stretch. *Skip quiet moments in long
   clips* cuts out where nothing much happens, at real speed. **Short clips**
   play their own length. **Photos stay on screen for** 2, 3, 4 (default)
   or 6s in all, full frame and split together, so a photo never sits next

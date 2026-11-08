@@ -63,7 +63,7 @@
           {{ summary }}<i v-if="plan.stats.limitedBy === 'photos'" class="limited">Mostly photos, so splits stay short.</i>
           <small v-if="approx" class="muted"> (a little less once quiet moments are measured)</small>
         </p>
-        <small class="muted">In the order they were shot. A photo shot while a long clip was recording comes in under it at that moment. A long clip plays from its start, or from the long stretch you picked on the shoot page; you can trim any of it in the reel afterwards.</small>
+        <small class="muted">In the order they were shot. A photo shot while a long clip was recording comes in under it at that moment. A long clip plays all of itself less a moment at each end, or the long stretch you picked on the shoot page; you can trim any of it in the reel afterwards.</small>
       </div>
       <p v-if="error" class="warn small">{{ error }}</p>
       <div class="controls">
@@ -115,7 +115,7 @@ const photo = ref(4)
 // How much is split, 1 (never) to 10 (whenever two things are there to share
 // the frame). A preference: photos can't sit on running video for long.
 const dial = ref(5)
-const DIAL_HINT = 'Long clips hand the frame on to the next; photos come in under them for a moment, then the clip takes the frame back.'
+const DIAL_HINT = 'A long clip hands the frame on to its own next stretch (a skip ahead) or the next clip (a new scene), which comes in underneath and takes over; photos come in under it for a moment, then it takes the frame back.'
 // The plan at every dial setting (relay.py), fetched when the footage or the
 // other settings change, so the bar follows the slider as it moves.
 const plans = ref([])

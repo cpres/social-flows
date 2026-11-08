@@ -1127,8 +1127,9 @@ const flowLinks = computed(() => {
 // - links: each later part of a clip starts where its last left off (plus
 //   the time it carried on on top); a part whose start was moved moves the
 //   end of the part before it instead
-// - stretches of one clip never overlap: one pushed into the next pushes
-//   it on by as much as the edit added, and that one the next, and so on
+// - stretches of one clip never overlap (counting the time one plays on on
+//   top as the next comes in under it): one pushed into the next pushes it
+//   on by as much as the edit added, and that one the next, and so on
 // The last edit: { id, delta (seconds added to its end), moved (its start changed) }.
 const flowEdit = ref(null)
 const flowDismissed = ref('')
@@ -1152,8 +1153,15 @@ function flowPlan(edit) {
     const length = r2(S(edited).start - gapOf(back) - S(back.from).start)
     if (length >= 0.2) set(back.from, { length })
   }
-  const linkFrom = new Map(links.map((l) => [l.from.id, l]))
   const linked = new Set(links.map((l) => l.to.id))
+  // how long a part plays on past its end, on top while the next comes in under it
+  const carried = new Map()
+  sceneList.value.forEach((sc, k) => {
+    if (!isRelay(sceneList.value, k)) return
+    const prev = sceneList.value[k - 1]
+    carried.set(prev.parts[prev.parts.length - 1], sc.parts.map((id) => byId.value.get(id)).filter(Boolean))
+  })
+  const carriedFor = (q) => (carried.get(q.id) || []).reduce((s, u) => s + L(u), 0)
   for (let pass = 0; pass < 8; pass++) {
     let changed = false
     for (const l of links) {
@@ -1171,8 +1179,7 @@ function flowPlan(edit) {
         set(q, clampTo(q, S(q).start + Math.max(edit?.delta || 0, was - S(q).start)))
         changed = true
       }
-      const l = linkFrom.get(q.id)
-      const end = S(q).start + L(q) + (l ? gapOf(l) : 0)
+      const end = S(q).start + L(q) + carriedFor(q)
       reach.set(q.mediaId, Math.max(was ?? -Infinity, end))
     }
     if (!changed) break
