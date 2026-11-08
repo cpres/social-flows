@@ -27,7 +27,23 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
-LEVERS = ("funky", "happy", "chill", "upbeat", "grungy", "futuristic", "ecstatic", "drummy", "bass", "earthy")
+LEVERS = ("funky", "happy", "chill", "upbeat", "grungy", "futuristic", "ecstatic", "drummy", "bass", "earthy", "acoustic")
+# Instruments to ask for by name (pick any): id -> (label, words for the music).
+INSTRUMENTS = {
+    "nylon": ("Nylon guitar, fingerpicked", "fingerpicked nylon-string guitar"),
+    "steel": ("Steel-string guitar, strummed", "strummed steel-string acoustic guitar"),
+    "upright": ("Upright bass", "warm upright bass"),
+    "cajon": ("Cajón & shakers", "cajón, shakers and soft hand claps"),
+    "brushes": ("Brushed drums", "soft brushed drum kit"),
+    "kalimba": ("Kalimba", "kalimba"),
+    "cello": ("Cello", "warm cello lines"),
+    "piano": ("Felt piano", "soft felt piano"),
+    "rhodes": ("Rhodes", "warm Rhodes electric piano"),
+    "strings": ("Strings", "gentle string section swells"),
+    "banjo": ("Banjo", "plucked banjo"),
+    "marimba": ("Marimba", "marimba"),
+    "pads": ("Synth pads", "soft ambient synth pads"),
+}
 PRESETS = ("follow", "arc", "slow", "peaks", "steady", "custom")
 TEMPO_RANGE = (60, 180)
 ENGINES = ("elevenlabs", "lyria")
@@ -62,6 +78,7 @@ def clean(beat):
     out["end"] = bool(beat.get("end", True))
     levers = beat.get("levers") if isinstance(beat.get("levers"), dict) else {}
     out["levers"] = {k: int(_num(levers.get(k), 0, 5, 0)) for k in LEVERS}
+    out["instruments"] = [k for k in dict.fromkeys(beat.get("instruments") or []) if k in INSTRUMENTS][:8]
     out["vibe"] = str(beat.get("vibe") or "")[:40]
     tempo = beat.get("tempo")
     out["tempo"] = None if tempo in (None, "") else round(_num(tempo, *TEMPO_RANGE, 100))
@@ -86,7 +103,12 @@ WORDS = {"funky": ("funky", "very funky"), "happy": ("happy", "joyful"), "chill"
          "upbeat": ("upbeat", "driving"), "grungy": ("grungy", "dirty, distorted"),
          "futuristic": ("futuristic", "glitchy, synth-heavy"),
          "ecstatic": ("ecstatic", "euphoric, with chants and swells"), "drummy": ("drummy", "percussion-heavy"),
-         "bass": ("bass", "heavy bass"), "earthy": ("earthy", "earthy, hand drums and kalimba")}
+         "bass": ("bass", "heavy bass"), "earthy": ("earthy", "earthy, hand drums and kalimba"),
+         "acoustic": ("acoustic", "fingerpicked acoustic guitar, unplugged and organic")}
+
+
+def instrument_words(beat):
+    return [INSTRUMENTS[k][1] for k in beat.get("instruments") or [] if k in INSTRUMENTS]
 
 
 def tempo_of(beat):
@@ -196,6 +218,7 @@ ADAPTS = {
     "brighter": ("brighter", ["brighter, happier tone", "sparkling top end"], {"happy": 1}, 0),
     "grittier": ("grittier", ["grittier, more texture", "a little tape dirt"], {"grungy": 2}, 0),
     "simpler": ("simpler", ["simpler arrangement", "fewer layers"], {}, 0),
+    "acoustic+": ("more acoustic", ["more acoustic guitar", "unplugged and organic"], {"acoustic": 2}, 0),
 }
 
 
@@ -233,6 +256,8 @@ def composition_plan(beat, secs, style, variation):
     ms[-1] = round(length * 1000) - sum(ms[:-1])
     negative = ["lead vocals", "lyrics", "spoken word", "rap"] if beat["levers"]["ecstatic"] >= 4 else list(NO_VOCALS)
     calm = (beat.get("ceiling") or 1) <= 0.65   # kept low: relaxed and steady the whole way
+    if beat["levers"].get("acoustic", 0) >= 4 and beat["levers"].get("futuristic", 0) <= 1:
+        negative += ["heavy synths", "EDM drops", "distorted electric guitar"]   # keep it unplugged
     if calm:
         negative += ["big drop", "aggressive"]
     chunks = []
@@ -248,7 +273,7 @@ def composition_plan(beat, secs, style, variation):
             directions.append("resolves and ends on a final hit on the last beat" if beat["end"] else "fades out")
         styles = [energy_words(s["energy"])]
         if i == 0:
-            styles = (["instrumental"] + style["genres"] + style["words"] + style["levers"]
+            styles = (["instrumental"] + style["genres"] + style.get("instruments", []) + style["words"] + style["levers"]
                       + [f"{style['tempo']} BPM", style["key"]] + styles + variation
                       + (["relaxed, steady vibe throughout", "gentle lift, never peaks"] if calm else [])
                       + ["great production quality"])

@@ -127,7 +127,7 @@
         </div>
         <div class="levers">
           <div v-for="l in LEVERS" :key="l.v" class="lever">
-            <span class="lnum mono">{{ beat.levers[l.v] }}</span>
+            <span class="lnum mono">{{ beat.levers[l.v] ?? 0 }}</span>
             <div class="notches" role="radiogroup" :aria-label="l.label">
               <button
                 v-for="n in [5, 4, 3, 2, 1]" :key="n" class="notch" :class="{ on: beat.levers[l.v] >= n }" role="radio"
@@ -136,6 +136,15 @@
             </div>
             <b>{{ l.label }}</b>
             <small class="muted">{{ l.hint }}</small>
+          </div>
+        </div>
+        <div class="instruments">
+          <span class="muted small">Instruments <small>pick any to ask for them by name; none lets the music choose</small></span>
+          <div class="chips">
+            <button
+              v-for="o in instrumentOptions" :key="o.v" class="btn small" :class="{ primary: (beat.instruments || []).includes(o.v) }"
+              :aria-pressed="(beat.instruments || []).includes(o.v)" @click="toggleInstrument(o.v)"
+            >{{ o.label }}</button>
           </div>
         </div>
       </section>
@@ -429,6 +438,14 @@ function setLever(k, n) {
 function setVibe(v) {
   beat.value.levers = { ...v.levers }
   beat.value.vibe = v.v
+  if (v.instruments) beat.value.instruments = [...v.instruments]
+}
+// Instruments to ask for by name (the list and its words are the server's: beats.py INSTRUMENTS).
+const instrumentOptions = ref([])
+api.beatInstruments().then((o) => { instrumentOptions.value = o }).catch(() => {})
+function toggleInstrument(k) {
+  const now = beat.value.instruments || []
+  beat.value.instruments = now.includes(k) ? now.filter((x) => x !== k) : [...now, k].slice(0, 8)
 }
 
 // ---------------------------------------------------------------- the prompt
@@ -437,6 +454,7 @@ const built = computed(() => beatPrompt({
   from: beat.value.from.kind === 'song' ? { ...beat.value.from, title: songName(beat.value.from.name) } : beat.value.from,
   levers: beat.value.levers, curve: beat.value.curve, hits: beat.value.hits, end: beat.value.end,
   length: length.value, edges: edges.value.map((f) => f * length.value), ceiling: beat.value.ceiling,
+  instruments: (beat.value.instruments || []).map((k) => instrumentOptions.value.find((o) => o.v === k)?.words).filter(Boolean),
 }))
 const prompt = computed(() => beat.value.prompt ?? built.value)
 defineExpose({ built, prompt, length, tempo, key, keyFrom, tempoFrom, pickSong })
@@ -507,7 +525,9 @@ defineExpose({ built, prompt, length, tempo, key, keyFrom, tempoFrom, pickSong }
 .tbtns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .twocol { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr); gap: 14px; }
 @media (max-width: 900px) { .twocol { grid-template-columns: 1fr; } }
-.levers { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 6px; }
+.levers { display: grid; grid-template-columns: repeat(11, minmax(0, 1fr)); gap: 6px; }
+.instruments { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.instruments .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 @media (max-width: 700px) { .levers { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
 .lever { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 4px; border: 1px solid var(--line); border-radius: 8px; text-align: center; }
 .lever b { font-size: 12px; } .lever small { font-size: 10px; line-height: 1.2; }

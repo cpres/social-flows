@@ -1760,6 +1760,7 @@ def beat_context(reel_id, beat, length=None, measure=True, say=None):
     key = beats_mod.key_of(beat, ref["key"] if ref else "")
     seconds, _, scenes = reel_timeline(reel_id, tempo)
     style = {"genres": genres, "words": ref["words"] if ref else [], "levers": beats_mod.lever_words(beat),
+             "instruments": beats_mod.instrument_words(beat),
              "tempo": tempo, "key": key}
     return {"beat": beat, "length": length or seconds, "edges": [sc["start"] for sc in scenes[1:]],
             "style": style, "ref_line": ref_line, "reel_name": reel["name"]}
@@ -1772,7 +1773,8 @@ def beat_prompt_text(ctx):
         head += f", {', '.join(s['genres'])}"
     calm = (ctx["beat"].get("ceiling") or 1) <= 0.65
     tail = "Stays relaxed and steady the whole way, a gentle lift, no big drops" if calm else ""
-    return ". ".join(x for x in [head, ", ".join(s["levers"] + s["words"]), tail] if x) + "."
+    feat = f"Featuring {', '.join(s['instruments'])}" if s.get("instruments") else ""
+    return ". ".join(x for x in [head, feat, ", ".join(s["levers"] + s["words"]), tail] if x) + "."
 
 
 @app.get("/api/reels/{reel_id}/beat/preview")
@@ -1962,6 +1964,12 @@ def beat_star(reel_id: int, take_id: str, body: dict = Body(default={})):
     meta["starred"] = bool(body.get("starred", True))
     meta_path.write_text(json.dumps(meta, indent=1))
     return {"starred": meta["starred"]}
+
+
+@app.get("/api/beat/instruments")
+def beat_instruments():
+    """The instruments a beat can ask for by name: [{v, label}]."""
+    return [{"v": k, "label": v[0], "words": v[1]} for k, v in beats_mod.INSTRUMENTS.items()]
 
 
 @app.get("/api/beat/adapts")

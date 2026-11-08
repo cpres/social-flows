@@ -132,8 +132,13 @@ python3 studio/server.py --open
     *Chill*), or drag the orange line along the top down, slides the whole
     curve down, keeping its shape, and from *Mid* down the music is asked to stay relaxed and
     steady with no big drops;
-    *Hits on scene changes*, *End on the last frame*); ten *vibe levers*
-    with four presets; the tempo and key they point to (or yours); and the
+    *Hits on scene changes*, *End on the last frame*); eleven *vibe levers* (Funky … Earthy, Acoustic)
+    with presets (Garden morning, Ecstatic dance, Street grit, Lo-fi chill,
+    *Fingerpicked folk*: a nylon guitar over soft hand percussion, ~92 BPM,
+    *Acoustic groove*: the same with a real beat, ~109 BPM); *Instruments*
+    to ask for by name (nylon or steel-string guitar, upright bass, cajón,
+    brushed drums, kalimba, cello, felt piano, Rhodes, strings, banjo,
+    marimba, synth pads; none lets the music choose); the tempo and key they point to (or yours); and the
     prompt, which you can edit.
   - *Generate a take* makes one, from your settings as they are (one at a
     time, so you only pay for what you listen to). Then *Try another

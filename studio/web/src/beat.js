@@ -17,16 +17,22 @@ export const LEVERS = [
   { v: 'drummy', label: 'Drummy', hint: 'more percussion, fills', word: 'drummy', strong: 'percussion-heavy' },
   { v: 'bass', label: 'Bass', hint: 'low-end weight', word: 'bass', strong: 'heavy bass' },
   { v: 'earthy', label: 'Earthy', hint: 'hand drums, kalimba, birds', word: 'earthy', strong: 'earthy, hand drums and kalimba' },
+  { v: 'acoustic', label: 'Acoustic', hint: 'guitars, unplugged, wood', word: 'acoustic', strong: 'fingerpicked acoustic guitar, unplugged and organic' },
 ]
 const ORDER = LEVERS.map((l) => l.v)
 const levers = (arr) => Object.fromEntries(ORDER.map((k, i) => [k, arr[i]]))
 
-// Vibe presets: all ten levers at once (in the order above).
+// Vibe presets: every lever at once (in the order above), and some pick
+// instruments too (studio/beats.py INSTRUMENTS).
 export const VIBES = [
-  { v: 'garden', label: 'Garden morning', levers: levers([2, 4, 2, 2, 0, 0, 1, 2, 2, 5]) },
-  { v: 'ecstatic', label: 'Ecstatic dance', levers: levers([2, 3, 0, 4, 0, 2, 5, 5, 4, 3]) },
-  { v: 'street', label: 'Street grit', levers: levers([3, 1, 1, 3, 4, 1, 0, 4, 4, 0]) },
-  { v: 'lofi', label: 'Lo-fi chill', levers: levers([1, 2, 5, 0, 2, 0, 0, 2, 2, 2]) },
+  { v: 'garden', label: 'Garden morning', levers: levers([2, 4, 2, 2, 0, 0, 1, 2, 2, 5, 2]) },
+  { v: 'ecstatic', label: 'Ecstatic dance', levers: levers([2, 3, 0, 4, 0, 2, 5, 5, 4, 3, 0]) },
+  { v: 'street', label: 'Street grit', levers: levers([3, 1, 1, 3, 4, 1, 0, 4, 4, 0, 0]) },
+  { v: 'lofi', label: 'Lo-fi chill', levers: levers([1, 2, 5, 0, 2, 0, 0, 2, 2, 2, 1]) },
+  // Hushed and intimate: a fingerpicked nylon guitar over soft hand percussion (~92 BPM).
+  { v: 'folk', label: 'Fingerpicked folk', levers: levers([0, 2, 2, 2, 0, 0, 0, 2, 1, 3, 5]), instruments: ['nylon', 'cajon', 'upright'] },
+  // The same palette with a real beat under it (~109 BPM).
+  { v: 'acoustic', label: 'Acoustic groove', levers: levers([2, 3, 1, 3, 0, 0, 1, 4, 3, 3, 4]), instruments: ['steel', 'nylon', 'cajon', 'brushes', 'upright'] },
 ]
 
 // A song to start from sets the levers, from how it was measured (tempo,
@@ -52,6 +58,7 @@ export function leversFromSong(style, categories = []) {
     drummy: clamp(drive === 2 ? 4 : drive === 1 ? 3 : 1),
     bass: clamp(bright === 0 ? 4 : bright === 1 ? 3 : 1),
     earthy: clamp(has(/acoustic|world|folk|nature|garden|earth/) ? 4 : 1),
+    acoustic: clamp(has(/acoustic|folk|singer|unplugged|guitar/) ? 4 : drive === 0 && bright >= 1 ? 2 : 0),
   }
 }
 // A song's tempo as a beat's (60..180): halved or doubled into range.
@@ -211,13 +218,14 @@ export function peakOf(points) {
 
 // ---------------------------------------------------------------- the prompt
 
-export function beatPrompt({ tempo, key, from, levers: l, curve, hits, end, length, edges, ceiling }) {
+export function beatPrompt({ tempo, key, from, levers: l, curve, hits, end, length, edges, ceiling, instruments = [] }) {
   // Whole seconds, as people say them; tenths too in a short reel, where they matter.
   const t = (s) => (length < 30 ? fmtTime(s) : fmtTime(Math.round(s)).replace(/\.\d$/, ''))
   const parts = [`${tempo} BPM, ${key}`]
   if (from?.kind === 'song') parts[0] += from.category ? `, in the groove of your ${from.category} song` : `, in the groove of “${from.title || from.name}”`
   const words = LEVERS.filter((x) => (l[x.v] || 0) >= 2).map((x) => (l[x.v] >= 4 ? x.strong : x.word))
   const lines = [`${parts[0]}.`]
+  if (instruments.length) lines.push(`Featuring ${instruments.join(', ')}.`)
   if (words.length) lines.push(`${words.join(', ')}.`)
   const lo = Math.min(...curve.map((p) => p[1]))
   const hi = Math.max(...curve.map((p) => p[1]))
@@ -241,6 +249,6 @@ export function beatPrompt({ tempo, key, from, levers: l, curve, hits, end, leng
 export function newBeat(scenes) {
   return {
     from: { kind: 'scratch' }, curve: presetCurve('follow', scenes), preset: 'follow', hits: true, end: true,
-    levers: { ...VIBES[0].levers }, vibe: VIBES[0].v, tempo: null, key: null, prompt: null, ceiling: null,
+    levers: { ...VIBES[0].levers }, vibe: VIBES[0].v, tempo: null, key: null, prompt: null, ceiling: null, instruments: [],
   }
 }
