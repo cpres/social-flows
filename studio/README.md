@@ -290,7 +290,13 @@ folder* (a shoot) ask for a name and a style:
   the two things on screen runs out of time, it leaves and the other takes
   the full frame. Clips go in the order they were shot. Near a clip's end
   the next comes in underneath (a **handoff**), the first finishes, and the
-  next takes over the full frame. **Long clips** (10s or more) get their
+  next takes over the full frame. **How long?** (0:30 to 3:00, 1:30 by
+  default) sets about how long the reel runs: long clips' stretches are
+  made as long as fits (`relay.fit_target` tries stretch lengths and keeps
+  the one whose plan comes closest, at each dial setting), and the dialog
+  says what that came to. If the photos and short clips alone run longer,
+  it says that's the shortest it can be. *As long as it takes* sets the
+  stretches yourself instead. **Long clips** (10s or more) get their
   own length: all of the clip less a moment at each end, or the long
   stretch you picked on the shoot page. With *Up to 20s* (or 30, 60) a long
   clip plays as a few stretches of that length spread evenly through it,

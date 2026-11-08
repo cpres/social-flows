@@ -43,16 +43,30 @@
           <small class="muted">{{ DIAL_HINT }}</small>
         </div>
         <div class="tbtns">
+          <span class="muted">How long?</span>
+          <button
+            v-for="x in TARGETS" :key="x.v" class="btn small" :class="{ active: target === x.v }" @click="target = x.v"
+            :title="x.v ? `Long clips' stretches are made as long as fits a reel of about ${x.label}` : 'Long clips play as long as you set below'"
+          >{{ x.label }}</button>
+        </div>
+        <div class="tbtns" v-if="target">
+          <span class="muted">Long clips ({{ LONG }}s or more) play</span>
+          <span v-if="plan">
+            <template v-if="plan.stats.cap">in stretches of <b>{{ plan.stats.cap }}s</b>, to fit</template>
+            <template v-else>all of themselves (it's under {{ fmtTime(target) }} even so)</template>
+          </span>
+        </div>
+        <div class="tbtns" v-else>
           <span class="muted">Long clips ({{ LONG }}s or more) play</span>
           <button
             v-for="c in CAPS" :key="c.v" class="btn small" :class="{ active: cap === c.v }" @click="cap = c.v"
             :title="c.v ? `Each long clip plays as a few stretches of up to ${c.v}s, spread evenly through it` : 'Each long clip plays all of itself, less a moment at each end (or the long stretch you picked in the shoot)'"
           >{{ c.label }}</button>
         </div>
-        <div class="tbtns" v-if="cap">
+        <div class="tbtns" v-if="target || cap">
           <span class="muted">At most</span>
           <button v-for="x in [2, 3, 4, 5, 6]" :key="x" class="btn small" :class="{ active: most === x }" @click="most = x">{{ x }}</button>
-          <span class="muted">stretches of {{ cap }}s per long clip</span>
+          <span class="muted">stretches per long clip</span>
           <small class="muted">(spread evenly through it; clips of 2 minutes or more get them all, shorter ones fewer)</small>
         </div>
         <label class="check">
@@ -115,6 +129,10 @@ const error = ref('')
 const LONG = 10   // as relay.py LONG_THRESHOLD
 const CAPS = [{ v: 0, label: 'Their full length' }, { v: 20, label: 'Up to 20s' }, { v: 30, label: 'Up to 30s' }, { v: 60, label: 'Up to 60s' }]
 const cap = ref(0)
+// How long the reel should be, about: long clips' stretches are made to fit (0: as long as it takes).
+const TARGETS = [{ v: 30, label: '0:30' }, { v: 45, label: '0:45' }, { v: 60, label: '1:00' }, { v: 90, label: '1:30' },
+                 { v: 120, label: '2:00' }, { v: 180, label: '3:00' }, { v: 0, label: 'As long as it takes' }]
+const target = ref(90)
 const most = ref(4)   // stretches per long clip, at most (relay.py MOST_DEFAULT)
 const quiet = ref(false)
 const photo = ref(4)
@@ -128,13 +146,14 @@ const plans = ref([])
 const approx = ref(false)
 let asked = 0
 let timer = null
-watch([source, style, photo, cap, most, quiet], () => {
+watch([source, style, photo, cap, most, quiet, target], () => {
   clearTimeout(timer)
   if (style.value !== 'relay' || !source.value) { plans.value = []; return }
   timer = setTimeout(async () => {
     const n = ++asked
     try {
-      const r = await api.relayPlan(source.value, { photo: photo.value, cap: cap.value || null, most: most.value, quiet: quiet.value })
+      const r = await api.relayPlan(source.value, { photo: photo.value, cap: cap.value || null, most: most.value, quiet: quiet.value,
+                                                         target: target.value || null })
       if (n === asked) { plans.value = r.plans; approx.value = r.approx }
     } catch { if (n === asked) plans.value = [] }
   }, 150)
@@ -155,7 +174,8 @@ const summary = computed(() => {
   if (s.photoCount) bits.push(count(s.photoCount, 'photo', 'photos'))
   const list = bits.length > 1 ? `${bits.slice(0, -1).join(', ')} and ${bits[bits.length - 1]}` : bits.join('')
   const what = list + (s.cameoCount ? ` (${s.cameoCount} as cameo${s.cameoCount === 1 ? '' : 's'})` : '')
-  return `${what} · about ${fmtTime(s.totalSeconds)} · ${s.splitPct}% split`
+  const off = target.value && Math.abs(s.totalSeconds - target.value) > Math.max(5, target.value * 0.1)
+  return `${what} · about ${fmtTime(s.totalSeconds)}${off ? (s.totalSeconds > target.value ? ' (the shortest it can be with this footage)' : '') : ''} · ${s.splitPct}% split`
 })
 const nameEl = ref(null)
 onMounted(() => nextTick(() => nameEl.value?.focus()))
@@ -171,7 +191,8 @@ async function make() {
   try {
     const r = source.value
       ? await api.folderToReel(source.value, name.value.trim(), { style: style.value, dial: dial.value, photo: photo.value,
-                                                                  cap: cap.value || null, most: most.value, quiet: quiet.value })
+                                                                  cap: cap.value || null, most: most.value, quiet: quiet.value,
+                                                                  target: style.value === 'relay' ? target.value || null : null })
       : await api.createReel(name.value.trim())
     router.push(`/reel/${r.id}`)
   } catch (e) {

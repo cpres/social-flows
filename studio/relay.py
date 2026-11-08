@@ -86,6 +86,7 @@ BREATH = 2.0
 MOST_DEFAULT = 4
 MOST_MAX = 12
 FULL_AT = 120.0
+MIN_STRETCH = 4.0   # shortest stretch a target length can ask of a long clip
 
 LONG, SHORT, PHOTO = "LONG", "SHORT", "PHOTO"
 
@@ -125,6 +126,44 @@ def stretches(start, length, cap=None, breath=BREATH, most=MOST_DEFAULT):
     n = max(1, min(stretch_count(length, most), int(inner // cap)))
     share = inner / n
     return [(round(start + pad + i * share + (share - cap) / 2, 3), round(float(cap), 3)) for i in range(n)]
+
+
+def fit_target(make_items, opts, target, longest):
+    """The stretch length (cap) whose reel comes out closest to `target`
+    seconds: make_items(cap) -> the items with long clips in stretches of
+    that (None: their full length). Tries whole and half seconds from
+    MIN_STRETCH up to the longest clip, coarsely then finely, since a
+    longer stretch can mean fewer of them. If even the full length is
+    under the target, that's it; if the shortest is still over (lots of
+    photos, say), that. -> (items, plan, cap)."""
+    seen = {}
+
+    def run(cap):
+        cap = None if cap is None else round(cap * 2) / 2
+        if cap not in seen:
+            items = make_items(cap)
+            seen[cap] = (items, plan_relay(items, {**opts, "cap": cap}), cap)
+        return seen[cap]
+
+    total = lambda r: r[1]["stats"]["totalSeconds"]   # noqa: E731
+    full = run(None)
+    if total(full) <= target or longest <= MIN_STRETCH:
+        return full
+    steps = 24
+    grid = [run(MIN_STRETCH * (longest / MIN_STRETCH) ** (k / (steps - 1))) for k in range(steps)]
+    # refine around where it crosses the target
+    for a, b in zip(grid, grid[1:]):
+        if (total(a) - target) * (total(b) - target) <= 0:
+            lo, hi = a[2], b[2]
+            for _ in range(8):
+                if hi - lo <= 0.5:
+                    break
+                mid = run((lo + hi) / 2)
+                if (total(mid) - target) * (total(a) - target) > 0:
+                    lo = mid[2]
+                else:
+                    hi = mid[2]
+    return min(seen.values(), key=lambda r: (abs(total(r) - target), total(r)))
 
 
 def allowed(a, b, dial):

@@ -453,57 +453,81 @@ def folder_parts(db, name, side):
 
 def relay_opts(body):
     """The Relay settings asked for: the dial (or an old Single or split
-    choice), how long photos stay, the long-clip cap, quiet moments."""
+    choice), how long photos stay, the long-clip cap (or a target length for
+    the reel, which sets it), stretches per long clip, quiet moments."""
     return {"dial": relay_mod.dial_of(body.get("dial"), body.get("mix")),
             "photo_seconds": min(max(float(body.get("photo") or body.get("solo") or relay_mod.PHOTO_SECONDS), 0.5), 30),
             "cap": float(body["cap"]) if body.get("cap") else None,
             "most": int(min(max(int(body.get("most") or relay_mod.MOST_DEFAULT), 1), relay_mod.MOST_MAX)),
+            "target": min(max(float(body["target"]), 10.0), 1800.0) if body.get("target") else None,
             "quiet": bool(body.get("quiet"))}
 
 
-def relay_items(db, parts, opts, cached_only=False):
-    """What the relay planner needs: [{kind, duration, start, length, avail,
-    shot_at, keep, clip, match, _row}], _row: which of `parts` it's from.
-    parts: dicts with kind, duration, start, length, media_id, path,
-    captured_at. A long clip plays the long stretch picked in its shoot, or
-    the clip less a little breathing room at each end; with a cap it's
-    several stretches of up to the cap spread evenly through that (at most
-    `most`, all of them from two minutes up), one item each
-    (relay.stretches). A short clip plays all of itself, or the
-    stretch picked. With quiet moments skipped, `keep` is a stretch with its
-    lulls out. cached_only: use only movement already measured (for a quick
-    estimate). Also returns whether any was missing."""
-    items, missing = [], False
-    for row_i, p in enumerate(parts):
-        it = {"kind": p["kind"], "duration": float(p["duration"] or 0), "start": float(p["start"]),
-              "length": float(p["length"]), "shot_at": float(p["captured_at"] or 0), "_row": row_i}
-        if p["kind"] == "video" and it["duration"] >= relay_mod.LONG_THRESHOLD:
-            pick = pick_of(db, p["media_id"])
-            if pick and pick["length"] >= relay_mod.LONG_THRESHOLD:   # the stretch picked: just as picked
-                st = relay_mod.stretches(float(pick["start"]), float(pick["length"]), opts.get("cap"), breath=0, most=opts["most"])
-            else:
-                st = relay_mod.stretches(0.0, it["duration"], opts.get("cap"), most=opts["most"])
-            act = None
-            if opts.get("quiet"):
+def relay_bases(db, parts, opts, cached_only=False):
+    """What relay_items needs to know of each part, looked up once (its
+    shoot pick, its movement for skipping quiet moments). Also returns
+    whether some movement wasn't measured yet (cached_only)."""
+    bases, missing = [], False
+    for p in parts:
+        b = {"p": p, "pick": None, "points": None}
+        if p["kind"] == "video":
+            b["pick"] = pick_of(db, p["media_id"])
+            if opts.get("quiet") and float(p["duration"] or 0) >= relay_mod.LONG_THRESHOLD:
                 path = ROOT / p["path"]
                 try:
                     act = activity_cached(path) if cached_only else activity_of(path)
                 except Exception:
                     act = None
-                missing = missing or not act
+                if act:
+                    b["points"] = [(float(a), float(v)) for a, v in act["points"]]
+                else:
+                    missing = True
+        bases.append(b)
+    return bases, missing
+
+
+def expand_items(bases, cap, most):
+    """What the relay planner needs: [{kind, duration, start, length, avail,
+    shot_at, keep, clip, match, _row}], _row: which part it's from. A long
+    clip plays the long stretch picked in its shoot, or the clip less a
+    little breathing room at each end; with a cap it's several stretches of
+    up to the cap spread evenly through that (at most `most`, all of them
+    from two minutes up), one item each (relay.stretches). A short clip
+    plays all of itself, or the stretch picked. With quiet moments skipped,
+    `keep` is a stretch with its lulls out."""
+    items = []
+    for row_i, b in enumerate(bases):
+        p, pick = b["p"], b["pick"]
+        it = {"kind": p["kind"], "duration": float(p["duration"] or 0), "start": float(p["start"]),
+              "length": float(p["length"]), "shot_at": float(p["captured_at"] or 0), "_row": row_i}
+        if p["kind"] == "video" and it["duration"] >= relay_mod.LONG_THRESHOLD:
+            if pick and pick["length"] >= relay_mod.LONG_THRESHOLD:   # the stretch picked: just as picked
+                st = relay_mod.stretches(float(pick["start"]), float(pick["length"]), cap, breath=0, most=most)
+            else:
+                st = relay_mod.stretches(0.0, it["duration"], cap, most=most)
             # each stretch claims the photos shot up to halfway to its neighbours
-            bounds = [0.0] + [(a + la + b) / 2 for (a, la), (b, _) in zip(st, st[1:])] + [it["duration"]]
+            bounds = [0.0] + [(a + la + c) / 2 for (a, la), (c, _) in zip(st, st[1:])] + [it["duration"]]
             for k, (s, ln) in enumerate(st):
                 one = {**it, "start": s, "avail": ln, "clip": row_i, "match": (bounds[k], bounds[k + 1])}
-                if act:
-                    one["keep"] = montage.quiet_cut([(float(a), float(b)) for a, b in act["points"]], s, ln)
+                if b["points"]:
+                    one["keep"] = montage.quiet_cut(b["points"], s, ln)
                 items.append(one)
             continue
         if p["kind"] == "video":   # a short clip plays all of itself, or the stretch picked in its shoot
-            pick = pick_of(db, p["media_id"])
             it["start"], it["length"] = (float(pick["start"]), float(pick["length"])) if pick else (0.0, it["duration"])
         items.append(it)
-    return items, missing
+    return items
+
+
+def relay_fit(bases, opts):
+    """The plan for these parts and settings, and the items and cap it's
+    from: with a target length, the stretch length whose reel comes
+    closest to it (relay.fit_target). -> (items, plan, cap)."""
+    if not opts.get("target"):
+        items = expand_items(bases, opts.get("cap"), opts["most"])
+        return items, relay_mod.plan_relay(items, opts), opts.get("cap")
+    longest = max([float(b["p"]["duration"] or 0) for b in bases if b["p"]["kind"] == "video"] or [0.0])
+    return relay_mod.fit_target(lambda cap: expand_items(bases, cap, opts["most"]), opts, opts["target"], longest)
 
 
 @app.post("/api/folders/{name}/relay-plan")
@@ -518,11 +542,11 @@ def relay_preview(name: str, body: dict = Body(default={})):
         parts = [{"kind": m["kind"], "duration": m["duration"], "start": start, "length": length,
                   "media_id": lib.original_of(db, m["id"]), "path": m["path"], "captured_at": m["captured_at"]}
                  for _, m, start, length, _ in folder_parts(db, name, side)]
-        items, missing = relay_items(db, parts, opts, cached_only=True)
+        bases, missing = relay_bases(db, parts, opts, cached_only=True)
     plans = []
     for d in range(relay_mod.DIAL_MIN, relay_mod.DIAL_MAX + 1):
-        plan = relay_mod.plan_relay(items, {**opts, "dial": d})
-        plans.append({"dial": d, "stats": plan["stats"], "bar": relay_mod.bar(plan)})
+        _, plan, cap = relay_fit(bases, {**opts, "dial": d})
+        plans.append({"dial": d, "stats": {**plan["stats"], "cap": cap}, "bar": relay_mod.bar(plan)})
     return {"plans": plans, "approx": missing}
 
 
@@ -544,7 +568,8 @@ def apply_style(db, reel_id, style, body):
                         "a": {"item": top["id"], "in": None, "out": None, "timing": "real", "speed": 1}}]
     else:
         opts = relay_opts(body)
-        items, _ = relay_items(db, rows, opts)
+        bases, _ = relay_bases(db, rows, opts)
+        items, _, opts["cap"] = relay_fit(bases, opts)
         write_relay(db, reel_id, s, items, rows, opts, [r["id"] for r in rows])
     db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), reel_id))
 
@@ -583,7 +608,7 @@ def write_relay(db, reel_id, s, items, templates, opts, replace):
             out["grow"] = sc["grow"]
         s["scenes"].append(out)
     s["relay"] = {"dial": opts["dial"], "photo": opts["photo_seconds"], "cap": opts["cap"], "most": opts["most"],
-                  "quiet": opts["quiet"]}
+                  "quiet": opts["quiet"], "target": opts.get("target")}
     saved = []
     for it in items:
         one = {k: v for k, v in it.items() if k != "_row"}

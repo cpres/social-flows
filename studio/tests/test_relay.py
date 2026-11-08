@@ -279,6 +279,32 @@ class Fixtures(unittest.TestCase):
             self.assertAlmostEqual(on[1], 6.5, delta=0.01)
             self.assertAlmostEqual(on[2], 4.0, delta=0.01)
 
+    def test_fit_to_a_target_length(self):
+        clips = [video(at(1), 180.0), photo(at(4)), video(at(5), 95.0), photo(at(7)), video(at(8), 140.0)]
+
+        def make(cap):
+            out = []
+            for k, c in enumerate(clips):
+                if c["kind"] == "video":
+                    for s, l in relay.stretches(0, c["duration"], cap):
+                        out.append({**c, "start": s, "avail": l, "clip": k})
+                else:
+                    out.append(c)
+            return out
+        for target in (60, 90, 120, 180):
+            for dial in (1, 5, 9):
+                opts = {"dial": dial, "photo_seconds": 4}
+                items, plan, cap = relay.fit_target(make, opts, target, 180.0)
+                got = plan["stats"]["totalSeconds"]
+                self.assertLess(abs(got - target), max(4.0, target * 0.05), (target, dial, got, cap))
+                self.assertEqual(relay.check(plan, items, {**opts, "cap": cap}), [])
+        # everything at full length is under the target: full length, no cap
+        _, plan, cap = relay.fit_target(make, {"dial": 5}, 2000, 180.0)
+        self.assertIsNone(cap)
+        # can't get that short: the shortest stretches
+        _, plan, cap = relay.fit_target(make, {"dial": 5}, 5, 180.0)
+        self.assertEqual(cap, relay.MIN_STRETCH)
+
     def test_dial_and_migration(self):
         self.assertEqual(relay.dial_of(None, "single"), 3)
         self.assertEqual(relay.dial_of(None, "even"), 5)
