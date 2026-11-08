@@ -197,9 +197,21 @@
                 </li>
               </template>
             </ol>
-            <p v-if="!p.lines.length" class="muted small">No lines yet: transcribe the take, then <em>Lines from what's said</em>, or paste the text.</p>
+            <!-- the lines come from what's said: transcribe right here, they fill in when it's done -->
             <div class="lineacts">
-              <button class="btn small" @click="remake(p)">Lines from what's said</button>
+              <span v-if="stateOf(p).busy" class="small muted">Starting…</span>
+              <span v-else-if="stateOf(p).status === 'running'" class="small">
+                {{ stateOf(p).stage === 'loading' ? 'Loading the speech model (the first time, it downloads about 1.6 GB)…'
+                  : `Transcribing… ${Math.round((stateOf(p).progress || 0) * 100)}%` }}
+                <span class="muted">The lines fill in when it's done.</span>
+              </span>
+              <button
+                v-else-if="stateOf(p).status !== 'done' && stateOf(p).status !== 'failed'" class="btn small primary" @click="captureLines(takeOf(p))"
+                :disabled="!canTranscribe" :title="canTranscribe ? 'Write down what\'s said; the lines fill in when it\'s done' : ''"
+              >Transcribe</button>
+              <button v-else class="btn small" @click="redoLines(p)">
+                {{ p.lines.length ? 'Lines from what\'s said again' : 'Lines from what\'s said' }}
+              </button>
               <button class="btn small" :class="{ active: pasteFor === p.id }" @click="pasteFor = pasteFor === p.id ? null : p.id">Paste the written text</button>
             </div>
             <div class="paste" v-if="pasteFor === p.id">
@@ -207,6 +219,14 @@
               <button class="btn small primary" @click="timeText(p)" :disabled="!pasteText.trim()">Time it to the voice</button>
               <span class="muted small">Your words and line breaks are kept; each line is timed to where it's said.</span>
             </div>
+            <p v-if="stateOf(p).status === 'failed'" class="small">
+              <span class="warn">Couldn't transcribe: {{ stateOf(p).error }}</span>
+              <button class="link" @click="captureLines(takeOf(p), true)" v-if="canTranscribe">Try again</button>
+            </p>
+            <p v-else-if="!canTranscribe && stateOf(p).status !== 'done'" class="muted small">
+              Transcribing isn't installed: quit the studio and start it again with <code>./studio/run.sh</code>, which installs it.
+              Or paste the text.
+            </p>
             <p v-if="lineNote" class="muted small">{{ lineNote }}</p>
           </div>
         </li>
@@ -586,14 +606,19 @@ async function captureLines(w, again = false) {
   }
 }
 // What each take's transcript says, for the message above (once there are no captions).
+let checkTimer
 async function checkTakes() {
-  if (tl.value.lines.length) return
+  clearTimeout(checkTimer)
+  let running = false
   for (const w of waiting.value) {
-    if (pieceStates.value[w.key]) continue
+    if (pieceStates.value[w.key]?.status === 'done' || pieceStates.value[w.key]?.busy) continue
     const r = await api.transcript(w.folder, w.file).catch(() => null)
     if (r) pieceStates.value = { ...pieceStates.value, [w.key]: r }
+    if (r?.status === 'running') running = true
   }
+  if (running) checkTimer = setTimeout(checkTakes, 2000)
 }
+onBeforeUnmount(() => clearTimeout(checkTimer))
 let fillTimer
 async function fillLines() {
   clearTimeout(fillTimer)
@@ -694,15 +719,12 @@ function join(p, j) {
   const [a, b] = [p.lines[j], p.lines[j + 1]]
   p.lines.splice(j, 2, { ...a, e: b.e, text: `${a.text} ${b.text}`, words: [...(a.words || []), ...(b.words || [])] })
 }
-async function remake(p) {
-  lineNote.value = ''
-  const r = await api.transcript(p.folder, p.file)
-  if (r.status !== 'done') {
-    lineNote.value = canTranscribe.value ? 'Transcribe this take first (+ Add a piece, pick the take, Transcribe).'
-      : 'Transcribing isn\'t installed: quit the studio and start it again with ./studio/run.sh, which installs it'
-    return
-  }
-  p.lines = copyLines(r.lines.filter((l) => l.e > p.start + 0.05 && l.s < p.end - 0.05))
+// Every piece's take: whether it's transcribed, to show beside its lines.
+const stateOf = (p) => pieceStates.value[keyOf(p)] || { status: 'none' }
+const takeOf = (p) => ({ key: keyOf(p), folder: p.folder, file: p.file })
+function redoLines(p) {
+  if (p.lines.length && !window.confirm('Replace these lines (and your edits to them) with what\'s said?')) return
+  captureLines(takeOf(p))
 }
 async function timeText(p) {
   lineNote.value = ''
