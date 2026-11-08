@@ -461,36 +461,43 @@ def relay_opts(body):
 
 
 def relay_items(db, parts, opts, cached_only=False):
-    """What the relay planner needs of each part: [{kind, duration, start,
-    length, avail, shot_at, keep}]. parts: dicts with kind, duration, start,
-    length, media_id, path, captured_at. A long clip plays from its start,
-    or the long stretch picked in its shoot (a short one all of itself, or
-    the stretch picked); with quiet moments skipped,
-    `keep` is that stretch (to the cap) with its lulls out. cached_only: use
-    only movement already measured (for a quick estimate). Also returns
-    whether any was missing."""
+    """What the relay planner needs: [{kind, duration, start, length, avail,
+    shot_at, keep, clip, match, _row}], _row: which of `parts` it's from.
+    parts: dicts with kind, duration, start, length, media_id, path,
+    captured_at. A long clip plays the long stretch picked in its shoot, or
+    the clip less a little breathing room at each end; with a cap it's
+    several stretches of up to the cap spread through that, centred, one
+    item each (relay.stretches). A short clip plays all of itself, or the
+    stretch picked. With quiet moments skipped, `keep` is a stretch with its
+    lulls out. cached_only: use only movement already measured (for a quick
+    estimate). Also returns whether any was missing."""
     items, missing = [], False
-    for p in parts:
+    for row_i, p in enumerate(parts):
         it = {"kind": p["kind"], "duration": float(p["duration"] or 0), "start": float(p["start"]),
-              "length": float(p["length"]), "shot_at": float(p["captured_at"] or 0)}
+              "length": float(p["length"]), "shot_at": float(p["captured_at"] or 0), "_row": row_i}
         if p["kind"] == "video" and it["duration"] >= relay_mod.LONG_THRESHOLD:
             pick = pick_of(db, p["media_id"])
-            if pick and pick["length"] >= relay_mod.LONG_THRESHOLD:
-                it["start"], it["avail"] = float(pick["start"]), float(pick["length"])
+            if pick and pick["length"] >= relay_mod.LONG_THRESHOLD:   # the stretch picked: just as picked
+                st = relay_mod.stretches(float(pick["start"]), float(pick["length"]), opts.get("cap"), breath=0)
             else:
-                it["start"], it["avail"] = 0.0, it["duration"]
+                st = relay_mod.stretches(0.0, it["duration"], opts.get("cap"))
+            act = None
             if opts.get("quiet"):
-                window = min(it["avail"], opts["cap"]) if opts.get("cap") else it["avail"]
                 path = ROOT / p["path"]
                 try:
                     act = activity_cached(path) if cached_only else activity_of(path)
                 except Exception:
                     act = None
+                missing = missing or not act
+            # each stretch claims the photos shot up to halfway to its neighbours
+            bounds = [0.0] + [(a + la + b) / 2 for (a, la), (b, _) in zip(st, st[1:])] + [it["duration"]]
+            for k, (s, ln) in enumerate(st):
+                one = {**it, "start": s, "avail": ln, "clip": row_i, "match": (bounds[k], bounds[k + 1])}
                 if act:
-                    it["keep"] = montage.quiet_cut([(float(a), float(b)) for a, b in act["points"]], it["start"], window)
-                else:
-                    missing = True
-        elif p["kind"] == "video":   # a short clip plays all of itself, or the stretch picked in its shoot
+                    one["keep"] = montage.quiet_cut([(float(a), float(b)) for a, b in act["points"]], s, ln)
+                items.append(one)
+            continue
+        if p["kind"] == "video":   # a short clip plays all of itself, or the stretch picked in its shoot
             pick = pick_of(db, p["media_id"])
             it["start"], it["length"] = (float(pick["start"]), float(pick["length"])) if pick else (0.0, it["duration"])
         items.append(it)
@@ -541,7 +548,7 @@ def apply_style(db, reel_id, style, body):
         ids = []
         cols = [c for c in ITEM_COLUMNS if c not in ("position", "start", "length")]
         for pos, part in enumerate(plan["lanes"]["B"]):
-            r = rows[part["item"]]
+            r = rows[items[part["item"]]["_row"]]
             cur = db.execute(f"INSERT INTO reel_items (reel_id, position, start, length, {', '.join(cols)}) "
                              f"VALUES (?, ?, ?, ?, {', '.join('?' * len(cols))})",
                              (reel_id, pos, part["start"], part["length"], *[r[c] for c in cols]))

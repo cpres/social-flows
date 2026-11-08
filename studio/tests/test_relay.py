@@ -218,6 +218,45 @@ class Fixtures(unittest.TestCase):
         parts = [p for p in plan["lanes"]["B"] if p["item"] == 0]
         self.assertTrue(all(not (20.01 < p["start"] < 39.99) for p in parts), parts)
 
+    def test_stretches(self):
+        self.assertEqual(relay.skip_for(60), 10.0)
+        self.assertEqual(relay.skip_for(180), 20.0)
+        self.assertEqual(relay.skip_for(30), 10.0)
+        self.assertEqual(relay.skip_for(600), 20.0)
+        one_min = relay.stretches(0, 60, 20)
+        self.assertEqual(one_min, [(5.0, 20.0), (35.0, 20.0)])   # 10s skip, centred
+        three_min = relay.stretches(0, 180, 20)
+        self.assertEqual(len(three_min), 4)
+        for (a, la), (b, _) in zip(three_min, three_min[1:]):
+            self.assertAlmostEqual(b - (a + la), 20.0)
+        for d in (11, 25, 47, 121.7, 180, 333):
+            for cap in (None, 20, 30, 60):
+                st = relay.stretches(3.0, d, cap)
+                first, last = st[0][0] - 3.0, 3.0 + d - (st[-1][0] + st[-1][1])
+                self.assertAlmostEqual(first, last, delta=0.01)          # centred
+                self.assertGreaterEqual(first, min(relay.BREATH, d / 4) - 0.01)   # room at each end
+                self.assertTrue(all(cap is None or l <= cap + 1e-9 for _, l in st))
+        self.assertEqual(relay.stretches(0, 40, None), [(2.0, 36.0)])
+
+    def test_stretches_of_a_clip_cut_straight_on(self):
+        clip = video(at(1), 180.0)
+        items = []
+        st = relay.stretches(0, 180, 20)
+        bounds = [0.0] + [(a + l + b) / 2 for (a, l), (b, _) in zip(st, st[1:])] + [180.0]
+        for k, (s, l) in enumerate(st):
+            items.append({**clip, "start": s, "avail": l, "clip": 7, "match": (bounds[k], bounds[k + 1])})
+        items += [photo(at(1, 50)), video(at(5), 30.0)]   # a photo while it recorded (in a skip), then a clip
+        for d in range(1, 11):
+            plan = relay.plan_relay(items, {"dial": d})
+            self.assertEqual(relay.check(plan, items, {"dial": d}), [])
+            for seg in splits(plan):
+                self.assertFalse(seg["top"] < 4 and seg["bottom"] is not None and seg["bottom"] < 4)
+            if d >= 3:   # the photo at 0:50, in the skip after 20..40, goes in the nearest stretch
+                c = cameos(plan)
+                self.assertEqual([(s["top"], s["bottom"]) for s in c][:1], [(1, 4)])
+            self.assertEqual(plan["stats"]["longCount"], 2)
+            self.assertEqual(plan["stats"]["longPieces"], 5)
+
     def test_dial_and_migration(self):
         self.assertEqual(relay.dial_of(None, "single"), 3)
         self.assertEqual(relay.dial_of(None, "even"), 5)

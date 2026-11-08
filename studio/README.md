@@ -286,8 +286,12 @@ folder* (a shoot) ask for a name and a style:
   the full frame. Clips go in the order they were shot. Near a clip's end
   the next comes in underneath (a **handoff**), the first finishes, and the
   next takes over the full frame. **Long clips** (10s or more) get their
-  own length: all of the clip, or the long stretch you picked on the shoot
-  page, or up to 20, 30 or 60s if you cap them. *Skip quiet moments in long
+  own length: all of the clip less a moment at each end, or the long
+  stretch you picked on the shoot page. With *Up to 20s* (or 30, 60) a long
+  clip plays as several stretches of that length spread through it, centred,
+  skipping 10s between them in a 1-minute clip up to 20s in a 3-minute one
+  (`relay.stretches`); one stretch cuts straight to the next, and a photo
+  shot in a skip goes in the nearest stretch. *Skip quiet moments in long
   clips* cuts out where nothing much happens, at real speed. **Short clips**
   play their own length. **Photos stay on screen for** 2, 3, 4 (default)
   or 6s in all, full frame and split together, so a photo never sits next
@@ -315,7 +319,11 @@ folder* (a shoot) ask for a name and a style:
   screen, and the one staying grows from its slot to the full frame. In
   the reel it's ordinary scenes (Solo B, then a split with *Relay* ticked
   that comes in with *Hand off*, then Solo B coming in with *Take over*),
-  so you can trim, reorder and change any of it. Ticking *Relay* on any
+  so you can trim, reorder and change any of it. When an edit leaves the
+  relay out of step (a clip no longer carrying on where it left off, or a
+  stretch run into the next), a bar under the preview says which later
+  parts would move; click ✓ to move them (each pushed on by as much as you
+  added, pushing the next) or *Leave* to keep them as they are. Ticking *Relay* on any
   split after a Solo B scene does the same by hand.
 
 **Lanes and scenes.** A reel has two lanes of footage and a row of scenes

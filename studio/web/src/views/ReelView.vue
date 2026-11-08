@@ -573,6 +573,16 @@
             </button>
           </div>
           <label class="guides-toggle muted" v-if="tall"><input type="checkbox" v-model="guides" /> Show Instagram overlays <kbd>G</kbd></label>
+          <div v-if="flowAsk" class="flowask">
+            <span>
+              <b>Move {{ flowPending.length }} later part{{ flowPending.length === 1 ? '' : 's' }} to keep the clips flowing?</b>
+              <small class="muted">{{ flowSummary }}</small>
+            </span>
+            <button class="flowok" @click="applyFlow" title="Do it: move the later parts on">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
+            <button class="btn small" @click="leaveFlow" title="Leave the later parts as they are">Leave</button>
+          </div>
           <label class="guides-toggle muted" title="Plays small copies of the videos here so the preview keeps up. The render always uses the originals.">
             <input type="checkbox" v-model="lowQuality" /> Display low quality
             <small v-if="lowQuality && lowProgress && lowProgress.ready < lowProgress.total">(making small copies: {{ lowProgress.ready }} of {{ lowProgress.total }}; the originals play until each is ready)</small>
@@ -1077,10 +1087,12 @@ function setRange({ start, length }) {
   const r = p.media.kind === 'video'
     ? fitRange(start, length, p.media.duration)
     : { start: 0, length: Math.max(0.2, Math.round(length * 100) / 100) }
+  if (Math.abs(r.start - p.start) < 0.005 && Math.abs(r.length - p.length) < 0.005) return   // nothing changed (a field losing focus)
   const moved = Math.abs(r.start - p.start) > 0.005
+  const delta = (r.start + r.length) - (p.start + p.length)
   Object.assign(p, r)
   saver.queue(p.id, r)
-  keepFlow(moved ? p : null)
+  flowEdit.value = { id: p.id, delta: Math.max(0, delta), moved }
 }
 
 // A relay is one clip carrying on through several parts: full frame, then
@@ -1109,26 +1121,90 @@ const flowLinks = computed(() => {
   })
   return out
 })
-// Keep the relay's parts flowing on from each other after an edit. moved:
-// a part whose start was just changed: the part before it in the flow
-// ends there instead (rather than the start snapping back).
-function keepFlow(moved = null) {
+// After an edit, what the rest of a relay would need to keep flowing, as a
+// plan to look at before it's done (the ✓ under the preview), so trying
+// things out never moves parts further down the reel by itself:
+// - links: each later part of a clip starts where its last left off (plus
+//   the time it carried on on top); a part whose start was moved moves the
+//   end of the part before it instead
+// - stretches of one clip never overlap: one pushed into the next pushes
+//   it on by as much as the edit added, and that one the next, and so on
+// The last edit: { id, delta (seconds added to its end), moved (its start changed) }.
+const flowEdit = ref(null)
+const flowDismissed = ref('')
+function flowPlan(edit) {
   const links = flowLinks.value
-  if (!links.length) return
-  const gapOf = (l) => l.under.reduce((s, q) => s + len(q), 0)
-  const fix = (q, r) => { Object.assign(q, r); saver.queue(q.id, r) }
-  const back = moved && links.find((l) => l.to === moved)
+  if (!hasRelay.value) return []
+  const sim = new Map(kept.value.map((p) => [p.id, { start: p.start, length: p.length }]))
+  const S = (q) => sim.get(q.id) || { start: q.start, length: q.length }
+  const L = (q) => (synced.value ? len(q) : S(q).length)
+  const set = (q, r) => sim.set(q.id, { ...S(q), ...r })
+  const r2 = (v) => Math.round(v * 100) / 100
+  const gapOf = (l) => l.under.reduce((s, q) => s + L(q), 0)
+  const clampTo = (q, start) => {
+    const dur = q.media.duration || Infinity
+    const st = r2(Math.min(start, Math.max(0, dur - 0.2)))
+    return { start: st, length: r2(Math.max(0.2, Math.min(S(q).length, dur - st))) }
+  }
+  const edited = edit && byId.value.get(edit.id)
+  const back = edit?.moved && edited && links.find((l) => l.to === edited)
   if (back && back.from.media.kind === 'video') {
-    const length = Math.round((moved.start - gapOf(back) - back.from.start) * 100) / 100
-    if (length >= 0.2) fix(back.from, { length })
+    const length = r2(S(edited).start - gapOf(back) - S(back.from).start)
+    if (length >= 0.2) set(back.from, { length })
   }
-  for (const l of links) {
-    const dur = l.to.media.duration || Infinity
-    const want = Math.round((l.from.start + len(l.from) + gapOf(l)) * 100) / 100
-    if (Math.abs(want - l.to.start) < 0.01) continue
-    const start = Math.min(want, Math.max(0, dur - 0.2))
-    fix(l.to, { start, length: Math.round(Math.max(0.2, Math.min(l.to.length, dur - start)) * 100) / 100 })
+  const linkFrom = new Map(links.map((l) => [l.from.id, l]))
+  const linked = new Set(links.map((l) => l.to.id))
+  for (let pass = 0; pass < 8; pass++) {
+    let changed = false
+    for (const l of links) {
+      const want = r2(S(l.from).start + L(l.from) + gapOf(l))
+      if (Math.abs(want - S(l.to).start) < 0.01) continue
+      set(l.to, clampTo(l.to, want))
+      changed = true
+    }
+    // where each clip's footage has got to (a part on top carries on past its own end)
+    const reach = new Map()
+    for (const q of kept.value) {
+      if (q.media.kind !== 'video') continue
+      const was = reach.get(q.mediaId)
+      if (was !== undefined && !linked.has(q.id) && q.id !== edit?.id && S(q).start < was - 0.01) {
+        set(q, clampTo(q, S(q).start + Math.max(edit?.delta || 0, was - S(q).start)))
+        changed = true
+      }
+      const l = linkFrom.get(q.id)
+      const end = S(q).start + L(q) + (l ? gapOf(l) : 0)
+      reach.set(q.mediaId, Math.max(was ?? -Infinity, end))
+    }
+    if (!changed) break
   }
+  return kept.value
+    .filter((q) => Math.abs(S(q).start - q.start) >= 0.01 || Math.abs(S(q).length - q.length) >= 0.01)
+    .map((q) => ({ part: q, patch: { start: S(q).start, length: S(q).length } }))
+}
+const flowPending = computed(() => flowPlan(flowEdit.value))
+const flowSig = computed(() => flowPending.value.map((c) => `${c.part.id}:${c.patch.start}:${c.patch.length}`).join('|'))
+const flowAsk = computed(() => flowPending.value.length && flowSig.value !== flowDismissed.value)
+// e.g. "d_long.mp4 2:20.0 → 2:45.0, and 2 more"
+const flowSummary = computed(() => {
+  const ch = flowPending.value
+  const say = (c) => {
+    const s = Math.abs(c.patch.start - c.part.start) >= 0.01
+    return s ? `${c.part.media.file} ${fmtTime(c.part.start)} → ${fmtTime(c.patch.start)}`
+      : `${c.part.media.file} ${c.part.length.toFixed(1)}s → ${c.patch.length.toFixed(1)}s`
+  }
+  return ch.slice(0, 2).map(say).join(' · ') + (ch.length > 2 ? `, and ${ch.length - 2} more` : '')
+})
+function applyFlow() {
+  for (const { part, patch } of flowPending.value) {
+    Object.assign(part, patch)
+    saver.queue(part.id, patch)
+  }
+  flowEdit.value = null
+  flowDismissed.value = ''
+}
+function leaveFlow() {
+  flowDismissed.value = flowSig.value
+  flowEdit.value = null
 }
 
 function setIn() {
@@ -1204,7 +1280,6 @@ function lengthAll(len) {
     Object.assign(p, r)
     saver.queue(p.id, r)
   }
-  keepFlow()
 }
 
 async function remove(p) {
@@ -1422,8 +1497,6 @@ const beatTicks = computed(() => {
   return out
 })
 
-// Cutting on the beat changes how long parts play, so the relay flow follows.
-watch(() => [synced.value, period.value, settings.beatsFit, settings.beatsPerCut], () => { if (ready) keepFlow() })
 function setBeatsFit(v) {
   if (v === 'nearest') settings.beatsFit = 'nearest'
   else { settings.beatsFit = 'fixed'; settings.beatsPerCut = Number(v) }
@@ -1431,7 +1504,6 @@ function setBeatsFit(v) {
 function setBeats(p, n) {
   p.beats = n
   saver.queue(p.id, { beats: n })
-  keepFlow()
 }
 function beatsAll(n) {
   for (const p of items.value) if (p.beats !== n) setBeats(p, n)
@@ -1462,7 +1534,6 @@ async function smartHolds() {
       Object.assign(p, r)
       saver.queue(p.id, r)
     })
-    keepFlow()   // photo lengths are cameo and handoff lengths in a relay
     const count = (s) => photos.filter((p) => styles.get(p.mediaId).style === s).length
     smartNote.value = `${count('medium')} Medium · ${count('small')} Small · ${count('burst')} in bursts`
       + (anyA.value ? ` · two lanes, so none under ${TWO_LANE_FLOOR}s` : '')
@@ -3034,6 +3105,13 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .lg .sw { width: 10px; height: 10px; border-radius: 50%; }
 .shapes { display: flex; flex-wrap: wrap; gap: 6px; }
 
+/* the ✓ for keeping a relay flowing after an edit */
+.flowask { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding: 8px 10px; border-radius: 10px;
+  border: 1px solid var(--sage); background: var(--sage-soft, rgb(184 207 168 / 18%)); }
+.flowask > span { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.flowok { display: grid; place-items: center; width: 34px; height: 34px; flex: none; border-radius: 50%; border: 0;
+  background: var(--sage); color: var(--on-lane, #fff); cursor: pointer; }
+.flowok:hover { filter: brightness(1.08); }
 /* the audio rows: the mix strip, coloured by where the sound comes from */
 .audiorow { --au-a: #8fae7c; --au-b: #d9954f; --au-music: #6f93c4; --au-voice: #b59a62; }
 :root[data-theme='dark'] .audiorow { --au-a: #b8cfa8; --au-b: #e9b27a; --au-music: #8fb0dc; --au-voice: #efe6cf; }

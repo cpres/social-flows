@@ -46,8 +46,9 @@
           <span class="muted">Long clips ({{ LONG }}s or more) play</span>
           <button
             v-for="c in CAPS" :key="c.v" class="btn small" :class="{ active: cap === c.v }" @click="cap = c.v"
-            :title="c.v ? `Each long clip plays up to ${c.v}s` : 'Each long clip plays all of itself (or the long stretch you picked in the shoot)'"
+            :title="c.v ? `Each long clip plays as stretches of up to ${c.v}s spread through it, skipping 10s (a 1-minute clip) to 20s (3 minutes or more) between` : 'Each long clip plays all of itself, less a moment at each end (or the long stretch you picked in the shoot)'"
           >{{ c.label }}</button>
+          <small v-if="cap" class="muted">in stretches of up to {{ cap }}s, spread through each clip</small>
         </div>
         <label class="check">
           <input type="checkbox" v-model="quiet" /> Skip quiet moments in long clips
@@ -140,7 +141,10 @@ const summary = computed(() => {
   const s = plan.value?.stats
   if (!s) return ''
   const bits = []
-  if (s.longCount) bits.push(count(s.longCount, 'long clip', 'long clips'))
+  if (s.longCount) {
+    bits.push(count(s.longCount, 'long clip', 'long clips')
+      + (s.longPieces > s.longCount ? ` (${s.longPieces} stretches)` : ''))
+  }
   if (s.shortCount) bits.push(count(s.shortCount, 'short clip', 'short clips'))
   if (s.photoCount) bits.push(count(s.photoCount, 'photo', 'photos'))
   const list = bits.length > 1 ? `${bits.slice(0, -1).join(', ')} and ${bits[bits.length - 1]}` : bits.join('')

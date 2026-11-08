@@ -25,7 +25,11 @@ items: [{kind: "video" | "photo", duration (the file's), start (where its
 part starts), length (its part), avail (a long clip's stretch from start,
 before the cap), shot_at (seconds, the file's capture time; a video's is
 when it started), keep (optional, a long clip's stretch with its quiet
-moments out: [(start, length)] in the file, already within the cap)}].
+moments out: [(start, length)] in the file, already within the cap),
+clip (optional: stretches of one clip share it; they cut straight from one
+to the next, never split), match (optional, (from, to) file seconds: the
+moments a stretch claims for photos shot while its clip recorded)}].
+A capped long clip is several items, one per stretch (see stretches).
 
 opts: {dial: 1..10, photo_seconds, cap (seconds or None)}.
 
@@ -70,6 +74,14 @@ CAMEO_LOOK_AHEAD = 6   # the photos after a long clip pulled into its spare time
 
 MIX_TO_DIAL = {"single": 3, "even": 5, "split": 8}   # the old Single or split choice
 
+# A long clip with a cap ("Up to 20s") plays as several stretches of up to the
+# cap, spread through it: a skip between them that grows with the clip
+# (SKIP_SHORT for a SKIP_SHORT_AT clip, up to SKIP_LONG from SKIP_LONG_AT),
+# centred, with at least BREATH left at each end (its fumbly start and end).
+BREATH = 2.0
+SKIP_SHORT, SKIP_SHORT_AT = 10.0, 60.0
+SKIP_LONG, SKIP_LONG_AT = 20.0, 180.0
+
 LONG, SHORT, PHOTO = "LONG", "SHORT", "PHOTO"
 
 
@@ -85,6 +97,31 @@ def dial_of(value, mix=None):
         return int(min(max(round(float(value)), DIAL_MIN), DIAL_MAX))
     except (TypeError, ValueError):
         return DIAL_DEFAULT
+
+
+def skip_for(length):
+    """Seconds skipped between a long clip's stretches: 10s for a minute's
+    clip, 20s for three minutes, in between in between."""
+    f = (length - SKIP_SHORT_AT) / (SKIP_LONG_AT - SKIP_SHORT_AT)
+    return round(lerp(SKIP_SHORT, SKIP_LONG, min(max(f, 0.0), 1.0)), 3)
+
+
+def stretches(start, length, cap=None, breath=BREATH):
+    """The stretches of a long clip a relay plays: [(start, length)] in the
+    file. With a cap: as many of up to `cap` seconds as fit, skip_for apart,
+    centred in start..start+length with at least `breath` at each end.
+    Without one: all of it, less `breath` at each end. Never less than half
+    of what's there."""
+    inner = max(length - 2 * breath, length / 2)
+    pad = (length - inner) / 2
+    if not cap or inner <= cap:
+        one = min(inner, cap or inner)
+        return [(round(start + (length - one) / 2, 3), round(one, 3))]
+    skip = skip_for(length)
+    n = max(1, int((inner + skip) // (cap + skip)))
+    used = n * cap + (n - 1) * skip
+    at = start + pad + (inner - used) / 2
+    return [(round(at + i * (cap + skip), 3), round(float(cap), 3)) for i in range(n)]
 
 
 def allowed(a, b, dial):
@@ -129,8 +166,12 @@ class Entry:
             self.ranges = [(float(it.get("start") or 0), float(it.get("length") or it.get("duration") or 0))]
             self.split_tol = self.ranges[0][1]
         self.life = sum(l for _, l in self.ranges)
-        self.shot_end = self.shot_at + (float(it.get("duration") or 0) if self.kind != PHOTO else 0)
         self.file_start = self.shot_at   # second 0 of the file, in shot time
+        # What a long clip claims of its file for photos shot while it was
+        # recording (a stretch of one: its share, up to halfway to the next).
+        match = it.get("match") or (0.0, float(it.get("duration") or 0) if self.kind != PHOTO else 0.0)
+        self.match_from, self.shot_end = self.shot_at + float(match[0]), self.shot_at + float(match[1])
+        self.clip = it.get("clip")       # stretches of the same clip share this
         self.cameos = []                 # [(guest Entry, start, end)] in the host's play time
         self.in_o = 0.0                  # under the item before
         self.out_o = 0.0                 # on top of the item after
@@ -195,7 +236,7 @@ def plan_cameos(entries, dial, s):
         for g in entries:
             if not can_guest(g):
                 continue
-            covering = [h for h in hosts if h.file_start <= g.shot_at <= h.shot_end and h.idx >= last_host]
+            covering = [h for h in hosts if h.match_from <= g.shot_at <= h.shot_end and h.idx >= last_host]
             if not covering:
                 continue
             h = max(covering, key=lambda h: (h.shot_at, h.idx))   # the clip that started last
@@ -231,6 +272,10 @@ def plan_cameos(entries, dial, s):
 
 # ---------------------------------------------------------------- the plan
 
+def same_clip(a, b):
+    return a.clip is not None and a.clip == b.clip
+
+
 def plan_relay(items, opts=None):
     """The plan (see the top of this file). The dial is a preference: at
     the edges, a pairing turning on can squeeze a neighbour's split by more
@@ -259,8 +304,8 @@ def _plan(items, opts, dial):
     top = [e for e in entries if e.idx not in guests]
     for j in range(len(top) - 1):
         x, y = top[j], top[j + 1]
-        if not allowed(x.kind, y.kind, dial):
-            continue
+        if not allowed(x.kind, y.kind, dial) or same_clip(x, y):
+            continue   # (one stretch of a clip cuts straight to its next)
         if x.cameos:
             x_room = x.life - x.cameos[-1][2] - MIN_SOLO
         else:
@@ -269,7 +314,7 @@ def _plan(items, opts, dial):
             y_room = y.cameos[0][1] - MIN_SOLO
         else:
             y_room = y.life - MIN_SCENE
-            if j + 2 < len(top) and y_room / 2 >= MIN_OVERLAP:
+            if j + 2 < len(top) and not same_clip(y, top[j + 2]) and y_room / 2 >= MIN_OVERLAP:
                 y_room /= 2   # leave it room to hand on to the next (whatever the dial, so turning it up never squeezes this one)
         max_o = min(x.split_tol, y.split_tol, x_room, y_room)
         o = lerp(MIN_OVERLAP, max_o, s) if max_o >= MIN_OVERLAP else 0.0
@@ -304,7 +349,8 @@ def _plan(items, opts, dial):
     # mostly photos, and split well under what the dial asked for
     limited = photos * 2 > len(entries) and dial > 1 and split_pct < 100 * s - 15
     stats = {"totalSeconds": round(total, 3), "splitSeconds": round(split, 3), "splitPct": split_pct,
-             "longCount": kinds.count(LONG), "shortCount": kinds.count(SHORT), "photoCount": photos,
+             "longCount": len({e.clip if e.clip is not None else ("i", e.idx) for e in entries if e.kind == LONG}),
+             "longPieces": kinds.count(LONG), "shortCount": kinds.count(SHORT), "photoCount": photos,
              "cameoCount": len(guests), "limitedBy": "photos" if limited else None, "dial": dial, "planDial": dial}
     return {"lanes": {"A": [], "B": lanes_b}, "scenes": scenes, "timeline": out_timeline, "stats": stats}
 
