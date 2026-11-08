@@ -278,6 +278,33 @@
         </label>
       </div>
 
+      <!-- why there are no captions yet, and what to do about it -->
+      <div class="nolines" v-if="!tl.lines.length">
+        <p v-if="!pieces.length"><b>No captions yet.</b> Add a piece of a recording under <em>Voice</em>, and its words show up here.</p>
+        <template v-else>
+          <p><b>No captions yet:</b> the voice has no lines.</p>
+          <p v-for="w in waiting" :key="w.key" class="small">
+            <span class="mono">{{ w.file }}</span>:
+            <template v-if="w.status === 'running'">
+              {{ w.stage === 'loading' ? 'loading the speech model (the first time, it downloads about 1.6 GB)…' : `transcribing… ${Math.round((w.progress || 0) * 100)}%` }}
+              Its lines appear here when it's done.
+            </template>
+            <template v-else-if="w.status === 'failed'">
+              <span class="warn">couldn't transcribe ({{ w.error }}).</span>
+              <button class="link" @click="transcribePiece(w)">Try again</button>
+            </template>
+            <template v-else-if="w.status === 'done'">nothing was heard in the part you're using. Check its <em>From</em> and <em>To</em>, or paste the text.</template>
+            <template v-else-if="canTranscribe">
+              not transcribed yet. <button class="btn small primary" @click="transcribePiece(w)">Transcribe</button>
+            </template>
+            <template v-else>
+              transcribing isn't installed: quit the studio and start it with <code>./studio/run.sh --voice</code>.
+            </template>
+          </p>
+          <p class="small muted">Or type the words yourself: open the piece's <em>Lines</em> and use <em>Paste the written text</em>.</p>
+        </template>
+      </div>
+
       <div class="cpreview">
         <div class="pframe" :style="{ aspectRatio: frameRatio }">
           <img v-if="previewThumb" :src="previewThumb" alt="" />
@@ -512,6 +539,50 @@ const pickBounds = computed(() => {
 })
 const pickStart = computed(() => pickBounds.value[0])
 const pickEnd = computed(() => pickBounds.value[1])
+
+// ---------------------------------------------------------------- lines from transcripts
+
+// A piece added before its take was transcribed (or used whole) has no lines;
+// they're filled in from the transcript once it's there, once per piece, so
+// lines you clear yourself stay cleared.
+const pieceStates = ref({})   // "folder/file" -> what transcribing it says
+const keyOf = (p) => `${p.folder}/${p.file}`
+const waiting = computed(() => {
+  const seen = new Set()
+  return pieces.value.filter((p) => !p.lines?.length && !seen.has(keyOf(p)) && seen.add(keyOf(p)))
+    .map((p) => ({ key: keyOf(p), folder: p.folder, file: p.file, status: 'none', ...(pieceStates.value[keyOf(p)] || {}) }))
+})
+let fillTimer
+async function fillLines() {
+  clearTimeout(fillTimer)
+  const empty = pieces.value.filter((p) => !p.lines?.length && !p.linesFilled)
+  let running = false
+  for (const key of new Set(empty.map(keyOf))) {
+    const p0 = empty.find((p) => keyOf(p) === key)
+    const r = await api.transcript(p0.folder, p0.file).catch(() => null)
+    if (!r) continue
+    pieceStates.value = { ...pieceStates.value, [key]: r }
+    if (r.status === 'running') running = true
+    if (r.status !== 'done') continue
+    for (const p of empty.filter((q) => keyOf(q) === key)) {
+      p.lines = copyLines(r.lines.filter((l) => l.e > p.start + 0.05 && l.s < p.end - 0.05))
+      p.linesFilled = true
+    }
+  }
+  if (running) fillTimer = setTimeout(fillLines, 2000)
+}
+async function transcribePiece(w) {
+  try {
+    pieceStates.value = { ...pieceStates.value, [w.key]: await api.transcribe(w.folder, w.file) }
+  } catch (e) {
+    pieceStates.value = { ...pieceStates.value, [w.key]: { status: 'failed', error: e.message } }
+    return
+  }
+  fillLines()
+}
+onMounted(fillLines)
+watch(() => pieces.value.map(keyOf).join('|'), () => fillLines())
+onBeforeUnmount(() => clearTimeout(fillTimer))
 
 const copyLines = (ls) => ls.map((l, i) => ({ s: l.s, e: l.e, text: l.text, br: i === 0 ? true : !!l.br,
                                               words: l.words ? l.words.map((w) => [...w]) : [] }))
@@ -832,4 +903,7 @@ li.gap { height: 8px; padding: 0; }
 .pctl .field { width: 100%; }
 .pctl input[type='range'] { padding: 0; accent-color: var(--forest); }
 .jumps { display: flex; gap: 10px; }
+.nolines { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; background: var(--sage-soft); font-size: 14px; }
+.nolines p { margin: 0 0 6px; }
+.nolines p:last-child { margin-bottom: 0; }
 </style>
