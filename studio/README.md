@@ -123,7 +123,12 @@ python3 studio/server.py --open
     bars pulsing at the beat's tempo. While takes are made it shows each one
     arriving; playing a take shows its waveform, a playhead (click to jump)
     and live frequencies.
-  - Under it, the plan: *Start from* a song category, a song or scratch (the
+  - Under it, the plan: *Start from* a style (*Acoustic*: fingerpicked folk,
+    acoustic groove, campfire strum, bossa nova, chamber folk, desert blues,
+    island strum; *Electronic*: downtempo, lo-fi house, chillwave, synthwave,
+    deep house, afro house, ambient pulse, future garage; each sets the
+    levers, instruments and tempo, and is described in words, never by an
+    artist's name), one of *Your songs* (the
     song sets the groove and sound, measured here: tempo, key, tone; needs
     `--beat`; never copied or sent; ▶ on a card plays
     30 seconds from the middle of its song, ■ stops). Picking a song sets

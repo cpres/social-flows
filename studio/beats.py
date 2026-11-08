@@ -43,7 +43,63 @@ INSTRUMENTS = {
     "banjo": ("Banjo", "plucked banjo"),
     "marimba": ("Marimba", "marimba"),
     "pads": ("Synth pads", "soft ambient synth pads"),
+    "ukulele": ("Ukulele", "bright strummed ukulele"),
+    "arp": ("Synth arpeggios", "pulsing synth arpeggios"),
+    "machine": ("Drum machine", "crisp drum machine"),
+    "sub": ("Deep synth bass", "deep, round synth bass"),
 }
+
+# Styles to start from, in two families (no artist names: the music is
+# described, never imitated by name). Each: label, words for the music, the
+# levers (in LEVERS order), instruments, and a tempo where the levers' own
+# would be off for the style.
+def _lv(*vals):
+    return dict(zip(LEVERS, vals))
+
+
+STYLES = {
+    "acoustic": ("Acoustic", {
+        "folk": ("Fingerpicked folk", ["intimate fingerpicked folk", "hushed, warm and close"],
+                 _lv(0, 2, 2, 2, 0, 0, 0, 2, 1, 3, 5), ["nylon", "cajon", "upright"], None),
+        "groove": ("Acoustic groove", ["acoustic groove", "organic, rhythmic, a real beat under the guitars"],
+                   _lv(2, 3, 1, 3, 0, 0, 1, 4, 3, 3, 4), ["steel", "nylon", "cajon", "brushes", "upright"], None),
+        "campfire": ("Campfire strum", ["strummed campfire folk", "open, easy and warm"],
+                     _lv(1, 4, 1, 3, 0, 0, 1, 2, 1, 4, 5), ["steel", "cajon", "upright"], None),
+        "bossa": ("Bossa nova", ["gentle bossa nova", "soft syncopated rhythm, brushed and breezy"],
+                  _lv(3, 3, 3, 2, 0, 0, 0, 2, 2, 1, 4), ["nylon", "brushes", "upright", "rhodes"], 124),
+        "chamber": ("Chamber folk", ["chamber folk", "tender and cinematic"],
+                    _lv(0, 2, 3, 1, 0, 0, 1, 1, 1, 2, 4), ["nylon", "cello", "piano", "strings"], None),
+        "desert": ("Desert blues", ["hypnotic desert blues", "rolling guitar riffs over hand percussion"],
+                   _lv(2, 1, 1, 3, 1, 0, 0, 3, 3, 3, 4), ["steel", "cajon", "upright"], None),
+        "island": ("Island strum", ["sunny island strum", "light, swaying and bright"],
+                   _lv(2, 5, 2, 3, 0, 0, 1, 2, 2, 3, 4), ["ukulele", "marimba", "cajon"], None),
+    }),
+    "electronic": ("Electronic", {
+        "downtempo": ("Downtempo", ["downtempo electronica", "warm and hypnotic"],
+                      _lv(1, 2, 3, 1, 0, 3, 0, 2, 3, 1, 0), ["pads", "rhodes", "machine"], 90),
+        "lofihouse": ("Lo-fi house", ["lo-fi house", "dusty, warm four-on-the-floor"],
+                      _lv(2, 3, 2, 3, 2, 3, 1, 3, 3, 0, 0), ["machine", "rhodes", "sub"], 120),
+        "chillwave": ("Chillwave", ["chillwave", "hazy, nostalgic, washed-out synths"],
+                      _lv(1, 3, 4, 1, 1, 4, 0, 2, 2, 0, 0), ["pads", "arp", "machine"], 98),
+        "synthwave": ("Synthwave", ["retro synthwave", "pulsing arpeggios and big gated drums"],
+                      _lv(1, 3, 0, 4, 0, 5, 1, 3, 3, 0, 0), ["arp", "sub", "machine", "pads"], None),
+        "deephouse": ("Deep house", ["deep house", "warm, rolling four-on-the-floor"],
+                      _lv(3, 3, 1, 4, 0, 4, 2, 4, 4, 0, 0), ["sub", "machine", "rhodes", "pads"], 122),
+        "afrohouse": ("Afro house", ["organic afro house", "hand percussion over a warm four-on-the-floor"],
+                      _lv(3, 3, 1, 4, 0, 3, 3, 5, 4, 4, 1), ["cajon", "marimba", "sub", "machine"], 122),
+        "ambient": ("Ambient pulse", ["ambient electronica", "a soft pulse under evolving textures"],
+                    _lv(0, 2, 5, 0, 0, 4, 0, 1, 2, 1, 0), ["pads", "piano"], 80),
+        "garage": ("Future garage", ["future garage", "shuffled beats under airy pads"],
+                   _lv(2, 2, 3, 3, 1, 4, 0, 3, 4, 0, 0), ["machine", "pads", "sub"], 130),
+    }),
+}
+
+
+def style_of(src):
+    """(family label, style tuple) for a beat's `from` of kind style, or None."""
+    fam = STYLES.get((src or {}).get("family"))
+    st = fam and fam[1].get(src.get("style"))
+    return (fam[0], st) if st else None
 PRESETS = ("follow", "arc", "slow", "peaks", "steady", "custom")
 TEMPO_RANGE = (60, 180)
 ENGINES = ("elevenlabs", "lyria")
@@ -61,9 +117,11 @@ def clean(beat):
     if not isinstance(beat, dict):
         return None
     src = beat.get("from") if isinstance(beat.get("from"), dict) else {}
-    kind = "song" if src.get("kind") == "song" and src.get("name") else "scratch"
-    out = {"from": {"kind": kind, **({"name": str(src["name"])[:300],
-                                      "category": str(src.get("category") or "")[:60]} if kind == "song" else {})}}
+    kind = ("song" if src.get("kind") == "song" and src.get("name") else
+            "style" if src.get("kind") == "style" and style_of(src) else "scratch")
+    out = {"from": {"kind": kind, **({"name": str(src["name"])[:300], "category": str(src.get("category") or "")[:60]}
+                                     if kind == "song" else
+                                     {"family": src["family"], "style": src["style"]} if kind == "style" else {})}}
     points = []
     for p in beat.get("curve") or []:
         if isinstance(p, (list, tuple)) and len(p) == 2:

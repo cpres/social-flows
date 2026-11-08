@@ -1868,6 +1868,10 @@ def beat_context(reel_id, beat, length=None, measure=True, say=None):
     reel, _ = reel_and_rows(reel_id)
     ref, genres, ref_line = None, [], ""
     src = beat["from"]
+    st = beats_mod.style_of(src) if src["kind"] == "style" else None
+    if st:   # a built-in style: its words are the genre
+        genres = list(st[1][1])
+        ref_line = f"In a {st[1][0].lower()} style ({st[0].lower()}): {', '.join(st[1][1])}"
     if src["kind"] == "song" and measure:
         track = next((t for t in music_shelf()["tracks"] if t["name"] == src["name"]), None)
         genres = [c for c in (track or {}).get("categories", []) if c.lower() != "ai"]
@@ -2090,6 +2094,15 @@ def beat_star(reel_id: int, take_id: str, body: dict = Body(default={})):
     meta["starred"] = bool(body.get("starred", True))
     meta_path.write_text(json.dumps(meta, indent=1))
     return {"starred": meta["starred"]}
+
+
+@app.get("/api/beat/styles")
+def beat_styles():
+    """The styles to start from, by family: [{v, label, styles: [{v, label,
+    words, levers, instruments, tempo}]}]."""
+    return [{"v": f, "label": label, "styles": [
+        {"v": k, "label": st[0], "words": st[1], "levers": st[2], "instruments": st[3], "tempo": st[4]}
+        for k, st in styles.items()]} for f, (label, styles) in beats_mod.STYLES.items()]
 
 
 @app.get("/api/beat/instruments")

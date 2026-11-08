@@ -29,10 +29,6 @@ export const VIBES = [
   { v: 'ecstatic', label: 'Ecstatic dance', levers: levers([2, 3, 0, 4, 0, 2, 5, 5, 4, 3, 0]) },
   { v: 'street', label: 'Street grit', levers: levers([3, 1, 1, 3, 4, 1, 0, 4, 4, 0, 0]) },
   { v: 'lofi', label: 'Lo-fi chill', levers: levers([1, 2, 5, 0, 2, 0, 0, 2, 2, 2, 1]) },
-  // Hushed and intimate: a fingerpicked nylon guitar over soft hand percussion (~92 BPM).
-  { v: 'folk', label: 'Fingerpicked folk', levers: levers([0, 2, 2, 2, 0, 0, 0, 2, 1, 3, 5]), instruments: ['nylon', 'cajon', 'upright'] },
-  // The same palette with a real beat under it (~109 BPM).
-  { v: 'acoustic', label: 'Acoustic groove', levers: levers([2, 3, 1, 3, 0, 0, 1, 4, 3, 3, 4]), instruments: ['steel', 'nylon', 'cajon', 'brushes', 'upright'] },
 ]
 
 // A song to start from sets the levers, from how it was measured (tempo,
@@ -223,6 +219,7 @@ export function beatPrompt({ tempo, key, from, levers: l, curve, hits, end, leng
   const t = (s) => (length < 30 ? fmtTime(s) : fmtTime(Math.round(s)).replace(/\.\d$/, ''))
   const parts = [`${tempo} BPM, ${key}`]
   if (from?.kind === 'song') parts[0] += from.category ? `, in the groove of your ${from.category} song` : `, in the groove of “${from.title || from.name}”`
+  if (from?.kind === 'style' && from.words?.length) parts[0] += `, ${from.words.join(', ')}`
   const words = LEVERS.filter((x) => (l[x.v] || 0) >= 2).map((x) => (l[x.v] >= 4 ? x.strong : x.word))
   const lines = [`${parts[0]}.`]
   if (instruments.length) lines.push(`Featuring ${instruments.join(', ')}.`)

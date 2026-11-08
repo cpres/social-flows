@@ -86,6 +86,7 @@ export const api = {
   beatStar: (reelId, take, starred) => send('POST', `/api/reels/${reelId}/beat/takes/${take}/star`, { starred }),
   beatAdapts: () => fetch('/api/beat/adapts').then(json),
   beatInstruments: () => fetch('/api/beat/instruments').then(json),
+  beatStyles: () => fetch('/api/beat/styles').then(json),
   beatDelete: (reelId, take) => send('DELETE', `/api/reels/${reelId}/beat/takes/${take}`),
   musicStyle: (name) => fetch(`/api/music/${enc(name)}/style`).then(json),
   // Weave's draft for a shoot ({ folder }) or a reel being re-woven ({ reel }).

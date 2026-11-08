@@ -2,50 +2,51 @@
   <div class="beatb">
     <!-- 1 · Start from -->
     <section class="bsec">
-      <h5>1 · Start from <small class="muted">a song in your Reels folder sets the groove and sound palette; nothing is copied note for note</small></h5>
+      <h5>1 · Start from <small class="muted">a style, or one of your songs for its groove and sound; nothing is copied note for note</small></h5>
       <div class="cards">
-        <div v-for="c in categories" :key="c.name" class="cardwrap">
-          <button class="card" :class="{ on: beat.from.kind === 'song' && beat.from.category === c.name }" @click="pickCategory(c)">
-            <b>{{ c.name }}</b>
-            <small>{{ c.songs.length }} song{{ c.songs.length === 1 ? '' : 's' }}<template v-if="styleOf(c.songs[0].name)?.words"> · {{ styleOf(c.songs[0].name).words[0] }}</template></small>
-          </button>
-          <button
-            class="hear" :class="{ on: hearing === catSong(c) }" @click="hear(catSong(c))"
-            :title="hearing === catSong(c) ? 'Stop' : `Hear 30s from the middle of ${songName(catSong(c))}`"
-            :aria-label="hearing === catSong(c) ? `Stop ${songName(catSong(c))}` : `Hear ${songName(catSong(c))}`"
-          >{{ hearing === catSong(c) ? '■' : '▶' }}</button>
-          <span v-if="hearing === catSong(c)" class="heard" :style="{ width: `${heardShare * 100}%` }"></span>
-        </div>
-        <div v-if="unsorted.length" class="cardwrap">
-          <label class="card pick" :class="{ on: beat.from.kind === 'song' && !beat.from.category }">
-            <b>No category ▾</b>
-            <small>{{ uncatPick ? songName(uncatPick) : `pick one of ${unsorted.length}` }}</small>
-            <select :value="uncatPick || ''" @change="pickSong($event.target.value, '')" aria-label="A song with no category">
+        <button
+          v-for="f in families" :key="f.v" class="card" :class="{ on: beat.from.kind === 'style' && beat.from.family === f.v }"
+          @click="pickFamily(f)" :aria-expanded="beat.from.kind === 'style' && beat.from.family === f.v"
+        >
+          <b>{{ f.label }} ▾</b>
+          <small>{{ beat.from.kind === 'style' && beat.from.family === f.v ? styleNow?.label : `${f.styles.length} styles: ${f.styles.slice(0, 3).map((x) => x.label.toLowerCase()).join(', ')}…` }}</small>
+        </button>
+        <div v-if="tracks.length" class="cardwrap">
+          <label class="card pick" :class="{ on: beat.from.kind === 'song' }">
+            <b>Your songs ▾</b>
+            <small>{{ songPick ? songName(songPick) : `pick one of ${tracks.length}` }}</small>
+            <select :value="songPick || ''" @change="pickSong($event.target.value, firstCategory($event.target.value))" aria-label="One of your songs">
               <option value="" disabled>Pick a song…</option>
-              <option v-for="t in unsorted" :key="t.name" :value="t.name">{{ t.title || t.name }}</option>
+              <optgroup v-for="c in categories" :key="c.name" :label="c.name">
+                <option v-for="t in c.songs" :key="`${c.name}${t.name}`" :value="t.name">{{ t.title || t.name }}</option>
+              </optgroup>
+              <optgroup v-if="unsorted.length" label="No category">
+                <option v-for="t in unsorted" :key="t.name" :value="t.name">{{ t.title || t.name }}</option>
+              </optgroup>
             </select>
           </label>
           <button
-            v-if="uncatPick" class="hear" :class="{ on: hearing === uncatPick }" @click="hear(uncatPick)"
-            :title="hearing === uncatPick ? 'Stop' : `Hear 30s from the middle of ${songName(uncatPick)}`"
-            :aria-label="hearing === uncatPick ? `Stop ${songName(uncatPick)}` : `Hear ${songName(uncatPick)}`"
-          >{{ hearing === uncatPick ? '■' : '▶' }}</button>
-          <span v-if="uncatPick && hearing === uncatPick" class="heard" :style="{ width: `${heardShare * 100}%` }"></span>
+            v-if="songPick" class="hear" :class="{ on: hearing === songPick }" @click="hear(songPick)"
+            :title="hearing === songPick ? 'Stop' : `Hear 30s from the middle of ${songName(songPick)}`"
+            :aria-label="hearing === songPick ? `Stop ${songName(songPick)}` : `Hear ${songName(songPick)}`"
+          >{{ hearing === songPick ? '■' : '▶' }}</button>
+          <span v-if="songPick && hearing === songPick" class="heard" :style="{ width: `${heardShare * 100}%` }"></span>
         </div>
         <button class="card" :class="{ on: beat.from.kind === 'scratch' }" @click="beat.from = { kind: 'scratch' }">
           <b>From scratch</b><small>levers only</small>
         </button>
       </div>
+      <div v-if="beat.from.kind === 'style' && familyNow" class="stylechips" role="radiogroup" :aria-label="`${familyNow.label} styles`">
+        <button
+          v-for="st in familyNow.styles" :key="st.v" class="btn small" role="radio" :aria-checked="beat.from.style === st.v"
+          :class="{ primary: beat.from.style === st.v }" :title="st.words.join(', ')" @click="pickStyle(familyNow, st)"
+        >{{ st.label }}</button>
+        <small v-if="styleNow" class="muted">{{ styleNow.words.join(', ') }}</small>
+      </div>
       <p v-if="beat.from.kind === 'song'" class="small fromline">
         <button class="hear inline" :class="{ on: hearing === beat.from.name }" @click="hear(beat.from.name)" :aria-label="hearing === beat.from.name ? 'Stop' : `Hear ${songName(beat.from.name)}`"
                 :title="hearing === beat.from.name ? 'Stop' : 'Hear 30s from the middle of it'">{{ hearing === beat.from.name ? '■' : '▶' }}</button>
-        <template v-if="catSongs.length > 1">
-          Song
-          <select :value="beat.from.name" @change="pickSong($event.target.value, beat.from.category)">
-            <option v-for="t in catSongs" :key="t.name" :value="t.name">{{ t.title || t.name }}</option>
-          </select>
-        </template>
-        <template v-else><b>{{ songName(beat.from.name) }}</b></template>
+        <b>{{ songName(beat.from.name) }}</b>
         <span class="muted">
           <template v-if="refStyle?.measured"> · {{ refStyle.bpm >= 40 ? `${Math.round(refStyle.bpm)} BPM, ` : 'no clear beat, ' }}{{ refStyle.key }}, {{ refStyle.words.join(', ') }}</template>
           <template v-else-if="refStyle && !refStyle.measured"> · its tempo and key need beat detection (<code>./studio/run.sh --beat</code>); its categories still set the style</template>
@@ -54,7 +55,8 @@
       </p>
       <p v-if="songNote" class="small songnote" :class="{ edited: songNote.edited }">
         {{ songNote.text }}
-        <button v-if="songNote.edited" class="link" @click="applySong(beat.from.name, true)">set them from the song again</button>
+        <button v-if="songNote.edited && beat.from.kind === 'song'" class="link" @click="applySong(beat.from.name, true)">set them from the song again</button>
+        <button v-if="songNote.edited && beat.from.kind === 'style' && styleNow" class="link" @click="pickStyle(familyNow, styleNow)">set them from the style again</button>
       </p>
     </section>
 
@@ -209,6 +211,32 @@ const unsorted = computed(() => tracks.value.filter((t) => !(t.categories || [])
 const catSongs = computed(() => categories.value.find((c) => c.name === beat.value.from.category)?.songs || [])
 const songName = (name) => { const t = tracks.value.find((x) => x.name === name); return t?.title || name }
 function pickCategory(c) { pickSong(catSong(c), c.name) }
+// Styles to start from (the server's list: beats.py STYLES), in families.
+const families = ref([])
+api.beatStyles().then((f) => { families.value = f }).catch(() => {})
+const familyNow = computed(() => families.value.find((f) => f.v === beat.value.from.family) || null)
+const styleNow = computed(() => familyNow.value?.styles.find((x) => x.v === beat.value.from.style) || null)
+const lastStyle = {}   // family -> the style last picked in it
+function pickFamily(f) {
+  if (beat.value.from.kind === 'style' && beat.value.from.family === f.v) return
+  pickStyle(f, f.styles.find((x) => x.v === lastStyle[f.v]) || f.styles[0])
+}
+// A style sets the levers, instruments and tempo; the key follows the levers.
+function pickStyle(f, st) {
+  if (!f || !st) return
+  lastStyle[f.v] = st.v
+  beat.value.from = { kind: 'style', family: f.v, style: st.v }
+  beat.value.levers = { ...st.levers }
+  beat.value.instruments = [...st.instruments]
+  beat.value.tempo = st.tempo ?? null
+  beat.value.key = null
+  beat.value.vibe = 'style'
+}
+// Your songs: the one picked (remembered while a style is chosen), and its first category.
+const lastSongPick = ref('')
+const songPick = computed(() => (beat.value.from.kind === 'song' ? beat.value.from.name : lastSongPick.value))
+watch(songPick, (n) => { if (n) lastSongPick.value = n })
+const firstCategory = (name) => (tracks.value.find((t) => t.name === name)?.categories || []).find((c) => c.toLowerCase() !== 'ai') || ''
 // A category's song: the one picked in it, else its first.
 const catSong = (c) => (beat.value.from.category === c.name && c.songs.some((t) => t.name === beat.value.from.name)
   ? beat.value.from.name : c.songs[0].name)
@@ -291,9 +319,16 @@ function applySong(name, now = false) {
   beat.value.levers = leversFromSong(st.measured ? st : null, cats)
   beat.value.tempo = st.measured ? songTempo(st.bpm) : null
   beat.value.key = null
+  beat.value.instruments = []   // a style's instruments don't carry over to a song (pick any again below)
   beat.value.vibe = 'song'
 }
 const songNote = computed(() => {
+  if (beat.value.from.kind === 'style') {
+    const st = styleNow.value?.label
+    if (!st) return null
+    if (beat.value.vibe === 'style') return { text: `The levers, instruments and tempo below are set for ${st}; change any of them and the takes follow what you set.` }
+    return { text: `Set for ${st}, then changed by you: the takes follow the levers as they are now.`, edited: true }
+  }
   if (beat.value.from.kind !== 'song') return null
   const name = songName(beat.value.from.name)
   if (pendingSong.value) return { text: `Setting the levers, tempo and key from ${name} once it's measured…` }
@@ -433,7 +468,8 @@ function keyPoint(e, i) {
 const vibeNow = computed(() => VIBES.find((v) => LEVERS.every((l) => (beat.value.levers[l.v] || 0) === v.levers[l.v]))?.v || '')
 function setLever(k, n) {
   beat.value.levers = { ...beat.value.levers, [k]: Math.max(0, leverClick(beat.value.levers[k] || 0, n)) }
-  beat.value.vibe = String(beat.value.vibe || '').startsWith('song') ? 'song-edited' : vibeNow.value
+  const v = String(beat.value.vibe || '')
+  beat.value.vibe = v.startsWith('song') ? 'song-edited' : v.startsWith('style') ? 'style-edited' : vibeNow.value
 }
 function setVibe(v) {
   beat.value.levers = { ...v.levers }
@@ -451,7 +487,8 @@ function toggleInstrument(k) {
 // ---------------------------------------------------------------- the prompt
 const built = computed(() => beatPrompt({
   tempo: tempo.value, key: key.value,
-  from: beat.value.from.kind === 'song' ? { ...beat.value.from, title: songName(beat.value.from.name) } : beat.value.from,
+  from: beat.value.from.kind === 'song' ? { ...beat.value.from, title: songName(beat.value.from.name) }
+    : beat.value.from.kind === 'style' ? { ...beat.value.from, words: styleNow.value?.words || [] } : beat.value.from,
   levers: beat.value.levers, curve: beat.value.curve, hits: beat.value.hits, end: beat.value.end,
   length: length.value, edges: edges.value.map((f) => f * length.value), ceiling: beat.value.ceiling,
   instruments: (beat.value.instruments || []).map((k) => instrumentOptions.value.find((o) => o.v === k)?.words).filter(Boolean),
@@ -505,6 +542,8 @@ defineExpose({ built, prompt, length, tempo, key, keyFrom, tempoFrom, pickSong }
 .songnote { margin: 6px 0 0; padding: 6px 10px; border-radius: 8px; background: var(--b-blue-soft); }
 .songnote.edited { background: rgb(224 128 56 / 12%); }
 .songnote .link { margin-left: 6px; }
+.stylechips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: var(--b-blue-soft); }
+.stylechips small { flex-basis: 100%; }
 .tops { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -2px 0 10px; }
 .ceil {
   position: absolute; left: 0; right: 0; height: 14px; margin-top: -7px; cursor: ns-resize; z-index: 2; touch-action: none;
