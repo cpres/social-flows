@@ -165,7 +165,11 @@ python3 studio/server.py --open
   - Every take is cut or padded to exactly the reel's length (the last bar
     resolving on the last frame, or a fade if you'd rather) and kept in
     `~/Footage/.studio/beats/<reel>/` with what it was asked for and its
-    seed. ☆ stars a take you like (*★ Starred only* to see just those).
+    seed. Each take is named for what it was made from (its style, song or vibe,
+    and the direction) and shows what it was asked for: where it started,
+    the energy (how high, which curve), the hits, the ending and the
+    instruments; *Details* adds the levers, tempo and key, sections and the
+    exact prompt. ☆ stars a take you like (*★ Starred only* to see just those).
     *Adapt…* makes a new take from one: pick how to change it (more or
     fewer drums, more bass, calmer, more energy, brighter, grittier,
     simpler) and/or say it in your own words; it keeps the take's seed and

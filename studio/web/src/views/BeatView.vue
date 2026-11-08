@@ -87,7 +87,7 @@
                 <div class="tname">
                   <button class="star" :class="{ on: t.starred }" :aria-pressed="!!t.starred" :aria-label="t.starred ? `Unstar take ${t.n}` : `Star take ${t.n}`"
                           :title="t.starred ? 'Starred: click to unstar' : 'Star it if you like it'" @click="star(t)">{{ t.starred ? '★' : '☆' }}</button>
-                  <b>Take {{ t.n }} · {{ t.label }}</b>
+                  <b>Take {{ t.n }} · {{ takeName(t) }}</b>
                 </div>
                 <small v-if="t.fromN" class="from">↳ from Take {{ t.fromN }}</small>
                 <small class="mono muted">{{ t.tempo }} BPM · {{ t.key }} · {{ fmtTime(t.length) }} · {{ t.engine === 'elevenlabs' ? 'ElevenLabs' : 'Lyria' }} · {{ madeAt(t.created) }}</small>
@@ -95,6 +95,17 @@
                   <rect v-for="(v, i) in miniWave(t.id)" :key="i" :x="i + 0.15" width="0.7" :y="10 - v * 9.5" :height="Math.max(v * 19, 0.6)"
                         :class="{ past: playing === t.id && i / 60 < playT / t.length }" />
                 </svg>
+                <!-- what it was asked for: where it started, the energy, the hits, the instruments -->
+                <div v-if="t.beat" class="tsum">
+                  <span v-for="(c, i) in summary(t)" :key="i" class="chip" :class="c.kind">{{ c.text }}</span>
+                  <button class="link more" :aria-expanded="open === t.id" @click="open = open === t.id ? null : t.id">{{ open === t.id ? 'Less' : 'Details ▾' }}</button>
+                </div>
+                <dl v-if="open === t.id && t.beat" class="tdetails">
+                  <dt>Levers</dt><dd>{{ leversText(t.beat) || 'all at 0' }}</dd>
+                  <dt>Tempo · key</dt><dd>{{ t.tempo }} BPM · {{ t.key }}</dd>
+                  <dt>Sections</dt><dd>{{ (t.sections || []).map((x) => `${x.name} ${fmtTime(x.start)}`).join(' → ') || '—' }}</dd>
+                  <dt>Asked for</dt><dd class="prompt">{{ t.prompt }}</dd>
+                </dl>
               </div>
               <div class="tact">
                 <span v-if="running && job?.source === t.id" class="tag">{{ pending[0]?.label === 'rebuilt for the new cut' ? 'Rebuilding…' : 'Adapting…' }}</span>
@@ -138,7 +149,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { fmtTime } from '../time'
-import { derivedTempo, newBeat, sceneFractions } from '../beat'
+import { CURVES, LEVERS, TOPS, derivedTempo, newBeat, sceneFractions } from '../beat'
 import BeatBuilder from '../components/BeatBuilder.vue'
 import BeatVisual from '../components/BeatVisual.vue'
 
@@ -306,6 +317,50 @@ function miniWave(tid) {
     return Math.max(0.03, Math.min(1, (10 * Math.log10(p / (b - a) || 1e-9) + 54) / 54))
   })
 }
+// What each take was asked for, from the settings it keeps: its name (style,
+// song or vibe, and the direction), and a summary of the plan.
+const styleFamilies = ref([])
+api.beatStyles().then((f) => { styleFamilies.value = f }).catch(() => {})
+const instrumentNames = ref({})
+api.beatInstruments().then((o) => { instrumentNames.value = Object.fromEntries(o.map((x) => [x.v, x.label])) }).catch(() => {})
+const VIBE_NAMES = { garden: 'Garden morning', ecstatic: 'Ecstatic dance', street: 'Street grit', lofi: 'Lo-fi chill' }
+const open = ref(null)
+function styleOf(b) {
+  const f = styleFamilies.value.find((x) => x.v === b?.from?.family)
+  const st = f?.styles.find((x) => x.v === b.from.style)
+  return st ? { family: f.label, style: st.label } : null
+}
+function sourceText(b) {
+  if (!b?.from) return ''
+  if (b.from.kind === 'style') { const st = styleOf(b); return st ? `${st.family} · ${st.style}` : 'a style' }
+  if (b.from.kind === 'song') return `♪ ${shelf.value.tracks.find((x) => x.name === b.from.name)?.title || b.from.name}`
+  return VIBE_NAMES[b.vibe] ? `From scratch · ${VIBE_NAMES[b.vibe]}` : 'From scratch'
+}
+// Older takes were called "as set": name them from what they were asked for.
+function takeName(t) {
+  if (!['as set', 'another take'].includes(t.label) || !t.beat) return t.label
+  const b = t.beat
+  return styleOf(b)?.style || (b.from?.kind === 'song' ? `from ${sourceText(b).slice(2)}` : VIBE_NAMES[b.vibe] || 'your levers')
+}
+function energyText(b) {
+  const c = b.ceiling ?? 1
+  const top = TOPS.find((o) => Math.abs(o.v - c) < 0.03)
+  const shape = CURVES.find((x) => x.v === b.preset)?.label || 'your own curve'
+  return `Energy: ${top ? top.label : `top ${Math.round(c * 100)}%`}${top && top.v < 1 ? ` (top ${Math.round(c * 100)}%)` : ''} · ${shape}`
+}
+function summary(t) {
+  const b = t.beat
+  const out = [{ text: sourceText(b), kind: 'src' }, { text: energyText(b), kind: 'energy' }]
+  const hits = (t.sections || []).filter((x) => x.edge_in).length
+  if (b.hits && hits) out.push({ text: `hits on ${hits} scene change${hits === 1 ? '' : 's'}`, kind: '' })
+  out.push({ text: b.end ? 'ends on the last frame' : 'fades out', kind: '' })
+  const ins = (b.instruments || []).map((k) => instrumentNames.value[k] || k)
+  if (ins.length) out.push({ text: ins.join(' · '), kind: 'ins' })
+  if (b.prompt) out.push({ text: 'your own prompt', kind: 'warn' })
+  return out
+}
+const leversText = (b) => LEVERS.filter((l) => (b.levers?.[l.v] || 0) > 0).map((l) => `${l.label} ${b.levers[l.v]}`).join(' · ')
+
 // Takes being made, shown above the rest while a run is going.
 const pending = computed(() => (running.value ? (job.value?.takes || []).filter((t) => t.state !== 'done') : []))
 const sourceTake = computed(() => takes.value.find((t) => t.id === job.value?.source) || null)
@@ -509,6 +564,17 @@ onBeforeUnmount(() => {
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
 .pbar { height: 4px; border-radius: 2px; background: rgb(111 147 196 / 18%); margin-top: 6px; overflow: hidden; }
 .pbar i { display: block; height: 100%; background: #6f93c4; transition: width 0.3s; }
+.tsum { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 6px; }
+.tsum .chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgb(128 128 128 / 12%); color: var(--ink); }
+.tsum .chip.src { background: rgb(111 147 196 / 18%); font-weight: 600; }
+.tsum .chip.energy { background: rgb(224 128 56 / 14%); }
+.tsum .chip.ins { background: rgb(138 163 124 / 18%); }
+.tsum .chip.warn { background: rgb(224 128 56 / 22%); }
+.tsum .more { font-size: 11px; margin-left: 2px; }
+.tdetails { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 8px 0 0; font-size: 12px; }
+.tdetails dt { color: var(--muted); }
+.tdetails dd { margin: 0; }
+.tdetails .prompt { white-space: pre-wrap; color: var(--muted); }
 .adapt { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 8px; background: rgb(111 147 196 / 10%); }
 .adapt p { margin: 0; }
 .adapt .chips { display: flex; flex-wrap: wrap; gap: 6px; }
