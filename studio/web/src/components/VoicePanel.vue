@@ -79,7 +79,7 @@
             <button class="btn small" @click="addPiece(true)" title="Use the whole take as one piece">Use the whole take</button>
           </div>
           <p v-if="!canTranscribe && take.status !== 'done'" class="muted small">
-            Transcribing isn't installed. Start the studio with <code>./studio/run.sh --voice</code> to pick lines by what's said
+            Transcribing isn't installed. Quit the studio and start it again with <code>./studio/run.sh</code> (it installs it) to pick lines by what's said
             and get captions. You can still use the whole take and trim it.
           </p>
           <p v-if="take.status === 'running'" class="muted small">
@@ -297,7 +297,7 @@
                 it heard {{ w.words }} words, but none between {{ fmtTime(w.start) }} and {{ fmtTime(w.end) }}, the part of the take this piece uses.
               </template>
               <template v-else-if="w.status === 'done'">it heard {{ w.words }} words ({{ w.inside }} in this piece).</template>
-              <template v-else-if="!canTranscribe">transcribing isn't installed: quit the studio and start it with <code>./studio/run.sh --voice</code>.</template>
+              <template v-else-if="!canTranscribe">transcribing isn't installed: quit the studio and start it again with <code>./studio/run.sh</code>, which installs it.</template>
               <template v-else>not transcribed yet.</template>
             </span>
             <span class="wbtns">
@@ -343,7 +343,6 @@
         </div>
       </div>
     </div>
-    <audio ref="ear" preload="none" @ended="auditioning = null"></audio>
   </section>
 </template>
 
@@ -700,7 +699,7 @@ async function remake(p) {
   const r = await api.transcript(p.folder, p.file)
   if (r.status !== 'done') {
     lineNote.value = canTranscribe.value ? 'Transcribe this take first (+ Add a piece, pick the take, Transcribe).'
-      : 'Transcribing isn\'t installed: start the studio with ./studio/run.sh --voice'
+      : 'Transcribing isn\'t installed: quit the studio and start it again with ./studio/run.sh, which installs it'
     return
   }
   p.lines = copyLines(r.lines.filter((l) => l.e > p.start + 0.05 && l.s < p.end - 0.05))
@@ -770,8 +769,7 @@ function removeFx(p, l) {
 // Hear the phrase with its effect: from a moment before to the end of its echo.
 const fxPlayer = useVoicePlayer()
 function hearFx(p, f) {
-  ear.value?.pause()
-  auditioning.value = null
+  stopEar()
   const start = Math.max(p.start, f.s - 0.8)
   const end = Math.min(p.end, f.e + 0.6)
   fxPlayer.play([{ ...p, start, at: 0, length: end - start, fx: [f] }], 0)
@@ -780,29 +778,26 @@ onBeforeUnmount(() => fxPlayer.stop())
 
 // ---------------------------------------------------------------- listening
 
-const ear = ref(null)
+// Listening to a take, a piece or a line: the same player Play reel uses,
+// which loads the take first and then plays exactly the stretch asked for.
+const earPlayer = useVoicePlayer()
 const auditioning = ref(null)
-let stopAt = 0
-let earRaf
-function playClip(src, s, e, key = 'take') {
-  const a = ear.value
-  if (auditioning.value === key) { a.pause(); auditioning.value = null; return }
-  const url = api.voiceAudio(src.folder, src.file)
-  if (!a.src.endsWith(url)) a.src = url
-  const go = () => { a.currentTime = s; a.play().catch(() => {}) }
-  if (a.readyState >= 1) go()
-  else a.addEventListener('loadedmetadata', go, { once: true })
-  auditioning.value = key
-  stopAt = e
-  cancelAnimationFrame(earRaf)
-  const tick = () => {
-    if (!auditioning.value) return
-    if (a.currentTime >= stopAt) { a.pause(); auditioning.value = null; return }
-    earRaf = requestAnimationFrame(tick)
-  }
-  earRaf = requestAnimationFrame(tick)
+let earTimer
+function stopEar() {
+  clearTimeout(earTimer)
+  earPlayer.stop()
+  auditioning.value = null
 }
-onBeforeUnmount(() => { cancelAnimationFrame(earRaf); ear.value?.pause() })
+function playClip(src, s, e, key = 'take') {
+  if (auditioning.value === key) { stopEar(); return }
+  stopEar()
+  fxPlayer.stop()
+  auditioning.value = key
+  earPlayer.play([{ folder: src.folder, file: src.file, start: s, at: 0, length: e - s, fx: [] }], 0, { wait: true },
+    () => { earTimer = setTimeout(() => { if (auditioning.value === key) auditioning.value = null }, (e - s) * 1000 + 200) })
+}
+watch(() => pieces.value.map((p) => `${p.folder}/${p.file}`).join('|'), () => earPlayer.prepare(pieces.value), { immediate: true })
+onBeforeUnmount(stopEar)
 
 // ---------------------------------------------------------------- caption look
 

@@ -1279,7 +1279,7 @@ def voice_transcribe(folder: str, file: str, again: bool = False):
     """Transcribe a take (once; again=true throws away what it heard and listens again)."""
     path = take_path(folder, file)
     if (again or not voice.transcript(path)) and not transcription_available():
-        raise HTTPException(503, "Transcribing isn't installed: start the studio with ./studio/run.sh --voice")
+        raise HTTPException(503, "Transcribing isn't installed: quit the studio and start it again with ./studio/run.sh, which installs it")
     return voice.start(path, again=again)
 
 

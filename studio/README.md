@@ -16,8 +16,9 @@ brew install ffmpeg node python@3.12   # once
 Beat detection (for *Cut on the beat*) is optional and fairly large:
 `./studio/run.sh --beat` installs it once. Plain `./studio/run.sh` skips it,
 and everything else works the same. Transcribing voice takes (for captions)
-is optional in the same way: `./studio/run.sh --voice` installs it once, and
-the speech model (about 1.6 GB) downloads the first time you transcribe.
+installs by itself on the first run after it arrives (if it can't on your Mac,
+captions are pasted or typed instead; `./studio/run.sh --voice` tries again),
+and the speech model (about 1.6 GB) downloads the first time you transcribe.
 
 Needs Python 3.9 or newer; `run.sh` looks for `python3.13` … `python3.9`
 before plain `python3`, so an old default `python3` (e.g. 3.7) is fine as long

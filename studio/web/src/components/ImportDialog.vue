@@ -367,7 +367,7 @@ async function load() {
     files.value = r.files
     songs.value = r.songs || []
     transcribeNote.value = r.transcribe ? ' · transcribed on the way in'
-      : ' · to transcribe them, start the studio with ./studio/run.sh --voice'
+      : ' · to transcribe them, restart the studio with ./studio/run.sh'
     musicDir.value = r.musicDir || ''
     error.value = r.error || ''
     // Start on today if anything came in, else the latest day with something new.

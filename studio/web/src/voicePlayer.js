@@ -120,8 +120,11 @@ export function useVoicePlayer() {
   }
 
   // Start the pieces playing as if the reel were at `from` (seconds) now.
-  // Takes still loading join in, at the right place, once they're ready.
-  function play(pieces, from) {
+  // Takes still loading join in, at the right place, once they're ready;
+  // with { wait: true } they start from `from` once loaded instead (for
+  // listening to a stretch, where nothing else is keeping time), and
+  // `started` is called as they do.
+  function play(pieces, from, opts = {}, started = () => {}) {
     stop()
     const c = context()
     const t0 = c.currentTime + 0.03
@@ -133,7 +136,8 @@ export function useVoicePlayer() {
       if (Math.max(end, ...tails) <= from) continue
       load(p).then((buf) => {
         if (!playing.includes(token)) return
-        const now = from + Math.max(0, c.currentTime - t0)   // time spent loading
+        const now = opts.wait ? from : from + Math.max(0, c.currentTime - t0)   // time spent loading
+        started()
         const clock = (reelT) => c.currentTime + (reelT - now)   // reel time -> context time
         if (end > now) {
           const offset = p.start + Math.max(0, now - p.at)
