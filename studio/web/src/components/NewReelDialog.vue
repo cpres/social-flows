@@ -46,9 +46,14 @@
           <span class="muted">Long clips ({{ LONG }}s or more) play</span>
           <button
             v-for="c in CAPS" :key="c.v" class="btn small" :class="{ active: cap === c.v }" @click="cap = c.v"
-            :title="c.v ? `Each long clip plays as stretches of up to ${c.v}s spread through it, skipping 10s (a 1-minute clip) to 20s (3 minutes or more) between` : 'Each long clip plays all of itself, less a moment at each end (or the long stretch you picked in the shoot)'"
+            :title="c.v ? `Each long clip plays as a few stretches of up to ${c.v}s, spread evenly through it` : 'Each long clip plays all of itself, less a moment at each end (or the long stretch you picked in the shoot)'"
           >{{ c.label }}</button>
-          <small v-if="cap" class="muted">in stretches of up to {{ cap }}s, spread through each clip</small>
+        </div>
+        <div class="tbtns" v-if="cap">
+          <span class="muted">At most</span>
+          <button v-for="x in [2, 3, 4, 5, 6]" :key="x" class="btn small" :class="{ active: most === x }" @click="most = x">{{ x }}</button>
+          <span class="muted">stretches of {{ cap }}s per long clip</span>
+          <small class="muted">(spread evenly through it; clips of 2 minutes or more get them all, shorter ones fewer)</small>
         </div>
         <label class="check">
           <input type="checkbox" v-model="quiet" /> Skip quiet moments in long clips
@@ -110,6 +115,7 @@ const error = ref('')
 const LONG = 10   // as relay.py LONG_THRESHOLD
 const CAPS = [{ v: 0, label: 'Their full length' }, { v: 20, label: 'Up to 20s' }, { v: 30, label: 'Up to 30s' }, { v: 60, label: 'Up to 60s' }]
 const cap = ref(0)
+const most = ref(4)   // stretches per long clip, at most (relay.py MOST_DEFAULT)
 const quiet = ref(false)
 const photo = ref(4)
 // How much is split, 1 (never) to 10 (whenever two things are there to share
@@ -122,13 +128,13 @@ const plans = ref([])
 const approx = ref(false)
 let asked = 0
 let timer = null
-watch([source, style, photo, cap, quiet], () => {
+watch([source, style, photo, cap, most, quiet], () => {
   clearTimeout(timer)
   if (style.value !== 'relay' || !source.value) { plans.value = []; return }
   timer = setTimeout(async () => {
     const n = ++asked
     try {
-      const r = await api.relayPlan(source.value, { photo: photo.value, cap: cap.value || null, quiet: quiet.value })
+      const r = await api.relayPlan(source.value, { photo: photo.value, cap: cap.value || null, most: most.value, quiet: quiet.value })
       if (n === asked) { plans.value = r.plans; approx.value = r.approx }
     } catch { if (n === asked) plans.value = [] }
   }, 150)
@@ -165,7 +171,7 @@ async function make() {
   try {
     const r = source.value
       ? await api.folderToReel(source.value, name.value.trim(), { style: style.value, dial: dial.value, photo: photo.value,
-                                                                  cap: cap.value || null, quiet: quiet.value })
+                                                                  cap: cap.value || null, most: most.value, quiet: quiet.value })
       : await api.createReel(name.value.trim())
     router.push(`/reel/${r.id}`)
   } catch (e) {

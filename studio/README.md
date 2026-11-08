@@ -292,9 +292,11 @@ folder* (a shoot) ask for a name and a style:
   next takes over the full frame. **Long clips** (10s or more) get their
   own length: all of the clip less a moment at each end, or the long
   stretch you picked on the shoot page. With *Up to 20s* (or 30, 60) a long
-  clip plays as several stretches of that length spread through it, centred,
-  skipping 10s between them in a 1-minute clip up to 20s in a 3-minute one
-  (`relay.stretches`). The stretches relay among themselves like any two
+  clip plays as a few stretches of that length spread evenly through it,
+  each in the middle of its share of the clip: *At most* 2 to 6 per clip
+  (4 by default), all of them for a clip of 2 minutes or more and fewer
+  for a shorter one (a minute: half), so one clip never takes over the
+  reel (`relay.stretches`). The stretches relay among themselves like any two
   clips: the later moment comes in under the earlier one and takes over,
   so the split skips ahead in the clip, and the next clip comes in the
   same way, changing the scene. A photo shot in a skip goes in the

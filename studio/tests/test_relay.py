@@ -219,23 +219,30 @@ class Fixtures(unittest.TestCase):
         self.assertTrue(all(not (20.01 < p["start"] < 39.99) for p in parts), parts)
 
     def test_stretches(self):
-        self.assertEqual(relay.skip_for(60), 10.0)
-        self.assertEqual(relay.skip_for(180), 20.0)
-        self.assertEqual(relay.skip_for(30), 10.0)
-        self.assertEqual(relay.skip_for(600), 20.0)
-        one_min = relay.stretches(0, 60, 20)
-        self.assertEqual(one_min, [(5.0, 20.0), (35.0, 20.0)])   # 10s skip, centred
+        # at most 4 (or as asked): all of them from two minutes, fewer below
+        self.assertEqual(relay.stretch_count(180), 4)
+        self.assertEqual(relay.stretch_count(120), 4)
+        self.assertEqual(relay.stretch_count(60), 2)
+        self.assertEqual(relay.stretch_count(30), 1)
+        self.assertEqual(relay.stretch_count(600, 6), 6)
+        self.assertEqual(relay.stretch_count(11), 1)
+        self.assertEqual(len(relay.stretches(0, 600, 20)), 4)          # a long clip doesn't take over
+        self.assertEqual(len(relay.stretches(0, 600, 20, most=2)), 2)
+        self.assertEqual(relay.stretches(0, 60, 20), [(6.0, 20.0), (34.0, 20.0)])   # evenly through it
         three_min = relay.stretches(0, 180, 20)
-        self.assertEqual(len(three_min), 4)
-        for (a, la), (b, _) in zip(three_min, three_min[1:]):
-            self.assertAlmostEqual(b - (a + la), 20.0)
+        gaps = [b - (a + la) for (a, la), (b, _) in zip(three_min, three_min[1:])]
+        self.assertTrue(all(abs(g - gaps[0]) < 0.01 for g in gaps))   # evenly spaced
         for d in (11, 25, 47, 121.7, 180, 333):
             for cap in (None, 20, 30, 60):
-                st = relay.stretches(3.0, d, cap)
-                first, last = st[0][0] - 3.0, 3.0 + d - (st[-1][0] + st[-1][1])
-                self.assertAlmostEqual(first, last, delta=0.01)          # centred
-                self.assertGreaterEqual(first, min(relay.BREATH, d / 4) - 0.01)   # room at each end
-                self.assertTrue(all(cap is None or l <= cap + 1e-9 for _, l in st))
+                for most in (1, 2, 4, 6):
+                    st = relay.stretches(3.0, d, cap, most=most)
+                    self.assertLessEqual(len(st), most if cap else 1)
+                    first, last = st[0][0] - 3.0, 3.0 + d - (st[-1][0] + st[-1][1])
+                    self.assertAlmostEqual(first, last, delta=0.01)          # centred
+                    self.assertGreaterEqual(first, min(relay.BREATH, d / 4) - 0.01)   # room at each end
+                    self.assertTrue(all(cap is None or l <= cap + 1e-9 for _, l in st))
+                    for (a, la), (b, _) in zip(st, st[1:]):
+                        self.assertGreaterEqual(b, a + la - 1e-9)   # no overlaps
         self.assertEqual(relay.stretches(0, 40, None), [(2.0, 36.0)])
 
     def test_stretches_of_a_clip_relay_among_themselves(self):

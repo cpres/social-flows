@@ -77,12 +77,14 @@ HANDOFF_ROOM = 6.0     # cameos keep this far (at dial 10; 1s at 2) from a host'
 MIX_TO_DIAL = {"single": 3, "even": 5, "split": 8}   # the old Single or split choice
 
 # A long clip with a cap ("Up to 20s") plays as several stretches of up to the
-# cap, spread through it: a skip between them that grows with the clip
-# (SKIP_SHORT for a SKIP_SHORT_AT clip, up to SKIP_LONG from SKIP_LONG_AT),
-# centred, with at least BREATH left at each end (its fumbly start and end).
+# cap, spread evenly through it: at most `most` of them (MOST_DEFAULT), all of
+# them for a clip of FULL_AT seconds or more and fewer for a shorter one, so
+# no clip takes over the reel. Each sits in the middle of its share of the
+# clip, with at least BREATH left at each end (its fumbly start and end).
 BREATH = 2.0
-SKIP_SHORT, SKIP_SHORT_AT = 10.0, 60.0
-SKIP_LONG, SKIP_LONG_AT = 20.0, 180.0
+MOST_DEFAULT = 4
+MOST_MAX = 12
+FULL_AT = 120.0
 
 LONG, SHORT, PHOTO = "LONG", "SHORT", "PHOTO"
 
@@ -101,29 +103,27 @@ def dial_of(value, mix=None):
         return DIAL_DEFAULT
 
 
-def skip_for(length):
-    """Seconds skipped between a long clip's stretches: 10s for a minute's
-    clip, 20s for three minutes, in between in between."""
-    f = (length - SKIP_SHORT_AT) / (SKIP_LONG_AT - SKIP_SHORT_AT)
-    return round(lerp(SKIP_SHORT, SKIP_LONG, min(max(f, 0.0), 1.0)), 3)
+def stretch_count(length, most=MOST_DEFAULT):
+    """How many stretches a clip this long gets: `most` from FULL_AT seconds
+    (two minutes) up, fewer in proportion below (a minute: half), at least one."""
+    most = max(1, int(most or MOST_DEFAULT))
+    return max(1, min(most, round(most * length / FULL_AT)))
 
 
-def stretches(start, length, cap=None, breath=BREATH):
+def stretches(start, length, cap=None, breath=BREATH, most=MOST_DEFAULT):
     """The stretches of a long clip a relay plays: [(start, length)] in the
-    file. With a cap: as many of up to `cap` seconds as fit, skip_for apart,
-    centred in start..start+length with at least `breath` at each end.
-    Without one: all of it, less `breath` at each end. Never less than half
-    of what's there."""
+    file. With a cap: stretch_count of them (as many as fit) of up to `cap`
+    seconds, the clip less `breath` at each end shared out evenly, each in
+    the middle of its share. Without one: all of it, less `breath` at each
+    end. Never less than half of what's there."""
     inner = max(length - 2 * breath, length / 2)
     pad = (length - inner) / 2
     if not cap or inner <= cap:
         one = min(inner, cap or inner)
         return [(round(start + (length - one) / 2, 3), round(one, 3))]
-    skip = skip_for(length)
-    n = max(1, int((inner + skip) // (cap + skip)))
-    used = n * cap + (n - 1) * skip
-    at = start + pad + (inner - used) / 2
-    return [(round(at + i * (cap + skip), 3), round(float(cap), 3)) for i in range(n)]
+    n = max(1, min(stretch_count(length, most), int(inner // cap)))
+    share = inner / n
+    return [(round(start + pad + i * share + (share - cap) / 2, 3), round(float(cap), 3)) for i in range(n)]
 
 
 def allowed(a, b, dial):

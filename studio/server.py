@@ -387,7 +387,7 @@ def folder_to_reel(name: str, body: dict = Body(default={})):
     {name, style}: standard (one part after another), stack (the longest
     video is lane A, the rest play under it at real speed) or relay
     (relay.py: clips hand the frame on, photos come in under long clips as
-    cameos; {dial: 1..10, photo: seconds, cap, quiet}; an old {mix} maps to
+    cameos; {dial: 1..10, photo: seconds, cap, most: stretches per long clip, quiet}; an old {mix} maps to
     the dial).
 
     Files that are copies of originals in another shoot folder point at the
@@ -457,6 +457,7 @@ def relay_opts(body):
     return {"dial": relay_mod.dial_of(body.get("dial"), body.get("mix")),
             "photo_seconds": min(max(float(body.get("photo") or body.get("solo") or relay_mod.PHOTO_SECONDS), 0.5), 30),
             "cap": float(body["cap"]) if body.get("cap") else None,
+            "most": int(min(max(int(body.get("most") or relay_mod.MOST_DEFAULT), 1), relay_mod.MOST_MAX)),
             "quiet": bool(body.get("quiet"))}
 
 
@@ -466,8 +467,9 @@ def relay_items(db, parts, opts, cached_only=False):
     parts: dicts with kind, duration, start, length, media_id, path,
     captured_at. A long clip plays the long stretch picked in its shoot, or
     the clip less a little breathing room at each end; with a cap it's
-    several stretches of up to the cap spread through that, centred, one
-    item each (relay.stretches). A short clip plays all of itself, or the
+    several stretches of up to the cap spread evenly through that (at most
+    `most`, all of them from two minutes up), one item each
+    (relay.stretches). A short clip plays all of itself, or the
     stretch picked. With quiet moments skipped, `keep` is a stretch with its
     lulls out. cached_only: use only movement already measured (for a quick
     estimate). Also returns whether any was missing."""
@@ -478,9 +480,9 @@ def relay_items(db, parts, opts, cached_only=False):
         if p["kind"] == "video" and it["duration"] >= relay_mod.LONG_THRESHOLD:
             pick = pick_of(db, p["media_id"])
             if pick and pick["length"] >= relay_mod.LONG_THRESHOLD:   # the stretch picked: just as picked
-                st = relay_mod.stretches(float(pick["start"]), float(pick["length"]), opts.get("cap"), breath=0)
+                st = relay_mod.stretches(float(pick["start"]), float(pick["length"]), opts.get("cap"), breath=0, most=opts["most"])
             else:
-                st = relay_mod.stretches(0.0, it["duration"], opts.get("cap"))
+                st = relay_mod.stretches(0.0, it["duration"], opts.get("cap"), most=opts["most"])
             act = None
             if opts.get("quiet"):
                 path = ROOT / p["path"]
@@ -563,7 +565,7 @@ def apply_style(db, reel_id, style, body):
             if sc.get("grow"):
                 out["grow"] = sc["grow"]
             s["scenes"].append(out)
-        s["relay"] = {"dial": opts["dial"], "photo": opts["photo_seconds"], "cap": opts["cap"], "quiet": opts["quiet"]}
+        s["relay"] = {"dial": opts["dial"], "photo": opts["photo_seconds"], "cap": opts["cap"], "most": opts["most"], "quiet": opts["quiet"]}
     db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), reel_id))
 
 
