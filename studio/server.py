@@ -80,7 +80,7 @@ def load_dotenv(*files):
 
 load_dotenv(HERE.parent / ".env", HERE / ".env")
 import looks  # noqa: E402
-from db import DEFAULT_SETTINGS, Library, default_start, now, settings_of  # noqa: E402
+from db import VOICE_FOLDER, DEFAULT_SETTINGS, Library, default_start, now, settings_of  # noqa: E402
 import audio  # noqa: E402
 import beats as beats_mod  # noqa: E402
 import compose  # noqa: E402
@@ -661,7 +661,7 @@ def get_reel(reel_id: int):
             WHERE i.reel_id != ? AND i.media_id IN
                   (SELECT media_id FROM reel_items WHERE reel_id = ?)""", (reel_id, reel_id))]
         reels = reel_summaries(db)
-        settings = settings_of(r)
+        settings = with_reading(db, settings_of(r))
         if settings["format"] == "stack" and not top_item(db, reel_id, settings):
             settings["topItemId"] = None   # its clip was removed: pick another
         if settings.get("scenes") is None:   # from before scenes: worked out once, saved on the next change
@@ -697,6 +697,7 @@ def update_reel(reel_id: int, body: dict = Body(...)):
             db.execute("UPDATE reels SET name = ? WHERE id = ?", (name, reel_id))
         if "settings" in body:
             settings = clean_settings(db, reel_id, {**settings_of(r), **body["settings"]})
+            settings.pop("voice", None)   # it lives in the reading (PUT /api/readings/{id})
             db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(settings), reel_id))
         touch(db, reel_id)
     if "settings" in body:
@@ -1103,10 +1104,90 @@ def music_beats(name: str):
 
 
 # ---------------------------------------------------------------- voice
-# Takes of a reading in the shoot folders: their sound, what's said in them
-# (transcribed once, in the background), and lines for the captions.
+# Takes of a reading, in the Voice folder (or the sound of a video in a shoot
+# folder): their sound, what's said in them (transcribed once, in the
+# background), and lines for the captions.
+
+VOICE_DIR = ROOT / VOICE_FOLDER
+
+
+def with_reading(db, s):
+    """A reel's settings with its reading's pieces as settings.voice."""
+    row = db.execute("SELECT pieces FROM readings WHERE id = ?", (s.get("readingId"),)).fetchone() \
+        if s.get("readingId") else None
+    s["voice"] = json.loads(row["pieces"]) if row else []
+    if not row:
+        s["readingId"] = None
+    return s
+
+
+def reading_dict(db, row):
+    """A reading, with the reels that use it."""
+    pieces = json.loads(row["pieces"] or "[]")
+    reels = [{"id": r["id"], "name": r["name"]} for r in db.execute("SELECT id, name, settings FROM reels")
+             if json.loads(r["settings"] or "{}").get("readingId") == row["id"]]
+    length = sum(max(0.0, float(p.get("end") or 0) - float(p.get("start") or 0)) + float(p.get("gap") or 0)
+                 for p in pieces)
+    return {"id": row["id"], "name": row["name"], "pieces": pieces, "length": round(length, 1),
+            "reels": reels, "updatedAt": row["updated_at"]}
+
+
+def reading_row(db, reading_id):
+    row = db.execute("SELECT * FROM readings WHERE id = ?", (reading_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "No such reading")
+    return row
+
+
+@app.get("/api/readings")
+def list_readings():
+    with lib.connect() as db:
+        return [reading_dict(db, r) for r in db.execute("SELECT * FROM readings ORDER BY updated_at DESC")]
+
+
+@app.post("/api/readings")
+def create_reading(body: dict = Body(...)):
+    """A new reading: {name, copyOf?: id (start from that one's pieces), pieces?}."""
+    name = " ".join(str(body.get("name") or "").split()) or "Reading"
+    with lib.connect() as db:
+        pieces = body.get("pieces") or []
+        if body.get("copyOf"):
+            pieces = json.loads(reading_row(db, int(body["copyOf"]))["pieces"])
+        cur = db.execute("INSERT INTO readings (name, pieces, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                         (name, json.dumps(pieces), now(), now()))
+        return reading_dict(db, reading_row(db, cur.lastrowid))
+
+
+@app.put("/api/readings/{reading_id}")
+def update_reading(reading_id: int, body: dict = Body(...)):
+    """Save a reading: {name?, pieces?}. Every reel that uses it gets it."""
+    with lib.connect() as db:
+        reading_row(db, reading_id)
+        if "name" in body:
+            name = " ".join(str(body["name"] or "").split())
+            if not name:
+                raise HTTPException(400, "A reading needs a name")
+            db.execute("UPDATE readings SET name = ? WHERE id = ?", (name, reading_id))
+        if "pieces" in body:
+            pieces = body["pieces"] if isinstance(body["pieces"], list) else []
+            db.execute("UPDATE readings SET pieces = ? WHERE id = ?", (json.dumps(pieces), reading_id))
+        db.execute("UPDATE readings SET updated_at = ? WHERE id = ?", (now(), reading_id))
+        return reading_dict(db, reading_row(db, reading_id))
+
+
+@app.delete("/api/readings/{reading_id}")
+def delete_reading(reading_id: int):
+    """Delete a reading no reel uses (its recordings stay in the Voice folder)."""
+    with lib.connect() as db:
+        r = reading_dict(db, reading_row(db, reading_id))
+        if r["reels"]:
+            raise HTTPException(409, f"{', '.join(x['name'] for x in r['reels'])} still use{'s' if len(r['reels']) == 1 else ''} this reading")
+        db.execute("DELETE FROM readings WHERE id = ?", (reading_id,))
+    return {"ok": True}
 
 def take_path(folder, file):
+    if folder == VOICE_FOLDER:
+        VOICE_DIR.mkdir(exist_ok=True)
     path = resolve(folder, file)
     if path.suffix.lower() not in AUDIO_EXTS and Library.kind_of(path) != "video":
         raise HTTPException(404, "Not a recording")
@@ -1115,9 +1196,10 @@ def take_path(folder, file):
 
 @app.get("/api/voice/folders")
 def voice_folders():
-    """The shoot folders, newest first, with how many recordings each has."""
+    """The Voice folder, then the shoot folders newest first, with how many
+    recordings each has."""
     out = []
-    for d in lib.shoot_folders():
+    for d in ([VOICE_DIR] if VOICE_DIR.is_dir() else []) + lib.shoot_folders():
         audio = video = 0
         for p in d.iterdir():
             if p.name.startswith(".") or not p.is_file():
@@ -1128,22 +1210,34 @@ def voice_folders():
                 video += 1
         out.append({"name": d.name, "audio": audio, "video": video})
     out.sort(key=lambda f: f["name"], reverse=True)
-    return {"folders": out, "transcribe": transcription_available(), "model": VOICE_MODEL}
+    out.sort(key=lambda f: f["name"] != VOICE_FOLDER)   # the Voice folder first
+    if not VOICE_DIR.is_dir():
+        out.insert(0, {"name": VOICE_FOLDER, "audio": 0, "video": 0})
+    return {"folders": out, "voiceFolder": VOICE_FOLDER, "transcribe": transcription_available(),
+            "model": VOICE_MODEL}
 
 
 @app.get("/api/voice/takes/{folder}")
 def voice_takes(folder: str):
-    """A folder's recordings: audio files first, then videos (their sound)."""
+    """A folder's recordings: audio files first, then videos (their sound).
+    Each says which reading it was brought in for, if any."""
+    if folder == VOICE_FOLDER:
+        VOICE_DIR.mkdir(exist_ok=True)
     d = resolve(folder)
+    with lib.connect() as db:
+        tags = {r["path"]: (r["reading_id"], r["added_at"]) for r in db.execute("SELECT * FROM voice_takes")}
     takes = []
     for p in sorted(d.iterdir(), key=lambda q: q.name.lower()):
         if p.name.startswith(".") or not p.is_file():
             continue
         kind = "audio" if p.suffix.lower() in AUDIO_EXTS else "video" if Library.kind_of(p) == "video" else None
         if kind:
-            takes.append({"folder": folder, "file": p.name, "kind": kind,
+            reading_id, added = tags.get(f"{folder}/{p.name}", (None, None))
+            takes.append({"folder": folder, "file": p.name, "kind": kind, "readingId": reading_id,
+                          "added": added or p.stat().st_mtime,
                           "duration": voice.duration(p), **voice.status(p)})
-    takes.sort(key=lambda t: t["kind"] != "audio")
+    # audio first, the newest first among them
+    takes.sort(key=lambda t: (t["kind"] != "audio", -t["added"] if t["kind"] == "audio" else 0))
     return {"folder": folder, "takes": takes, "transcribe": transcription_available()}
 
 
@@ -1218,16 +1312,47 @@ def voice_downloads():
 
 @app.post("/api/voice/import")
 def voice_import(body: dict = Body(...)):
-    """Move a recording from Downloads into a shoot folder: {file, folder}."""
-    src = download_path(body.get("file") or "", is_song)
-    dest = resolve(body.get("folder") or "")
-    if not dest.is_dir() or dest == ROOT:
-        raise HTTPException(400, "Pick a shoot folder")
-    target = dest / src.name
-    if target.exists():
-        target = free_name(target)
-    shutil.move(str(src), str(target))
-    return {"folder": dest.name, "file": target.name}
+    """Move recordings from Downloads into the Voice folder:
+    {files: [names] (or file), readingId?: the reading they're for}.
+    Each starts transcribing straight away, when that's installed."""
+    names = body.get("files") or ([body["file"]] if body.get("file") else [])
+    sources = [download_path(n, is_song) for n in names]
+    if not sources:
+        raise HTTPException(400, "Pick at least one recording")
+    VOICE_DIR.mkdir(parents=True, exist_ok=True)
+    reading_id = body.get("readingId")
+    moved, failed = [], []
+    with lib.connect() as db:
+        if reading_id:
+            reading_row(db, reading_id)
+        for src in sources:
+            try:
+                target = VOICE_DIR / src.name
+                if target.exists():
+                    target = free_name(target)
+                shutil.move(str(src), str(target))
+                db.execute("INSERT OR REPLACE INTO voice_takes (path, reading_id, added_at) VALUES (?, ?, ?)",
+                           (f"{VOICE_FOLDER}/{target.name}", reading_id, now()))
+                moved.append(target.name)
+            except Exception as e:   # one bad file shouldn't stop the rest
+                failed.append({"name": src.name, "error": str(e)})
+    if transcription_available():
+        for name in moved:
+            voice.start(VOICE_DIR / name)
+    return {"folder": VOICE_FOLDER, "file": moved[0] if moved else None, "moved": moved, "failed": failed,
+            "transcribing": transcription_available()}
+
+
+@app.put("/api/voice/tag")
+def voice_tag(body: dict = Body(...)):
+    """Mark a take as one of a reading's: {folder, file, readingId}."""
+    take_path(body["folder"], body["file"])
+    with lib.connect() as db:
+        db.execute("INSERT OR REPLACE INTO voice_takes (path, reading_id, added_at) VALUES "
+                   "(?, ?, COALESCE((SELECT added_at FROM voice_takes WHERE path = ?), ?))",
+                   (f"{body['folder']}/{body['file']}", body.get("readingId"),
+                    f"{body['folder']}/{body['file']}", now()))
+    return {"ok": True}
 
 
 @app.get("/api/fonts/{name}")
@@ -1245,7 +1370,8 @@ def build_config(reel, rows, grid_bpm=None):
     """The engine's config for a reel. With grid_bpm, it's laid out for a
     song not made yet: on a steady grid at that tempo when cutting on the
     beat, and without music."""
-    s = settings_of(reel)
+    with lib.connect() as db:
+        s = with_reading(db, settings_of(reel))
     # Lanes and scenes (scenes.py): lane A's clips and, one after another,
     # what's on screen; each kept part plays in its scene.
     a_ids = scenes_mod.lane_a(s)
@@ -2471,6 +2597,20 @@ def arrived(st):
     return max(st.st_mtime, st.st_ctime)
 
 
+VOICE_NAMES = re.compile(r"(new recording|recording|voice|memo|reading|take|poem)", re.I)
+
+
+def looks_like_voice(path):
+    """A guess at whether an audio file in Downloads is a voice recording (an
+    iPhone Voice Memo: "New Recording 3.m4a", no artist) rather than a song."""
+    if VOICE_NAMES.search(path.stem):
+        return True
+    tags = shelf.probed(path)["tags"]
+    if tags.get("artist") or tags.get("album_artist") or tags.get("genre"):
+        return False
+    return path.suffix.lower() in (".m4a", ".aac", ".wav", ".caf") and not re.search(r"-\d{5,}$", path.stem)
+
+
 def is_song(path):
     return path.is_file() and not path.name.startswith(".") and path.suffix.lower() in AUDIO_EXTS
 
@@ -2535,7 +2675,8 @@ def import_list():
         if at >= since.timestamp():
             songs.append({"name": p.name, "arrived": at,
                           "day": datetime.fromtimestamp(at).strftime("%Y-%m-%d"),
-                          "inShelf": in_shelf(p)})
+                          "inShelf": in_shelf(p), "voice": looks_like_voice(p),
+                          "duration": voice.duration(p)})
     songs.sort(key=lambda f: f["arrived"])
     days = {}
     for f in files:
@@ -2547,7 +2688,7 @@ def import_list():
         d["songs"] += 1
     return {"dir": str(DOWNLOADS), "today": date.today().isoformat(), "musicDir": str(shelf.folder),
             "days": sorted(days.values(), key=lambda d: d["day"], reverse=True),
-            "files": files, "songs": songs}
+            "files": files, "songs": songs, "transcribe": transcription_available()}
 
 
 @app.post("/api/import/music")

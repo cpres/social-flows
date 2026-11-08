@@ -30,6 +30,8 @@ from pathlib import Path
 import montage  # the engine; reused for its file-type lists
 import relay  # Relay settings from before the dial
 
+VOICE_FOLDER = "Voice"   # ~/Footage/Voice: recordings of readings, kept apart from the shoots
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS media (
     id          INTEGER PRIMARY KEY,
@@ -99,6 +101,24 @@ CREATE TABLE IF NOT EXISTS weave_drafts (
     updated_at REAL NOT NULL
 );
 
+-- A reading: a voice track (pieces of takes, their caption lines and effects)
+-- that any number of reels use, e.g. the Instagram and YouTube cuts of one
+-- piece. Reels point at it with settings.readingId; deleting a reel keeps it.
+CREATE TABLE IF NOT EXISTS readings (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL,
+    pieces     TEXT NOT NULL DEFAULT '[]',   -- JSON, as a reel's settings.voice used to hold
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+-- Recordings in the Voice folder, and the reading each was brought in for.
+CREATE TABLE IF NOT EXISTS voice_takes (
+    path       TEXT PRIMARY KEY,    -- relative to the footage root, e.g. Voice/New Recording 3.m4a
+    reading_id INTEGER REFERENCES readings(id) ON DELETE SET NULL,
+    added_at   REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS songs (
     name       TEXT PRIMARY KEY,   -- the file's name in the music folder
     title      TEXT,               -- NULL: what the file says
@@ -155,6 +175,10 @@ DEFAULT_SETTINGS = {
     "endLogo": "oufp",
     "endPresentedBy": "garden-steward",   # "presented by" + this logo, small, underneath
     "endBeats": 4,          # how much longer the last part holds for the card
+    # The reading this reel uses (readings table); several reels can share one.
+    # settings.voice below is filled in from it when a reel is loaded, and the
+    # Voice panel saves it back to the reading, never into the reel.
+    "readingId": None,
     # A voice track: a reading laid over the footage, made of pieces of takes
     # (audio files or videos in the shoot folders), one after another. Each
     # piece: {id, folder, file, start, end (in the take), gap (the breath
@@ -213,7 +237,8 @@ class Library:
     def shoot_folders(self):
         if not self.root.is_dir():
             return []
-        return [d for d in self.root.iterdir() if d.is_dir() and not d.name.startswith(".")]
+        return [d for d in self.root.iterdir()
+                if d.is_dir() and not d.name.startswith(".") and d.name != VOICE_FOLDER]
 
     def media_files(self, folder):
         return [p for p in folder.iterdir()
@@ -339,6 +364,19 @@ def migrate(db):
             if changed:
                 db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), row["id"]))
         db.execute("PRAGMA user_version = 3")
+    # v4: a reel's voice track becomes a reading of its own (named after the
+    # reel), which the reel points at, so starting a reel again keeps it.
+    if db.execute("PRAGMA user_version").fetchone()[0] < 4:
+        for row in db.execute("SELECT id, name, settings FROM reels").fetchall():
+            s = json.loads(row["settings"] or "{}")
+            pieces = s.pop("voice", None)
+            if pieces and not s.get("readingId"):
+                cur = db.execute("INSERT INTO readings (name, pieces, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                                 (row["name"], json.dumps(pieces), now(), now()))
+                s["readingId"] = cur.lastrowid
+            if pieces is not None:
+                db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), row["id"]))
+        db.execute("PRAGMA user_version = 4")
 
 
 def photo_rotation(path):

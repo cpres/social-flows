@@ -432,9 +432,24 @@ any other, the way you edit a weave.
 **Voice & captions.** *🎙 Voice* (in a reel's header) lays a reading over the
 footage, a poem or an idea, with its words on screen as they're said.
 
-- **Takes** are recordings in a shoot folder: voice memos (M4A, MP3, WAV…) or
-  the sound of a video. AirDropped memos waiting in Downloads are listed under
-  the folder picker; *Move to this folder* brings one in.
+- **Takes** are voice memos (M4A, MP3, WAV…) in `~/Footage/Voice`, or the
+  sound of a video in a shoot folder. *Import from Downloads* sorts what you
+  AirDropped: memos ("New Recording 3", no artist) go under **Voice
+  recordings** and move to the Voice folder, songs to the music folder (*it's a
+  song* / *it's a voice recording* fixes a wrong guess). Recordings start
+  transcribing as they come in. Memos still in Downloads are also listed in the
+  Voice panel, with *Move to the Voice folder*. The Voice folder isn't a shoot,
+  so it stays out of the shoots list.
+- **Readings.** A reel's voice track (its pieces, edited lines, stanza breaks
+  and effects) is a *reading*, kept in the library apart from the reel, so it
+  survives starting the reel over. The *Reading* picker at the top of the Voice
+  panel switches a reel to another one (or *New reading*); adding the first
+  piece starts one named after the reel. Several reels can use one reading,
+  like the Instagram and YouTube cuts of a piece (*Duplicate this reel* keeps
+  using it): an edit in either changes both, and the panel says so. *Make a
+  copy* gives this reel its own to change. Recordings brought in from a reel
+  are tagged with its reading and listed first. Captions' look, the song levels
+  and *Fit to the voice* stay with each reel.
 - **Transcribe** a take once (it runs in the background; transcripts are kept
   in `~/Footage/.studio/voice/`) and its words come back as lines, broken at
   your pauses and punctuation, with a gap between stanzas. Click the first line

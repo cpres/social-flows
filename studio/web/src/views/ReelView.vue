@@ -307,7 +307,7 @@
 
     <VoicePanel
       v-if="showVoice" :reel-id="id" :settings="settings" :reel-length="reelLength" :part-at="partAt"
-      :flush="() => saver.flushAll()"
+      :flush="() => saver.flushAll()" :reel-name="reel.name"
     />
 
     <!-- the reel at a glance: one block per kept part, sized by its length -->
@@ -995,6 +995,7 @@ const saver = debouncedSaver(async (key, patch) => {
   saveState.value = '· saving…'
   try {
     if (key === 'settings') await api.updateReel(id, { settings: patch })
+    else if (key === 'reading') await api.saveReading(patch.id, { pieces: patch.pieces })
     else await api.updateItem(key, patch)
     saveState.value = '· saved'
   } catch (e) {
@@ -1025,6 +1026,10 @@ onMounted(async () => {
 onBeforeUnmount(() => saver.flushAll())
 
 watch(settings, () => { if (ready) saver.queue('settings', { ...settings }) }, { deep: true })
+// The voice track is saved to its reading (which other reels may share), not the reel.
+watch(() => settings.voice, (pieces) => {
+  if (ready && settings.readingId) saver.queue('reading', { id: settings.readingId, pieces })
+}, { deep: true })
 
 // ---------------------------------------------------------------- selection
 

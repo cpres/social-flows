@@ -114,7 +114,14 @@ export const api = {
   // Time pasted text to a stretch of a take: { folder, file, start, end, text } -> { lines }.
   alignText: (body) => send('POST', '/api/voice/align', body),
   voiceDownloads: () => fetch('/api/voice/downloads').then(json),
-  importVoice: (file, folder) => send('POST', '/api/voice/import', { file, folder }),
+  // Recordings from Downloads into the Voice folder, for a reading (or none); they start transcribing.
+  importVoice: (files, readingId = null) => send('POST', '/api/voice/import', { files, readingId }),
+  tagTake: (folder, file, readingId) => send('PUT', '/api/voice/tag', { folder, file, readingId }),
+  // Readings: voice tracks that reels use (several reels can share one).
+  readings: () => fetch('/api/readings').then(json),
+  createReading: (body) => send('POST', '/api/readings', body),
+  saveReading: (id, body) => send('PUT', `/api/readings/${id}`, body),
+  deleteReading: (id) => send('DELETE', `/api/readings/${id}`),
   // The captions at reel time t over the frame of `item` at `src`, as the render draws them.
   captionPreview: (id, item, src, t) => fetch(`/api/reels/${id}/captions/preview?item=${item}&src=${src.toFixed(2)}&t=${t.toFixed(2)}`)
     .then(async (res) => {

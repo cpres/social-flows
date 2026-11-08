@@ -8,6 +8,25 @@
         </span>
         <button class="btn small" :class="{ active: adding }" @click="toggleAdd">{{ adding ? 'Close' : '+ Add a piece' }}</button>
       </header>
+      <!-- the reading this reel uses: kept on its own, so other reels (another cut, a restart) can use it too -->
+      <div class="readingbar">
+        <label class="field">
+          Reading
+          <select :value="settings.readingId ?? ''" @change="useReading($event.target.value)">
+            <option value="">{{ readings.length ? 'None' : 'None yet: adding a piece starts one' }}</option>
+            <option v-for="r in readings" :key="r.id" :value="r.id">
+              {{ r.name }}{{ r.length ? ` · ${fmtTime(r.length)}` : '' }}{{ usedElsewhere(r).length ? ` · in ${usedElsewhere(r).map((x) => x.name).join(', ')}` : '' }}
+            </option>
+          </select>
+        </label>
+        <button class="link" v-if="reading" @click="renameReading">Rename</button>
+        <button class="link" v-if="reading" @click="copyReading" title="A copy of this reading for this reel alone">Make a copy</button>
+        <button class="link" @click="newReading">New reading</button>
+      </div>
+      <p v-if="reading && usedElsewhere(reading).length" class="muted small shared">
+        Also in {{ usedElsewhere(reading).map((x) => x.name).join(', ') }}: changes here change it there too.
+        <button class="link" @click="copyReading">Make a copy for this reel</button>
+      </p>
       <p class="muted small" v-if="!pieces.length && !adding">
         A reading over the footage, made of pieces of one or more takes: voice memos or the sound of a video.
         Pieces play one after another, with a breath between, and the song stays low under them.
@@ -17,10 +36,10 @@
       <div class="adder" v-if="adding">
         <div class="addrow">
           <label class="field">
-            Shoot folder
+            Takes from
             <select v-model="addFolder">
               <option v-for="f in folders" :key="f.name" :value="f.name">
-                {{ folderTitle(f.name) }}{{ f.audio ? ` · 🎙 ${f.audio}` : '' }}{{ f.video ? ` · 🎬 ${f.video}` : '' }}
+                {{ f.name === voiceFolder ? 'Voice folder (your recordings)' : folderTitle(f.name) }}{{ f.audio ? ` · 🎙 ${f.audio}` : '' }}{{ f.video ? ` · 🎬 ${f.video}` : '' }}
               </option>
             </select>
           </label>
@@ -29,14 +48,16 @@
           <span class="muted small">Recordings in Downloads:</span>
           <span v-for="d in downloads.slice(0, 6)" :key="d.name" class="dl">
             {{ d.name }} <span class="muted">{{ fmtTime(d.duration) }}</span>
-            <button class="link" @click="bringIn(d.name)" :disabled="!addFolder">Move to this folder</button>
+            <button class="link" @click="bringIn(d.name)">Move to the Voice folder</button>
           </span>
         </div>
         <ul class="takes" v-if="takes.length">
-          <li v-for="t in takes" :key="t.file" :class="{ on: take && take.file === t.file }">
+          <li v-for="t in sortedTakes" :key="t.file" :class="{ on: take && take.file === t.file }">
             <button class="takename" @click="pickTake(t)">
               <span>{{ t.kind === 'audio' ? '🎙' : '🎬' }}</span> {{ t.file }}
               <span class="muted mono">{{ fmtTime(t.duration) }}</span>
+              <span v-if="t.readingId && t.readingId === settings.readingId" class="tag mine">this reading</span>
+              <span v-else-if="t.readingId && readingName(t.readingId)" class="tag">{{ readingName(t.readingId) }}</span>
             </button>
             <span class="tstate muted small">
               <template v-if="t.status === 'done'">transcribed</template>
@@ -306,6 +327,7 @@ const props = defineProps({
   reelLength: { type: Number, default: 0 },
   partAt: { type: Function, required: true },     // reel time -> { item, src, thumb } or null
   flush: { type: Function, default: () => Promise.resolve() },
+  reelName: { type: String, default: '' },
 })
 const settings = props.settings
 // The preview frame takes the reel's shape (a Stack reel is always tall).
@@ -318,6 +340,65 @@ const tl = computed(() => voiceTimeline(settings.voice))
 const at = (p) => tl.value.pieces.find((q) => q.id === p.id)?.at ?? 0
 const clampNum = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round((Number(v) || 0) * 100) / 100))
 const newId = () => Math.random().toString(36).slice(2, 10)
+
+// ---------------------------------------------------------------- readings
+
+// The voice track lives in a reading (saved apart from the reel, by the reel
+// page), so a restarted reel, or another cut of the same piece, can use it.
+const readings = ref([])
+const reading = computed(() => readings.value.find((r) => r.id === settings.readingId) || null)
+const usedElsewhere = (r) => r.reels.filter((x) => x.id !== props.reelId)
+const readingName = (rid) => readings.value.find((r) => r.id === rid)?.name || ''
+async function loadReadings() {
+  try { readings.value = await api.readings() } catch { /* an older server */ }
+}
+async function useReading(value) {
+  await props.flush()   // anything unsaved goes to the reading it was made in
+  if (!value) {
+    settings.readingId = null
+    settings.voice = []
+    return
+  }
+  await loadReadings()
+  const r = readings.value.find((x) => x.id === Number(value))
+  if (!r) return
+  settings.readingId = r.id
+  settings.voice = JSON.parse(JSON.stringify(r.pieces))
+  openId.value = null
+}
+// A reading for this reel to put its pieces in, made the first time it needs one.
+async function ensureReading() {
+  if (settings.readingId) return settings.readingId
+  const r = await api.createReading({ name: props.reelName || 'Reading', pieces: settings.voice })
+  settings.readingId = r.id
+  await loadReadings()
+  return r.id
+}
+async function newReading() {
+  const name = window.prompt('Name the new reading', props.reelName || '')
+  if (name === null) return
+  await props.flush()
+  const r = await api.createReading({ name: name.trim() || props.reelName || 'Reading' })
+  await loadReadings()
+  await useReading(r.id)
+  adding.value = true
+}
+async function copyReading() {
+  const r0 = reading.value
+  const suggest = props.reelName && props.reelName !== r0.name ? props.reelName : `${r0.name} (copy)`
+  const name = window.prompt('Name the copy (for this reel alone)', suggest)
+  if (name === null) return
+  await props.flush()
+  const r = await api.createReading({ name: name.trim() || `${r0.name} (copy)`, copyOf: r0.id })
+  await loadReadings()
+  await useReading(r.id)
+}
+async function renameReading() {
+  const name = window.prompt('Rename this reading', reading.value.name)
+  if (!name?.trim()) return
+  await api.saveReading(reading.value.id, { name: name.trim() })
+  await loadReadings()
+}
 
 // ---------------------------------------------------------------- takes
 
@@ -332,21 +413,30 @@ const take = ref(null)
 const transcript = ref(null)
 const range = ref(null)
 
+const voiceFolder = ref('Voice')
 onMounted(async () => {
+  loadReadings()
   try {
     const r = await api.voiceFolders()
     folders.value = r.folders
+    voiceFolder.value = r.voiceFolder || 'Voice'
     canTranscribe.value = r.transcribe
     model.value = r.model
   } catch { /* an older server */ }
   if (!pieces.value.length) adding.value = true
 })
 
+// The Voice folder, unless this reading's last piece came from a shoot.
 function defaultFolder() {
   const last = pieces.value[pieces.value.length - 1]
   if (last && folders.value.some((f) => f.name === last.folder)) return last.folder
-  return (folders.value.find((f) => f.audio) || folders.value[0])?.name || ''
+  return voiceFolder.value
 }
+// This reading's takes first, then the ones not in any reading, then the rest.
+const sortedTakes = computed(() => {
+  const rank = (t) => (t.readingId && t.readingId === settings.readingId ? 0 : t.readingId ? 2 : 1)
+  return [...takes.value].sort((a, b) => rank(a) - rank(b))
+})
 watch([adding, folders], () => { if (adding.value && !addFolder.value) addFolder.value = defaultFolder() })
 watch(addFolder, (f) => { take.value = null; transcript.value = null; if (f) loadTakes() })
 
@@ -364,7 +454,8 @@ function toggleAdd() {
   if (adding.value && addFolder.value) loadTakes()
 }
 async function bringIn(name) {
-  const r = await api.importVoice(name, addFolder.value)
+  const r = await api.importVoice([name], settings.readingId)
+  addFolder.value = r.folder
   await loadTakes()
   const t = takes.value.find((x) => x.file === r.file)
   if (t) pickTake(t)
@@ -425,8 +516,13 @@ const pickEnd = computed(() => pickBounds.value[1])
 const copyLines = (ls) => ls.map((l, i) => ({ s: l.s, e: l.e, text: l.text, br: i === 0 ? true : !!l.br,
                                               words: l.words ? l.words.map((w) => [...w]) : [] }))
 
-function addPiece(whole) {
+async function addPiece(whole) {
   const t = take.value
+  const rid = await ensureReading()
+  if (t.folder === voiceFolder.value && !t.readingId) {   // mark the take as this reading's
+    api.tagTake(t.folder, t.file, rid).catch(() => {})
+    t.readingId = rid
+  }
   let start = 0
   let end = t.duration
   let lines = transcript.value ? copyLines(transcript.value.lines) : []
@@ -661,6 +757,11 @@ watch(() => [settings.captionStyle, settings.captionFont, settings.captionBg, se
 .spacer { flex: 1; }
 .link { background: none; border: 0; padding: 2px 4px; color: var(--forest); font: inherit; font-size: 13px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .link:disabled { opacity: 0.5; cursor: default; }
+.readingbar { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 8px; }
+.readingbar .field { flex: 1 1 260px; }
+.shared { margin: 0 0 10px; padding: 6px 10px; border-radius: 8px; background: var(--sage-soft); }
+.tag { font-size: 11px; padding: 0 7px; border-radius: 999px; background: rgb(128 128 128 / 14%); color: var(--muted); white-space: nowrap; }
+.tag.mine { background: var(--sage-soft); color: var(--forest); font-weight: 600; }
 .adder { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--cream); margin-bottom: 14px; display: grid; gap: 10px; }
 .addrow { display: flex; gap: 12px; }
 .addrow .field { flex: 1; }

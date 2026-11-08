@@ -30,6 +30,29 @@
           </button>
         </div>
 
+        <!-- voice memos: recordings of a reading, for the Voice folder -->
+        <section class="songs" v-if="dayVoices.length">
+          <div class="selbar">
+            <b>Voice recordings</b>
+            <span class="muted">for the Voice folder · <span class="mono">~/Footage/Voice</span>{{ transcribeNote }}</span>
+          </div>
+          <label v-for="f in dayVoices" :key="f.name" class="song">
+            <input type="checkbox" :checked="chosenSongs.has(f.name)" @change="toggleSong(f.name)" />
+            <span class="sname">🎙 {{ f.name }}</span>
+            <span class="muted mono small" v-if="f.duration">{{ fmtTime(f.duration) }}</span>
+            <button class="link small" @click.prevent="setKind(f, 'song')" title="It's music: list it under Songs">it's a song</button>
+            <span class="muted mono small">{{ clockTime(f.arrived) }}</span>
+          </label>
+          <div class="songgo">
+            <span class="muted small" v-if="voiceNotice">{{ voiceNotice }}</span>
+            <span class="spacer"></span>
+            <button class="btn" :disabled="!chosenVoices.length || songBusy" @click="moveVoices">
+              {{ songBusy ? 'Moving…' : `Move ${chosenVoices.length} recording${chosenVoices.length === 1 ? '' : 's'} to the Voice folder` }}
+            </button>
+          </div>
+        </section>
+        <p class="ok" v-else-if="voiceNotice">{{ voiceNotice }}</p>
+
         <section class="songs" v-if="daySongs.length">
           <div class="selbar">
             <b>Songs</b>
@@ -39,13 +62,14 @@
             <input type="checkbox" :checked="chosenSongs.has(f.name)" @change="toggleSong(f.name)" />
             <span class="sname">♪ {{ f.name }}</span>
             <span class="muted small" v-if="f.inShelf">already there as {{ f.inShelf }}</span>
+            <button class="link small" v-if="!f.inShelf" @click.prevent="setKind(f, 'voice')" title="It's a voice recording: list it under Voice recordings">it's a voice recording</button>
             <span class="muted mono small">{{ clockTime(f.arrived) }}</span>
           </label>
           <div class="songgo">
             <span class="muted small" v-if="songNotice">{{ songNotice }}</span>
             <span class="spacer"></span>
-            <button class="btn" :disabled="!chosenSongs.size || songBusy" @click="moveSongs">
-              {{ songBusy ? 'Moving…' : `Move ${chosenSongs.size} song${chosenSongs.size === 1 ? '' : 's'} to the music folder` }}
+            <button class="btn" :disabled="!chosenSongsOnly.length || songBusy" @click="moveSongs">
+              {{ songBusy ? 'Moving…' : `Move ${chosenSongsOnly.length} song${chosenSongsOnly.length === 1 ? '' : 's'} to the music folder` }}
             </button>
           </div>
         </section>
@@ -149,7 +173,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from '../api'
-import { clockTime, folderTitle } from '../time'
+import { clockTime, fmtTime, folderTitle } from '../time'
 
 const props = defineProps({
   folders: { type: Array, default: () => [] },   // the shoots, newest first
@@ -182,7 +206,16 @@ const labelInput = ref(null)
 
 const isDup = (f) => !!(f.importedTo || f.copyOf)
 const dayFiles = computed(() => files.value.filter((f) => f.day === day.value))
-const daySongs = computed(() => songs.value.filter((f) => f.day === day.value))
+// Audio is a song or a voice recording: the server guesses, you can say otherwise.
+const kinds = ref({})
+const isVoice = (f) => (kinds.value[f.name] ?? (f.voice ? 'voice' : 'song')) === 'voice'
+function setKind(f, kind) { kinds.value = { ...kinds.value, [f.name]: kind } }
+const daySongs = computed(() => songs.value.filter((f) => f.day === day.value && !isVoice(f)))
+const dayVoices = computed(() => songs.value.filter((f) => f.day === day.value && isVoice(f)))
+const chosenSongsOnly = computed(() => daySongs.value.filter((f) => chosenSongs.value.has(f.name)).map((f) => f.name))
+const chosenVoices = computed(() => dayVoices.value.filter((f) => chosenSongs.value.has(f.name)).map((f) => f.name))
+const voiceNotice = ref('')
+const transcribeNote = ref('')
 const chosenCounts = computed(() => {
   const picked = dayFiles.value.filter((f) => chosen.value.has(f.name))
   const v = picked.filter((f) => f.kind === 'video').length
@@ -221,7 +254,7 @@ function pickDay(d) {
   day.value = d
   // Everything from that day: new files get imported, duplicates cleared out.
   chosen.value = new Set(dayFiles.value.map((f) => f.name))
-  chosenSongs.value = new Set(daySongs.value.map((f) => f.name))
+  chosenSongs.value = new Set(songs.value.filter((f) => f.day === d).map((f) => f.name))   // songs and recordings
   newDate.value = d
   // A folder for that day already? Offer it, else a new one.
   const match = props.folders.find((f) => f.name.startsWith(d))
@@ -240,11 +273,30 @@ function toggleSong(name) {
   chosenSongs.value = s
 }
 
+// Into ~/Footage/Voice, where every reel's Voice panel finds them; each starts
+// transcribing straight away.
+async function moveVoices() {
+  songBusy.value = true
+  failure.value = ''
+  try {
+    const r = await api.importVoice(chosenVoices.value)
+    const m = r.moved.length
+    voiceNotice.value = m ? `Moved ${m} recording${m === 1 ? '' : 's'} to the Voice folder${r.transcribing
+      ? ', transcribing now' : ''}. Use ${m === 1 ? 'it' : 'them'} from a reel's 🎙 Voice.` : ''
+    if (r.failed.length) failure.value = r.failed.map((f) => `${f.name}: ${f.error}`).join('\n')
+    await load()
+  } catch (e) {
+    failure.value = e.message
+  } finally {
+    songBusy.value = false
+  }
+}
+
 async function moveSongs() {
   songBusy.value = true
   failure.value = ''
   try {
-    const r = await api.importMusic([...chosenSongs.value])
+    const r = await api.importMusic(chosenSongsOnly.value)
     const m = r.moved.length
     const d = r.removed.length
     songNotice.value = [
@@ -314,6 +366,8 @@ async function load() {
     days.value = r.days
     files.value = r.files
     songs.value = r.songs || []
+    transcribeNote.value = r.transcribe ? ' · transcribed on the way in'
+      : ' · to transcribe them, start the studio with ./studio/run.sh --voice'
     musicDir.value = r.musicDir || ''
     error.value = r.error || ''
     // Start on today if anything came in, else the latest day with something new.
