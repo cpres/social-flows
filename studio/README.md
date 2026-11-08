@@ -110,6 +110,9 @@ python3 studio/server.py --open
   `MUSIC_DIR`), then pick one under the reel's *Settings → Music*. Set where the
   song starts, and *Listen* to check it. Play reel plays the song and moves
   through the parts in time with it.
+- **The song tag** by *Play reel* opens its song for editing: a beat from
+  the studio opens there (*✨ edit*), any other song opens *Settings → Music*
+  with the song picker ready (*✎*); with no song it says *♪ Add music*.
 - **Make a beat for this reel** (✨ under *Settings → Music*) opens the
   **beat studio**. With a song chosen it offers *Make a beat from this song*
   (starting from it: its groove, tempo and key); with a beat from the studio

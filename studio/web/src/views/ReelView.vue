@@ -87,7 +87,7 @@
     </section>
 
     <section v-if="showSettings" class="panel settings">
-      <div class="sgroup music">
+      <div class="sgroup music" :class="{ flash: musicFlash }">
         <div class="musichead">
           <h3>Music</h3>
           <div class="beatbtns">
@@ -318,9 +318,14 @@
       <span class="mono clock">{{ fmtTime(reelTime ?? 0) }} / {{ fmtTime(reelLength) }}</span>
       <button class="btn small" @click="jumpPart(-1)" title="The playhead back to where the last part starts, in either lane">◀ Part</button>
       <button class="btn small" @click="jumpPart(1)" title="The playhead on to where the next part starts, in either lane">Part ▶</button>
-      <span v-if="settings.music" class="songtag" :title="settings.music">
-        ♪ {{ songTitle(shelf, settings.music) }}{{ beatData ? ` · ${Math.round(beatData.bpm)} bpm` : '' }}
-      </span>
+      <button
+        v-if="settings.music" class="songtag" @click="editSong"
+        :title="songTake ? 'Edit this beat in the beat studio' : `${settings.music}: change the song (Settings › Music)`"
+      >
+        <span class="songname">♪ {{ songTitle(shelf, settings.music) }}{{ beatData ? ` · ${Math.round(beatData.bpm)} bpm` : '' }}</span>
+        <span class="songedit">{{ songTake ? '✨ edit' : '✎' }}</span>
+      </button>
+      <button v-else class="songtag add" @click="editSong" title="Pick a song, or make a beat for this reel">♪ Add music</button>
       <span class="spacer"></span>
       <span v-if="toast" class="toast">{{ toast }}</span>
       <button class="btn small" @click="splitAtPlayhead" title="A new scene starts at the playhead (the nearest cut), with the last split used">Split scene at playhead <kbd>S</kbd></button>
@@ -925,6 +930,24 @@ const songTake = computed(() => {
   const m = /(\d{8}-\d{6}-[0-9a-f]{4})\.mp3$/.exec(settings.music || '')
   return m && String(settings.music).startsWith('Beat ') ? m[1] : null
 })
+// The song tag by Play reel: a beat from the studio opens there; any other
+// song (or none) opens Settings at Music, the song picker ready.
+const musicFlash = ref(false)
+async function editSong() {
+  stopReel()
+  if (songTake.value) {
+    await saver.flushAll()
+    router.push(`/reel/${id}/beat?take=${songTake.value}`)
+    return
+  }
+  showSettings.value = true
+  await nextTick()
+  const box = document.querySelector('.sgroup.music')
+  box?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  document.getElementById('reel-song')?.focus({ preventScroll: true })
+  musicFlash.value = true
+  setTimeout(() => { musicFlash.value = false }, 1600)
+}
 // The title is on when ticked (reels from before: when it has text).
 const titleOn = computed(() => settings.titleCard ?? !!(settings.titleText || '').trim())
 watch(() => settings.endCard, (on) => { if (on && ready && !settings.endLines) settings.endLines = endHint })
@@ -2907,9 +2930,17 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .warn { color: var(--danger); }
 .note { background: var(--sage-soft); padding: 6px 10px; border-radius: 6px; font-size: 13px; }
 .songtag {
-  flex: none; font-size: 12px; color: var(--forest); background: var(--sage-soft);
-  border-radius: 999px; padding: 2px 10px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: none; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px; color: var(--forest); background: var(--sage-soft);
+  border: 1px solid transparent; border-radius: 999px; padding: 2px 10px; max-width: 280px; cursor: pointer;
 }
+.songtag:hover, .songtag:focus-visible { border-color: var(--sage); outline: none; }
+.songtag .songname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.songtag .songedit { flex: none; font-size: 11px; opacity: 0.75; }
+.songtag:hover .songedit { opacity: 1; }
+.songtag.add { background: transparent; border: 1px dashed var(--sage); }
+.sgroup.music.flash { animation: musicflash 1.6s ease-out; border-radius: 10px; }
+@keyframes musicflash { 0%, 30% { box-shadow: 0 0 0 3px var(--sage); } 100% { box-shadow: 0 0 0 3px transparent; } }
+@media (prefers-reduced-motion: reduce) { .sgroup.music.flash { animation: none; } }
 .lane { position: relative; flex: none; height: 20px; cursor: pointer; border-radius: 4px; background: rgb(128 128 128 / 8%); }
 .vpiece {
   position: absolute; top: 0; bottom: 0; border: 1.5px solid var(--warn); border-radius: 4px; font-size: 10px; font-weight: 600;
