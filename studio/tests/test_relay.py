@@ -266,6 +266,19 @@ class Fixtures(unittest.TestCase):
             self.assertEqual(plan["stats"]["longCount"], 2)
             self.assertEqual(plan["stats"]["longPieces"], 5)
 
+    def test_a_photo_keeps_its_own_hold(self):
+        items = [video(at(1), 30.0), {**photo(at(1, 10)), "hold": 6.5}, photo(at(3))]
+        for d in (1, 5, 10):
+            plan = relay.plan_relay(items, {"dial": d, "photo_seconds": 4})
+            self.assertEqual(relay.check(plan, items, {"dial": d, "photo_seconds": 4}), [])
+            on = {}
+            for seg in plan["timeline"]:
+                for k in (seg["top"], seg["bottom"]):
+                    if k is not None:
+                        on[k] = on.get(k, 0) + seg["len"]
+            self.assertAlmostEqual(on[1], 6.5, delta=0.01)
+            self.assertAlmostEqual(on[2], 4.0, delta=0.01)
+
     def test_dial_and_migration(self):
         self.assertEqual(relay.dial_of(None, "single"), 3)
         self.assertEqual(relay.dial_of(None, "even"), 5)

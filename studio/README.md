@@ -333,7 +333,14 @@ folder* (a shoot) ask for a name and a style:
   relay out of step (a clip no longer carrying on where it left off, or a
   stretch run into the next), a bar under the preview says which later
   parts would move; click ✓ to move them (each pushed on by as much as you
-  added, pushing the next) or *Leave* to keep them as they are. Ticking *Relay* on any
+  added, pushing the next) or *Leave* to keep them as they are. Take a
+  part out of a relay (or put one back) and the bar offers to **stitch it
+  back together**: ✓ plans the relay again from what's left, with its
+  settings, so the splits and full-frame moments flow again around the
+  gap. Each stretch stays as you have it (one you didn't touch exactly as
+  it was; one you trimmed with your trims; a photo keeps its hold), and
+  what's out of the cut stays in the list after the relay (the reel keeps
+  what it was planned from as `relayPlan`). Ticking *Relay* on any
   split after a Solo B scene does the same by hand.
 
 **Lanes and scenes.** A reel has two lanes of footage and a row of scenes

@@ -545,28 +545,162 @@ def apply_style(db, reel_id, style, body):
     else:
         opts = relay_opts(body)
         items, _ = relay_items(db, rows, opts)
-        plan = relay_mod.plan_relay(items, opts)
-        db.execute("DELETE FROM reel_items WHERE reel_id = ?", (reel_id,))
-        ids = []
-        cols = [c for c in ITEM_COLUMNS if c not in ("position", "start", "length")]
-        for pos, part in enumerate(plan["lanes"]["B"]):
-            r = rows[items[part["item"]]["_row"]]
-            cur = db.execute(f"INSERT INTO reel_items (reel_id, position, start, length, {', '.join(cols)}) "
-                             f"VALUES (?, ?, ?, ?, {', '.join('?' * len(cols))})",
-                             (reel_id, pos, part["start"], part["length"], *[r[c] for c in cols]))
-            ids.append(cur.lastrowid)
-        split = s.get("stackSplit") or 0.5
-        s["laneA"] = []
-        s["scenes"] = []
-        for sc in plan["scenes"]:
-            out = {"id": scenes_mod.new_id(), "layout": sc["layout"], "from": ids[sc["parts"][0]], "into": sc["into"]}
-            if sc["layout"] == "stack":
-                out.update(split=split, relay=True)
-            if sc.get("grow"):
-                out["grow"] = sc["grow"]
-            s["scenes"].append(out)
-        s["relay"] = {"dial": opts["dial"], "photo": opts["photo_seconds"], "cap": opts["cap"], "most": opts["most"], "quiet": opts["quiet"]}
+        write_relay(db, reel_id, s, items, rows, opts, [r["id"] for r in rows])
     db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), reel_id))
+
+
+def write_relay(db, reel_id, s, items, templates, opts, replace):
+    """Plan a relay (relay.py) from items and write it into the reel: its
+    parts (copying framing and the like from templates[item["_row"]]) in
+    place of the parts `replace`, its scenes, its settings, and what it was
+    planned from (s["relayPlan"]: the items, and which item and stretch each
+    part came from), so it can be stitched back together after an edit."""
+    plan = relay_mod.plan_relay(items, opts)
+    if replace:
+        db.execute(f"DELETE FROM reel_items WHERE id IN ({', '.join('?' * len(replace))})", list(replace))
+    ids = []
+    cols = [c for c in ITEM_COLUMNS if c not in ("position", "start", "length", "beats")]
+    for pos, part in enumerate(plan["lanes"]["B"]):
+        r = templates[items[part["item"]]["_row"]]
+        cur = db.execute(f"INSERT INTO reel_items (reel_id, position, start, length, {', '.join(cols)}) "
+                         f"VALUES (?, ?, ?, ?, {', '.join('?' * len(cols))})",
+                         (reel_id, pos, part["start"], part["length"], *[r[c] for c in cols]))
+        ids.append(cur.lastrowid)
+    # what's left out of the cut stays, after the relay
+    rest = db.execute("SELECT id FROM reel_items WHERE reel_id = ? AND id NOT IN (%s) ORDER BY position, id"
+                      % ", ".join("?" * len(ids)) if ids else "SELECT id FROM reel_items WHERE reel_id = ? ORDER BY position, id",
+                      [reel_id, *ids]).fetchall()
+    for k, row in enumerate(rest):
+        db.execute("UPDATE reel_items SET position = ? WHERE id = ?", (len(ids) + k, row["id"]))
+    split = s.get("stackSplit") or 0.5
+    s["laneA"] = []
+    s["scenes"] = []
+    for sc in plan["scenes"]:
+        out = {"id": scenes_mod.new_id(), "layout": sc["layout"], "from": ids[sc["parts"][0]], "into": sc["into"]}
+        if sc["layout"] == "stack":
+            out.update(split=split, relay=True)
+        if sc.get("grow"):
+            out["grow"] = sc["grow"]
+        s["scenes"].append(out)
+    s["relay"] = {"dial": opts["dial"], "photo": opts["photo_seconds"], "cap": opts["cap"], "most": opts["most"],
+                  "quiet": opts["quiet"]}
+    saved = []
+    for it in items:
+        one = {k: v for k, v in it.items() if k != "_row"}
+        one["mediaId"] = templates[it["_row"]]["media_id"]
+        if one.get("keep"):
+            one["keep"] = [[round(a, 3), round(b, 3)] for a, b in one["keep"]]
+        if one.get("match"):
+            one["match"] = [round(float(x), 3) for x in one["match"]]
+        saved.append(one)
+    s["relayPlan"] = {"items": saved,
+                      "parts": {str(pid): [part["item"], part["start"], part["length"]]
+                                for pid, part in zip(ids, plan["lanes"]["B"])}}
+    return plan
+
+
+def relay_restitch_items(db, reel_id, s):
+    """The relay items a reel has now, after edits: those it was planned
+    from (s["relayPlan"]), as they were where none of their parts changed,
+    and from their parts as they are now where some did (a stretch's span,
+    counting the time it played on on top; a photo's time on screen, give or
+    take what was trimmed); those whose parts are all gone left out; parts
+    from elsewhere (added since, or a reel planned before this) grouped
+    into items by where they carry on from each other. -> (items, rows)."""
+    rows = db.execute("""SELECT i.*, m.kind, m.duration, m.captured_at, m.path FROM reel_items i
+                         JOIN media m ON m.id = i.media_id
+                         WHERE i.reel_id = ? AND i.keep = 1 AND m.missing = 0
+                         ORDER BY i.position, i.id""", (reel_id,)).fetchall()
+    by_id = {r["id"]: r for r in rows}
+    scenes = scenes_mod.normalized(s.get("scenes") or [], [r["id"] for r in rows], [])
+    carry = {}   # part id -> seconds it plays on, on top, as the next comes in under it
+    for k, sc in enumerate(scenes):
+        if k and sc.get("relay") and sc["layout"] in ("stack", "swap") and scenes[k - 1]["layout"] == "soloB":
+            carry[scenes[k - 1]["parts"][-1]] = sum(by_id[p]["length"] for p in sc["parts"])
+    saved = s.get("relayPlan") or {}
+    saved_items, saved_parts = saved.get("items") or [], saved.get("parts") or {}
+    groups, loose = {}, []
+    for r in rows:
+        e = saved_parts.get(str(r["id"]))
+        if e and e[0] < len(saved_items) and saved_items[e[0]].get("mediaId") == r["media_id"]:
+            groups.setdefault(e[0], []).append(r)
+        else:
+            loose.append(r)
+    out, templates = [], []
+
+    def from_rows(it, rs, base=None):
+        """An item's span from its parts as they are now (and, for a photo,
+        its time on screen)."""
+        ends = [x["start"] + x["length"] + carry.get(x["id"], 0) for x in rs]
+        if rs[0]["kind"] == "photo":
+            if base is not None:   # what it had, give or take what was trimmed or taken out
+                was = {int(pid): v for pid, v in saved_parts.items() if v[0] == base}
+                it["hold"] = round(max(0.5, float(it.get("hold") or relay_opts(s.get("relay") or {})["photo_seconds"])
+                                       + sum(x["length"] - was[x["id"]][2] for x in rs)
+                                       - sum(v[2] for pid, v in was.items() if pid not in by_id)), 3)
+            else:
+                it["hold"] = round(sum(x["length"] for x in rs) + sum(carry.get(x["id"], 0) for x in rs), 3)
+            return it
+        a, b = min(x["start"] for x in rs), max(ends)
+        if it.get("keep"):   # quiet moments out: as they were, to the new span, plus anything added at the ends
+            span = (it["keep"][0][0], it["keep"][-1][0] + it["keep"][-1][1])
+            keep = [(max(x, a), min(x + l, b) - max(x, a)) for x, l in it["keep"] if min(x + l, b) > max(x, a)]
+            keep = ([(a, span[0] - a)] if a < span[0] else []) + keep + ([(span[1], b - span[1])] if b > span[1] else [])
+            it["keep"] = [(round(x, 3), round(l, 3)) for x, l in keep if l > 0.04]
+        it.update(start=round(a, 3), avail=round(b - a, 3), length=round(b - a, 3))
+        return it
+
+    for idx in sorted(groups):
+        rs = groups[idx]
+        it = dict(saved_items[idx])
+        it.pop("mediaId", None)
+        mine = [pid for pid, v in saved_parts.items() if v[0] == idx]
+        same = len(mine) == len(rs) and all(
+            abs(x["start"] - saved_parts[str(x["id"])][1]) < 0.01 and abs(x["length"] - saved_parts[str(x["id"])][2]) < 0.01
+            for x in rs)
+        if not same:
+            it = from_rows(it, rs, base=idx)
+        it["_row"] = len(templates)
+        templates.append(rs[0])
+        out.append(it)
+    # parts from elsewhere: one item per run of a clip carrying on from itself
+    runs, last = [], {}
+    for r in loose:
+        prev = last.get(r["media_id"])
+        if (prev is not None and prev is runs[-1] and r["kind"] == "video"
+                and abs(r["start"] - (prev[-1]["start"] + prev[-1]["length"] + carry.get(prev[-1]["id"], 0))) < 0.05):
+            prev.append(r)
+            continue
+        runs.append([r])
+        last[r["media_id"]] = runs[-1]
+    for rs in runs:
+        r = rs[0]
+        it = {"kind": r["kind"], "duration": float(r["duration"] or 0), "start": r["start"], "length": r["length"],
+              "shot_at": float(r["captured_at"] or 0)}
+        it = from_rows(it, rs)
+        it["_row"] = len(templates)
+        templates.append(r)
+        out.append(it)
+    out.sort(key=lambda it: (it["shot_at"], it.get("start", 0)))
+    return out, templates, [r["id"] for r in rows]
+
+
+@app.post("/api/reels/{reel_id}/restitch")
+def restitch(reel_id: int):
+    """Stitch a relay reel back together after parts were taken out, added
+    or trimmed: planned again (relay.py, with the reel's Relay settings)
+    from what's left, each stretch as it is now."""
+    with lib.connect() as db:
+        r = reel_row(db, reel_id)
+        s = settings_of(r)
+        items, templates, ids = relay_restitch_items(db, reel_id, s)
+        if not items:
+            raise HTTPException(400, "Nothing left in the cut to stitch together")
+        opts = relay_opts(s.get("relay") or {})
+        plan = write_relay(db, reel_id, s, items, templates, opts, ids)
+        db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), reel_id))
+        touch(db, reel_id)
+    return {"ok": True, "stats": plan["stats"]}
 
 
 @app.post("/api/folders/{name}/move")

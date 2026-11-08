@@ -573,7 +573,17 @@
             </button>
           </div>
           <label class="guides-toggle muted" v-if="tall"><input type="checkbox" v-model="guides" /> Show Instagram overlays <kbd>G</kbd></label>
-          <div v-if="flowAsk" class="flowask">
+          <div v-if="restitchAsk" class="flowask">
+            <span>
+              <b>Stitch the relay back together?</b>
+              <small class="muted">Plans the splits and full-frame moments again around what you took out, each clip's stretches as you have them.</small>
+            </span>
+            <button class="flowok" :disabled="restitching" @click="restitch" title="Stitch it back together">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
+            <button class="btn small" @click="restitchAsk = false" title="Leave it as it is">Leave</button>
+          </div>
+          <div v-else-if="flowAsk" class="flowask">
             <span>
               <b>Move {{ flowPending.length }} later part{{ flowPending.length === 1 ? '' : 's' }} to keep the clips flowing?</b>
               <small class="muted">{{ flowSummary }}</small>
@@ -1014,6 +1024,13 @@ const saver = debouncedSaver(async (key, patch) => {
 })
 
 let ready = false
+async function loadReel() {
+  const data = await api.reel(id)
+  items.value = data.items
+  otherItems.value = data.otherItems
+  Object.assign(settings, data.settings)
+  return data
+}
 onMounted(async () => {
   try {
     const data = await api.reel(id)
@@ -1274,6 +1291,33 @@ function squareBottom() {
 function setKeep(p, keep) {
   p.keep = keep
   saver.queue(p.id, { keep })
+  if (hasRelay.value) restitchAsk.value = true
+}
+
+// A part taken out of a relay (or put back) leaves a hole in it: the split
+// it was in loses a side and the clip around it jumps. Stitching it back
+// together plans the relay again from what's left (server.py restitch),
+// each stretch as you have it, after a ✓ under the preview.
+const restitchAsk = ref(false)
+const restitching = ref(false)
+async function restitch() {
+  restitching.value = true
+  try {
+    await saver.flushAll()
+    ready = false
+    await api.restitch(id)
+    await loadReel()
+    restitchAsk.value = false
+    flowEdit.value = null
+    selScene.value = null
+    selected.value = Math.min(selected.value, items.value.length - 1)
+    saveState.value = '· stitched back together'
+  } catch (e) {
+    saveState.value = `· not stitched: ${e.message}`
+  } finally {
+    restitching.value = false
+    setTimeout(() => { ready = true })
+  }
 }
 
 function applyLengthToAll() {
@@ -1290,6 +1334,7 @@ function lengthAll(len) {
 }
 
 async function remove(p) {
+  if (hasRelay.value) restitchAsk.value = true
   await api.deleteItem(p.id)
   const i = items.value.indexOf(p)
   items.value.splice(i, 1)

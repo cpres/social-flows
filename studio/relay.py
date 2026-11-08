@@ -29,7 +29,8 @@ moments out: [(start, length)] in the file, already within the cap),
 clip (optional: stretches of one clip share it; they hand on to each other
 like any two long clips, the later moment coming in under the earlier, so
 the split skips ahead in the clip), match (optional, (from, to) file seconds: the
-moments a stretch claims for photos shot while its clip recorded)}].
+moments a stretch claims for photos shot while its clip recorded), hold
+(optional, a photo's own time on screen instead of photo_seconds)}].
 A capped long clip is several items, one per stretch (see stretches).
 
 opts: {dial: 1..10, photo_seconds, cap (seconds or None)}.
@@ -150,8 +151,9 @@ class Entry:
         cap = opts.get("cap") or None
         if it.get("kind") == "photo":
             self.kind = PHOTO
-            self.ranges = [(0.0, photo_s)]
-            self.split_tol = photo_s
+            life = float(it.get("hold") or photo_s)   # its own, once it's been trimmed in the reel
+            self.ranges = [(0.0, life)]
+            self.split_tol = life
         elif float(it.get("duration") or 0) >= LONG_THRESHOLD:
             self.kind = LONG
             start = float(it.get("start") or 0)
@@ -436,7 +438,6 @@ def check(plan, items, opts):
     errors = []
     opts = dict(opts or {})
     entries = [Entry(i, it, opts) for i, it in enumerate(items)]
-    photo_s = float(opts.get("photo_seconds") or PHOTO_SECONDS)
     on = {}
     for seg in plan["timeline"]:
         for k in (seg["top"], seg["bottom"]):
@@ -445,7 +446,7 @@ def check(plan, items, opts):
     for e in entries:
         if on.get(e.idx, 0) > e.life + 0.01:
             errors.append(f"item {e.idx} on screen {on[e.idx]:.2f}s, life {e.life:.2f}s")
-        if e.kind == PHOTO and on.get(e.idx, 0) > photo_s + 0.01:
+        if e.kind == PHOTO and on.get(e.idx, 0) > e.life + 0.01:
             errors.append(f"photo {e.idx} on screen {on[e.idx]:.2f}s")
         if abs(on.get(e.idx, 0) - e.life) > 0.01:
             errors.append(f"item {e.idx} on screen {on.get(e.idx, 0):.2f}s, not its life {e.life:.2f}s")
