@@ -470,23 +470,10 @@
         </div>
       </template>
       <!-- the voice track and its captions, on the same clock -->
-      <div v-if="voiceTl.pieces.length" class="lane vlane" @click="seekLane" title="The voice: click to play from there">
-        <div
-          v-for="p in voiceTl.pieces" :key="p.id" class="vpiece" :style="laneStyle(p.at, p.length)"
-          :title="`${p.file} · ${fmtTime(p.at)} → ${fmtTime(p.at + p.length)}`"
-        >🎙 {{ p.file }}</div>
-        <div
-          v-for="(f, i) in voiceTl.fx" :key="`fx${i}`" class="vfx" :style="laneStyle(f.start, f.end - f.start)"
-          :title="`${fxInfo(f.effect).label} at ${fmtTime(f.start)}`"
-        >{{ fxInfo(f.effect).icon }}</div>
-        <div class="reelhead" v-if="reelTime !== null" :style="{ left: `${(reelTime / (reelLength || 1)) * 100}%` }"></div>
-      </div>
-      <div v-if="voiceTl.lines.length && settings.captions" class="lane clane" @click="seekLane">
-        <div
-          v-for="(l, i) in voiceTl.lines" :key="i" class="cline" :style="laneStyle(l.start, l.end - l.start)" :title="l.text"
-          :class="{ on: reelTime !== null && reelTime >= l.start && reelTime < l.end }"
-        >{{ l.text }}</div>
-      </div>
+      <VoiceLanes
+        :pieces="voiceTl.pieces" :fx="voiceTl.fx" :lines="settings.captions ? voiceTl.lines : []"
+        :length="reelLength" :active="activeLine" @seek="seekAt"
+      />
       </div>
     </section>
     <p class="readout muted small">Hatched = that lane isn't on screen in the scene. Click a scene to edit its layout; drag a scene edge to move where it changes. Orange bands = scene transitions. The audio strip shows what you'll actually hear, coloured by where it comes from.</p>
@@ -873,6 +860,7 @@ import { songTitle } from '../songs'
 import { fxInfo, songLevel, VOICE_TAIL, voiceTimeline } from '../captions'
 import { useVoicePlayer } from '../voicePlayer'
 import CaptionLayer from '../components/CaptionLayer.vue'
+import VoiceLanes from '../components/VoiceLanes.vue'
 import VoicePanel from '../components/VoicePanel.vue'
 import ClipCard from '../components/ClipCard.vue'
 import ClipSheet from '../components/ClipSheet.vue'
@@ -1686,9 +1674,17 @@ watch(() => voiceTl.value.pieces.map((p) => `${p.folder}/${p.file}`).join('|'), 
 const showCaptions = computed(() => reelOn.value && settings.captions !== false && voiceTl.value.lines.length > 0)
 const captionProps = computed(() => ({
   lines: voiceTl.value.lines, variant: settings.captionStyle, font: settings.captionFont, bg: settings.captionBg,
-  size: Number(settings.captionSize) || 1, title: settings.captionTitle || '', t: reelTime.value ?? 0,
+  size: Number(settings.captionSize) || 1, title: settings.captionTitle || '', clock: captionClock,
   fx: settings.captionFx !== false, ratio: shapeRatio(settings.shape),
 }))
+// The captions read the reel's time themselves (CaptionLayer), so the page
+// playing doesn't hand them a new time, and redraw them, every frame.
+const captionClock = () => reelTime.value ?? 0
+// The caption line being said: changes once a line, not once a frame.
+const activeLine = computed(() => {
+  const t = reelTime.value
+  return t === null ? -1 : voiceTl.value.lines.findIndex((l) => t >= l.start && t < l.end)
+})
 const laneStyle = (at, length) => ({
   left: `${(at / (reelLength.value || 1)) * 100}%`, width: `${(length / (reelLength.value || 1)) * 100}%`,
 })
@@ -1705,9 +1701,7 @@ function partAt(t) {
   return { item: p.id, src, thumb: api.thumb(p.media.folder, p.media.file, src, 480) }
 }
 // Clicking the voice or caption lane: play (or select) the part under that point.
-function seekLane(e) {
-  const r = e.currentTarget.getBoundingClientRect()
-  const t = ((e.clientX - r.left) / r.width) * reelLength.value
+function seekAt(t) {
   const k = kept.value.findIndex((p, i) => t < partEnd(i))
   jumpTo(kept.value[k < 0 ? kept.value.length - 1 : k])
 }
@@ -3069,22 +3063,6 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 .sgroup.music.flash { animation: musicflash 1.6s ease-out; border-radius: 10px; }
 @keyframes musicflash { 0%, 30% { box-shadow: 0 0 0 3px var(--sage); } 100% { box-shadow: 0 0 0 3px transparent; } }
 @media (prefers-reduced-motion: reduce) { .sgroup.music.flash { animation: none; } }
-.lane { position: relative; flex: none; height: 20px; cursor: pointer; border-radius: 4px; background: rgb(128 128 128 / 8%); }
-.vpiece {
-  position: absolute; top: 0; bottom: 0; border: 1.5px solid var(--warn); border-radius: 4px; font-size: 10px; font-weight: 600;
-  padding: 0 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink); line-height: 17px;
-  background: rgb(181 100 45 / 10%);
-}
-.vfx {
-  position: absolute; top: 2px; bottom: 2px; border-radius: 3px; background: rgb(181 100 45 / 45%); color: var(--paper);
-  font-size: 10px; line-height: 14px; text-align: center; overflow: hidden; pointer-events: none;
-}
-.clane { height: 18px; }
-.cline {
-  position: absolute; top: 1px; bottom: 1px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper);
-  font-size: 10px; padding: 0 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 14px; color: var(--muted);
-}
-.cline.on { border-color: var(--warn); color: var(--ink); }
 .tick { position: absolute; bottom: -6px; width: 1px; height: 4px; background: var(--muted); pointer-events: none; }
 .tick.bar { height: 7px; bottom: -9px; background: var(--forest); }
 .row { flex-wrap: wrap; }
