@@ -188,8 +188,8 @@ DEFAULT_SETTINGS = {
     "voice": [],
     "voiceFit": True,       # the last part holds until the voice has finished
     "voiceClean": True,     # cut low rumble and hiss
-    "voiceSongUnder": 0.15, # the song's volume while the voice speaks
-    "voiceSongBetween": 0.3,  # ... and around it
+    "voiceSongUnder": 0.15, # no longer used: the song dips to 30% of the Music fader's level
+    "voiceSongBetween": 0.3,  # no longer used either: the song is at the Music fader's level around it
     # Captions: the voice's lines on screen as they're said.
     "captions": True,
     "captionStyle": "breath",   # stanza | unfold | breath | page
@@ -377,6 +377,18 @@ def migrate(db):
             if pieces is not None:
                 db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), row["id"]))
         db.execute("PRAGMA user_version = 4")
+    # v5: one control for the song's volume, the mixer's Music fader: a
+    # reel's old Music volume (0.8 as standard) is folded into it.
+    if db.execute("PRAGMA user_version").fetchone()[0] < 5:
+        for row in db.execute("SELECT id, settings FROM reels").fetchall():
+            s = json.loads(row["settings"] or "{}")
+            vol = s.get("musicVolume")
+            if vol is None or abs(float(vol) - 0.8) < 1e-6:
+                continue
+            s["mixMusic"] = round(min(1.5, max(0.0, float(s.get("mixMusic", 1) or 0) * float(vol) / 0.8)), 3)
+            s["musicVolume"] = 0.8
+            db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), row["id"]))
+        db.execute("PRAGMA user_version = 5")
 
 
 def photo_rotation(path):

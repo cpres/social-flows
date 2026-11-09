@@ -110,7 +110,7 @@ export function audioSegments(r) {
     const fade = Math.min(MUSIC_FADE, reelLength / 3)
     // Without ducking, the song stays at its level, even through the voice.
     const level = settings.duckMusic === false && r.voicePieces?.length
-      ? () => Number(settings.voiceSongBetween ?? 0.3)
+      ? () => Number(settings.musicVolume ?? 0.8)
       : r.songVolume || (() => Number(settings.musicVolume ?? 0.8))
     out.music.push({
       // Where the song starts: on its first beat when cutting on the beat (as the render does), else where you set.

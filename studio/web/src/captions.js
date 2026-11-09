@@ -57,6 +57,10 @@ export const fxInfo = (v) => VOICE_FX.find((f) => f.v === v) || VOICE_FX[0]
 export const ECHO_GAP = 0.32
 export const fxTail = (effect, amount) => ({ echo: 3 * ECHO_GAP + 0.6, hall: 1.6 + amount }[effect] ?? 0.15)
 
+// While the voice speaks the song dips to this share of its level (about
+// -10 dB), as the render's song_under; the Music fader sets the level itself.
+export const VOICE_DUCK = 0.3
+
 export const VOICE_TAIL = 0.8   // the last part holds this long after the voice
 const DUCK_RAMP = 0.4
 

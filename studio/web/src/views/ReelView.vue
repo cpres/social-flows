@@ -118,10 +118,6 @@
             &nbsp;
             <button class="btn small" @click="listen">{{ listening ? '■ Stop' : '▶ Listen' }}</button>
           </div>
-          <label class="field" v-if="settings.music">
-            Music volume
-            <input type="number" min="0" max="1" step="0.05" v-model.number="settings.musicVolume" />
-          </label>
         </div>
         <p class="muted small">
           Songs come from <code>{{ shelf.dir }}</code><template v-if="!shelf.exists"> (make that folder and drop MP3s in)</template>.
@@ -857,7 +853,7 @@ import { usePlayer } from '../player'
 import { fitRange, fmtBeats, fmtTime, folderTitle, parseTime, reelColor, snapBeats } from '../time'
 import { TWO_LANE_FLOOR, holdLengths, photoStyles, timeline } from '../hold'
 import { songTitle } from '../songs'
-import { fxInfo, songLevel, VOICE_TAIL, voiceTimeline } from '../captions'
+import { fxInfo, songLevel, VOICE_DUCK, VOICE_TAIL, voiceTimeline } from '../captions'
 import { useVoicePlayer } from '../voicePlayer'
 import CaptionLayer from '../components/CaptionLayer.vue'
 import VoiceLanes from '../components/VoiceLanes.vue'
@@ -1705,10 +1701,12 @@ function seekAt(t) {
   const k = kept.value.findIndex((p, i) => t < partEnd(i))
   jumpTo(kept.value[k < 0 ? kept.value.length - 1 : k])
 }
-// The song while a voice plays: low under it, a little up in the breaths.
-const songVolume = (t) => (voiceTl.value.pieces.length
-  ? songLevel(voiceTl.value.pieces, Number(settings.voiceSongUnder ?? 0.15), Number(settings.voiceSongBetween ?? 0.3), t)
-  : Number(settings.musicVolume ?? 0.8))
+// The song while a voice plays: it dips under the voice (the Music fader
+// sets how loud it is overall).
+const songVolume = (t) => {
+  const base = Number(settings.musicVolume ?? 0.8)
+  return voiceTl.value.pieces.length ? songLevel(voiceTl.value.pieces, base * VOICE_DUCK, base, t) : base
+}
 
 // What the song plays at here: its level (under the voice) through the music fader.
 const songOut = (t) => Math.min(1, Math.max(0, songVolume(t) * mixLevel(settings, 'music')))

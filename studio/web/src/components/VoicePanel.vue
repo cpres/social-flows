@@ -232,18 +232,10 @@
       </ol>
 
       <div class="levels" v-if="pieces.length">
-        <label class="field">
-          Song under the voice
-          <select v-model.number="settings.voiceSongUnder">
-            <option v-for="v in [0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4]" :key="v" :value="v">{{ Math.round(v * 100) }}%</option>
-          </select>
-        </label>
-        <label class="field">
-          Song in the breaths
-          <select v-model.number="settings.voiceSongBetween">
-            <option v-for="v in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8]" :key="v" :value="v">{{ Math.round(v * 100) }}%</option>
-          </select>
-        </label>
+        <p class="muted small levelnote">
+          The song dips while the voice speaks and comes back up in the breaths. How loud it is overall:
+          the <b>Music</b> slider in the mixer.
+        </p>
         <label class="field check">
           <span><input type="checkbox" v-model="settings.voiceClean" /> Clean up the voice</span>
           <small>Cuts low rumble and steady hiss.</small>
@@ -954,6 +946,7 @@ li.gap { height: 8px; padding: 0; }
 .fxpick { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
 .paste { display: grid; gap: 6px; justify-items: start; }
 .paste textarea { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--paper); color: var(--ink); font: inherit; font-size: 15px; resize: vertical; }
+.levelnote { grid-column: 1 / -1; margin: 0; }
 .levels { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px 18px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
 .field.check span { display: flex; gap: 6px; align-items: center; color: var(--ink); font-size: 14px; }
 .stylepick { display: flex; gap: 4px; flex-wrap: wrap; }

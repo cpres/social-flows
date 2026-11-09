@@ -180,6 +180,7 @@ def frame_size(s):
     return SHAPES.get(s.get("shape"), SHAPES["tall"])
 
 
+VOICE_DUCK = 0.3   # the song under the voice, as a share of its level (captions.js too)
 MIX_KEYS = {"A": "mixA", "B": "mixB", "music": "mixMusic", "voice": "mixVoice"}
 
 
@@ -1674,8 +1675,9 @@ def build_config(reel, rows, grid_bpm=None):
                                     "end": p["end"], "at": p["at"], **({"fx": p["fx"]} if p["fx"] else {})}
                                    for p in pieces],
                         "fit": bool(s.get("voiceFit", True)), "clean": bool(s.get("voiceClean", True)),
-                        "song_under": float(s.get("voiceSongUnder", 0.15)),
-                        "song_between": float(s.get("voiceSongBetween", 0.3))}
+                        # the song dips under the voice; the Music fader sets its level
+                        "song_under": round(float(s.get("musicVolume", 0.8)) * VOICE_DUCK, 3),
+                        "song_between": float(s.get("musicVolume", 0.8))}
     if lines and s.get("captions", True):
         cfg["captions"] = {"style": s.get("captionStyle"), "font": s.get("captionFont"),
                            "background": s.get("captionBg"), "size": float(s.get("captionSize") or 1),
