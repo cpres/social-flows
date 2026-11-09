@@ -54,6 +54,16 @@ def download_model():
         raise SystemExit(f"  The download stopped: {type(e).__name__}: {e}")
 
 
+def decode(path):
+    """The take as 16 kHz mono samples, decoded by ffmpeg. faster-whisper's own
+    decoding goes through PyAV, which since version 15 refuses an option it
+    passes (metadata_errors), so it's handed the samples instead."""
+    import numpy as np
+    raw = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-ac", "1", "-ar", "16000",
+                          "-f", "f32le", "-"], capture_output=True, check=True).stdout
+    return np.frombuffer(raw, dtype=np.float32)
+
+
 def transcription_available():
     try:
         import faster_whisper  # noqa: F401
@@ -194,7 +204,7 @@ class Voice:
             audio = self.audio(path)
             model = self._load_model(job)
             job["stage"] = "listening"
-            segments, info = model.transcribe(str(audio), word_timestamps=True, vad_filter=True,
+            segments, info = model.transcribe(decode(audio), word_timestamps=True, vad_filter=True,
                                               beam_size=5)
             words = []
             for seg in segments:
