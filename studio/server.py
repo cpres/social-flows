@@ -804,6 +804,68 @@ def move_files(name: str, body: dict = Body(...)):
     return {"folder": to, "moved": moved, "failed": failed, "emptied": emptied}
 
 
+def to_trash(path: Path):
+    """Put a file in the Trash, not gone for good: through Finder on a Mac (so
+    Finder's Put Back works), else into ~/.Trash under a name that's free."""
+    if sys.platform == "darwin":
+        script = f'tell application "Finder" to delete POSIX file {json.dumps(str(path))}'
+        r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=30)
+        if r.returncode == 0 and not path.exists():
+            return
+    trash = Path.home() / ".Trash"
+    trash.mkdir(exist_ok=True)
+    target, n = trash / path.name, 2
+    while target.exists():
+        target = trash / f"{path.stem} ({n}){path.suffix}"
+        n += 1
+    shutil.move(str(path), str(target))
+
+
+@app.post("/api/folders/{name}/delete")
+def delete_files(name: str, body: dict = Body(...)):
+    """Delete clips and photos from this shoot folder (accidental ones).
+
+    {files: [names]}
+
+    They go to the Trash, so they can still be put back from there. Their
+    parts in reels go too (that's what a deleted file means for a cut); the
+    count comes back as `parts`. A folder left with nothing in it is removed.
+    """
+    src = resolve(name)
+    paths = [resolve(name, f) for f in body.get("files") or []]
+    if not paths:
+        raise HTTPException(400, "Pick at least one file to delete")
+
+    lib.scan([src])   # so every file has its row before it goes
+    deleted, failed, parts = [], [], 0
+    for p in paths:
+        try:
+            if p.parent != src or not lib.kind_of(p):
+                raise ValueError("not a clip or photo in this folder")
+            rel = p.relative_to(ROOT).as_posix()
+            to_trash(p)
+            with lib.connect() as db:
+                row = db.execute("SELECT id FROM media WHERE path = ?", (rel,)).fetchone()
+                if row:
+                    parts += db.execute("SELECT COUNT(*) FROM reel_items WHERE media_id = ?",
+                                        (row["id"],)).fetchone()[0]
+                    db.execute("DELETE FROM media WHERE id = ?", (row["id"],))   # parts and pick cascade
+            deleted.append(p.name)
+        except Exception as e:   # one bad file shouldn't stop the rest
+            failed.append({"name": p.name, "error": str(e)})
+    lib.scan([src])
+
+    emptied = False
+    if all(p.name == ".DS_Store" for p in src.iterdir()):
+        for p in src.iterdir():
+            p.unlink()
+        src.rmdir()
+        emptied = True
+        with lib.connect() as db:
+            db.execute("DELETE FROM weave_drafts WHERE key = ?", (draft_key(folder=name),))
+    return {"deleted": deleted, "failed": failed, "parts": parts, "emptied": emptied}
+
+
 # ---------------------------------------------------------------- reels
 
 @app.get("/api/reels")

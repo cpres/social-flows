@@ -24,6 +24,8 @@ export const api = {
   relayPlan: (name, opts = {}) => send('POST', `/api/folders/${enc(name)}/relay-plan`, opts),
   // Move files to another shoot folder: { files, to, create } -> { folder, moved, failed, emptied }.
   moveFiles: (name, body) => send('POST', `/api/folders/${enc(name)}/move`, body),
+  // Delete files (to the Trash): { files } -> { deleted, failed, parts, emptied }.
+  deleteFiles: (name, files) => send('POST', `/api/folders/${enc(name)}/delete`, { files }),
 
   reels: () => fetch('/api/reels').then(json),
   reel: (id) => fetch(`/api/reels/${id}`).then(json),

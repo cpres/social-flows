@@ -20,8 +20,8 @@
       <NewReelDialog v-if="makingReel" :folder="name" :default-name="folderTitle(name)" @close="makingReel = false" />
       <button
         class="btn" :class="{ active: picking }" @click="picking ? stopPicking() : startPicking()" :disabled="!media.length"
-        title="Move clips or photos into another shoot folder"
-      >↪ Move files</button>
+        title="Move clips or photos into another shoot folder, or delete them"
+      >↪ Move or delete files</button>
     </section>
     <p v-if="imported?.length && !picking" class="justin muted">
       Just imported {{ imported.length }} file{{ imported.length === 1 ? '' : 's' }} here.
@@ -30,6 +30,9 @@
     <p v-if="movedTo" class="justin">
       Moved {{ movedTo.count }} file{{ movedTo.count === 1 ? '' : 's' }} to
       <RouterLink :to="`/shoot/${encodeURIComponent(movedTo.folder)}`">{{ folderTitle(movedTo.folder) }}</RouterLink>.
+    </p>
+    <p v-if="deletedCount" class="justin">
+      Deleted {{ deletedCount }} file{{ deletedCount === 1 ? '' : 's' }}. They're in the Trash if you want them back.
     </p>
     <WeavePrompt
       v-if="offer" :videos="offer.videos" :long="offer.long" :photos="offer.photos" :draft="!!draftAt"
@@ -45,6 +48,7 @@
           <span class="spacer"></span>
           <button class="btn small" @click="stopPicking">Cancel</button>
           <button class="btn small primary" :disabled="!picked.size" @click="moving = true">Move {{ picked.size || '' }}…</button>
+          <button class="btn small danger" :disabled="!picked.size" @click="deleting = true">Delete…</button>
         </div>
         <button class="refresh" @click="reload" :disabled="refreshing" title="Look for new clips in this folder">
           ↻ {{ refreshing ? 'Checking…' : 'Check for new clips' }}
@@ -175,6 +179,11 @@
       v-if="moving" :from="name" :files="media.filter((m) => picked.has(m.id))"
       :all="picked.size === media.length" @close="moving = false" @moved="moved"
     />
+    <DeleteDialog
+      v-if="deleting" :from="name" :files="media.filter((m) => picked.has(m.id))"
+      :parts="items.filter((p) => picked.has(p.mediaId)).length"
+      :all="picked.size === media.length" @close="deleting = false" @deleted="deleted"
+    />
   </main>
 </template>
 
@@ -187,6 +196,7 @@ import { useRefreshOnFocus } from '../refresh'
 import { clockTime, defaultStart, fitRange, fmtTime, folderTitle, reelColor, savedAt } from '../time'
 import ClipCard from '../components/ClipCard.vue'
 import MoveDialog from '../components/MoveDialog.vue'
+import DeleteDialog from '../components/DeleteDialog.vue'
 import ReelFrame from '../components/ReelFrame.vue'
 import TimingFields from '../components/TimingFields.vue'
 import TrimBar from '../components/TrimBar.vue'
@@ -455,10 +465,12 @@ const makingReel = ref(false)
 // ---------------------------------------------------------------- moving
 
 // Pick files in the list, then move them to another shoot folder (say, after
-// importing a day into the wrong one). Their parts in reels follow them.
+// importing a day into the wrong one), or delete accidental ones (to the Trash).
 const picking = ref(false)
 const picked = ref(new Set())   // media ids
 const moving = ref(false)
+const deleting = ref(false)
+const deletedCount = ref(0)     // after a delete
 const movedTo = ref(null)       // { folder, count } after a move
 
 function startPicking(files) {
@@ -467,6 +479,7 @@ function startPicking(files) {
   picked.value = new Set(ids.filter(Boolean))
   picking.value = true
   movedTo.value = null
+  deletedCount.value = 0
 }
 function stopPicking() {
   picking.value = false
@@ -489,6 +502,19 @@ async function moved(r) {
     return
   }
   movedTo.value = { folder: r.folder, count: r.moved.length }
+  await reload()
+}
+
+async function deleted(r) {
+  deleting.value = false
+  stopPicking()
+  if (imported.value) dismissOffer()
+  if (r.emptied) {
+    router.replace('/')   // nothing left in this folder
+    return
+  }
+  movedTo.value = null
+  deletedCount.value = r.deleted.length
   await reload()
 }
 
@@ -524,6 +550,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 </script>
 
 <style scoped>
+.pickbar .btn.danger { color: var(--danger); border-color: var(--danger); }
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
 .hint { font-size: 12px; margin: 8px 0 0; }
 .count {
