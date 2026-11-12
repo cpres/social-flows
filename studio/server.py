@@ -419,12 +419,15 @@ def folder_to_reel(name: str, body: dict = Body(default={})):
         cur = db.execute("INSERT INTO reels (name, settings, created_at, updated_at) "
                          "VALUES (?, ?, ?, ?)", (reel_name, json.dumps(settings), now(), now()))
         reel_id = cur.lastrowid
+        # Left out of the flow (the New reel dialog's Leave things out): in the
+        # reel, out of the cut, so they're there to put back.
+        leave = {int(i) for i in body.get("exclude") or []}
         for pos, m, start, length, pick in folder_parts(db, name, side):
             db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length, "
-                       "focus_x, focus_y, zoom, layout, frames) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '{}')",
+                       "focus_x, focus_y, zoom, layout, frames, keep) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?)",
                        (reel_id, lib.original_of(db, m["id"]), pos, start, length,
                         pick.get("focusX", 0.5), pick.get("focusY", 0.5), pick.get("zoom", 1),
-                        pick.get("layout", "") if m["kind"] == "video" else ""))
+                        pick.get("layout", "") if m["kind"] == "video" else "", 0 if m["id"] in leave else 1))
         style = body.get("style") or "standard"
         if style in ("stack", "relay"):
             apply_style(db, reel_id, style, body)
@@ -471,7 +474,7 @@ def relay_opts(body):
     choice), how long photos stay, the long-clip cap (or a target length for
     the reel, which sets it), stretches per long clip, quiet moments."""
     return {"dial": relay_mod.dial_of(body.get("dial"), body.get("mix")),
-            "photo_seconds": min(max(float(body.get("photo") or body.get("solo") or relay_mod.PHOTO_SECONDS), 0.5), 30),
+            "photo_seconds": min(max(float(body.get("photo") or body.get("solo") or relay_mod.PHOTO_SECONDS), relay_mod.MIN_SCENE), 30),
             "cap": float(body["cap"]) if body.get("cap") else None,
             "most": int(min(max(int(body.get("most") or relay_mod.MOST_DEFAULT), 1), relay_mod.MOST_MAX)),
             "target": min(max(float(body["target"]), 10.0), 1800.0) if body.get("target") else None,
@@ -573,22 +576,28 @@ def relay_fit(bases, opts):
 def relay_preview(name: str, body: dict = Body(default={})):
     """What a Relay reel from this folder would look like at each dial
     setting, for the New reel dialog: {plans: [{dial, stats, bar}] (dial 1
-    to 10), approx: quiet moments not measured yet for some clips}."""
+    to 10), approx: quiet moments not measured yet for some clips}.
+    {exclude: [folder media ids]} leaves those out; stats.tooShort: the
+    files that can't be on screen for relay.MIN_SCENE however it's planned."""
     folder = resolve(name)
     opts = relay_opts(body)
     side = folder_sidecar(folder)
     with lib.connect() as db:
+        leave = {int(i) for i in body.get("exclude") or []}
         parts = [{"kind": m["kind"], "duration": m["duration"], "start": start, "length": length,
-                  "media_id": lib.original_of(db, m["id"]), "path": m["path"], "captured_at": m["captured_at"]}
-                 for _, m, start, length, _ in folder_parts(db, name, side)]
+                  "media_id": lib.original_of(db, m["id"]), "path": m["path"], "captured_at": m["captured_at"],
+                  "file_id": m["id"]}
+                 for _, m, start, length, _ in folder_parts(db, name, side) if m["id"] not in leave]
         bases, missing = relay_bases(db, parts, opts, cached_only=True)
     plans = []
     for d in range(relay_mod.DIAL_MIN, relay_mod.DIAL_MAX + 1):
         items, plan, cap = relay_fit(bases, {**opts, "dial": d})
         # long clips playing just the moments around their highlights, marked or suggested
         on = {k: len({it["_row"] for it in items if it.get("pinned") == k}) for k in ("marked", "suggested")}
+        # the files (folder media ids) that can't be on screen 3s, however it's planned
+        short = sorted({parts[items[i]["_row"]]["file_id"] for i in plan["stats"]["tooShort"]})
         plans.append({"dial": d, "stats": {**plan["stats"], "cap": cap, "highlightClips": on["marked"],
-                                           "suggestedClips": on["suggested"]},
+                                           "suggestedClips": on["suggested"], "tooShort": short},
                       "bar": relay_mod.bar(plan)})
     return {"plans": plans, "approx": missing}
 

@@ -56,9 +56,11 @@ import math
 
 # ---------------------------------------------------------------- constants (tune here)
 
-MIN_SCENE = 1.0        # no scene shorter (as scenes.py SOLO_A_MIN)
-MIN_SOLO = 1.5         # a host's full-frame time before, between and after cameos
-MIN_OVERLAP = 1.0      # a split shorter than this is a straight cut instead
+# Nothing on screen for less than 3s: shorter is frantic. A full-frame moment,
+# a split, a host alone between cameos: each at least this long, or not at all.
+MIN_SCENE = 3.0        # no scene shorter
+MIN_SOLO = 3.0         # a host's full-frame time before, between and after cameos
+MIN_OVERLAP = 3.0      # a split shorter than this is a straight cut instead
 TRANSITION = 0.4       # the slide in / out (the engine draws its own moves)
 LONG_THRESHOLD = 10.0  # a video this long or longer is LONG
 CAMEO_GAP = (6.0, 1.5)  # host alone between cameos: lerp(dial 1, dial 10)
@@ -488,7 +490,9 @@ def _plan(items, opts, dial):
     stats = {"totalSeconds": round(total, 3), "splitSeconds": round(split, 3), "splitPct": split_pct,
              "longCount": len({e.clip if e.clip is not None else ("i", e.idx) for e in entries if e.kind == LONG}),
              "longPieces": kinds.count(LONG), "shortCount": kinds.count(SHORT), "photoCount": photos,
-             "cameoCount": len(guests), "limitedBy": "photos" if limited else None, "dial": dial, "planDial": dial}
+             "cameoCount": len(guests), "limitedBy": "photos" if limited else None, "dial": dial, "planDial": dial,
+             # items that can't be on screen for MIN_SCENE however it's planned (a 1.7s clip)
+             "tooShort": [e.idx for e in entries if e.life < MIN_SCENE - 1e-9]}
     return {"lanes": {"A": [], "B": lanes_b}, "scenes": scenes, "timeline": out_timeline, "stats": stats}
 
 

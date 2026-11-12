@@ -4,7 +4,7 @@
       <h2>New reel</h2>
       <label class="field">
         Name
-        <input ref="nameEl" v-model="name" @keydown.enter="make" />
+        <input ref="nameEl" v-model="name" @keydown.enter="make()" />
       </label>
       <label class="field" v-if="!folder">
         From
@@ -96,19 +96,34 @@
         </label>
         <div class="tbtns">
           <span class="muted">Photos stay on screen for</span>
-          <button v-for="x in [2, 3, 4, 6]" :key="x" class="btn small" :class="{ active: photo === x }" @click="photo = x">{{ x }}s</button>
+          <button v-for="x in [3, 4, 6]" :key="x" class="btn small" :class="{ active: photo === x }" @click="photo = x">{{ x }}s</button>
           <small class="muted">(short clips play their own length)</small>
         </div>
+        <div v-if="issue" class="issue">
+          <span>
+            <b>To keep everything on screen 3s or more, some videos or photos should come out.</b>
+            <small>
+              <template v-if="overSecs > 0">Even with the shortest stretches it's about {{ fmtTime(plan.stats.totalSeconds) }}, over {{ fmtTime(target) }}. </template>
+              <template v-if="tooShort.length">{{ count(tooShort.length, 'clip is', 'clips are') }} under 3s however it's cut. </template>
+            </small>
+          </span>
+          <button class="btn primary small" @click="leaving = true">Choose what to leave out…</button>
+        </div>
+        <p v-else-if="exclude.length" class="muted small">{{ count(exclude.length, 'thing', 'things') }} left out of the flow. <button class="link" @click="leaving = true">Change</button></p>
         <p v-if="summary" class="estimate">
           {{ summary }}<i v-if="plan.stats.limitedBy === 'photos'" class="limited">Mostly photos, so splits stay short.</i>
           <small v-if="approx" class="muted"> (a little less once quiet moments are measured)</small>
         </p>
         <small class="muted">In the order they were shot. A photo shot while a long clip was recording comes in under it at that moment. A long clip with ★ highlights (marked on the shoot page, or ☆ suggested from where things move) plays just the moments around them; one without plays all of itself less a moment at each end, or the long stretch you picked. You can trim any of it in the reel afterwards.</small>
       </div>
+      <LeaveOut
+        v-if="leaving" :files="files" v-model:exclude="exclude" :plan="plan" :target="target" :busy="busy"
+        @close="leaving = false" @make="make(true)"
+      />
       <p v-if="error" class="warn small">{{ error }}</p>
       <div class="controls">
         <button class="btn" @click="$emit('close')">Cancel</button>
-        <button class="btn primary" :disabled="busy || !name.trim()" @click="make">{{ style === 'weave' ? 'Weave it…' : busy ? 'Making…' : 'Make the reel' }}</button>
+        <button class="btn primary" :disabled="busy || !name.trim()" @click="make()">{{ style === 'weave' ? 'Weave it…' : busy ? 'Making…' : 'Make the reel' }}</button>
       </div>
     </div>
   </div>
@@ -126,6 +141,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
 import { fmtTime, folderTitle } from '../time'
+import LeaveOut, { overBy } from './LeaveOut.vue'
 
 const props = defineProps({
   folder: { type: String, default: '' },     // making it from this shoot
@@ -160,6 +176,19 @@ const AROUNDS = [4, 6, 10, 16, 20]
 const around = ref(10)
 const quiet = ref(false)
 const photo = ref(4)
+// Left out of the flow (folder media ids): see LeaveOut. The folder's files, for it.
+const exclude = ref([])
+const leaving = ref(false)
+const files = ref([])
+watch(source, async (f) => {
+  exclude.value = []
+  files.value = []
+  if (!f) return
+  try {
+    const d = await api.folder(f)
+    files.value = d.media.filter((m) => !m.missing).sort((a, b) => (a.capturedAt || 0) - (b.capturedAt || 0))
+  } catch { /* the list just stays empty */ }
+}, { immediate: true })
 // How much is split, 1 (never) to 10 (whenever two things are there to share
 // the frame). A preference: photos can't sit on running video for long.
 const dial = ref(5)
@@ -170,14 +199,14 @@ const plans = ref([])
 const approx = ref(false)
 let asked = 0
 let timer = null
-watch([source, style, photo, cap, most, quiet, target, around], () => {
+watch([source, style, photo, cap, most, quiet, target, around, exclude], () => {
   clearTimeout(timer)
   if (style.value !== 'relay' || !source.value) { plans.value = []; return }
   timer = setTimeout(async () => {
     const n = ++asked
     try {
       const r = await api.relayPlan(source.value, { photo: photo.value, cap: cap.value || null, most: most.value, quiet: !target.value && quiet.value,
-                                                         target: target.value || null, around: around.value })
+                                                         target: target.value || null, around: around.value, exclude: exclude.value })
       if (n === asked) { plans.value = r.plans; approx.value = r.approx }
     } catch { if (n === asked) plans.value = [] }
   }, 150)
@@ -207,6 +236,11 @@ const summary = computed(() => {
   const short = s.splitPct ? 'all of the footage; splitting overlaps clips, so turn the split down for longer' : 'all of the footage there is'
   return `${what} · about ${fmtTime(s.totalSeconds)}${off ? (s.totalSeconds > target.value ? ' (the shortest it can be with this footage)' : ` (${short})`) : ''} · ${s.splitPct}% split`
 })
+// What keeps every moment from being 3s or more (relay.py MIN_SCENE): files
+// under 3s themselves, or more than fits the length picked.
+const tooShort = computed(() => plan.value?.stats.tooShort || [])
+const overSecs = computed(() => (target.value && plan.value ? overBy(plan.value.stats.totalSeconds, target.value) : 0))
+const issue = computed(() => style.value === 'relay' && !!plan.value && (tooShort.value.length > 0 || overSecs.value > 0))
 const nameEl = ref(null)
 onMounted(() => nextTick(() => nameEl.value?.focus()))
 // A name some reel already has becomes its next take ("… take 3"), so making
@@ -220,9 +254,12 @@ onMounted(async () => {
   } catch {}
 })
 
-async function make() {
+// anyway: made from the leave-out screen as it stands. Otherwise, while
+// something would be on screen under 3s, that screen comes up first.
+async function make(anyway = false) {
   if (!name.value.trim() || busy.value) return
   error.value = ''
+  if (!anyway && issue.value) { leaving.value = true; return }
   if (style.value === 'weave') {
     router.push({ path: `/weave/${encodeURIComponent(source.value)}`, query: { name: name.value.trim() } })
     return
@@ -232,7 +269,7 @@ async function make() {
     const r = source.value
       ? await api.folderToReel(source.value, name.value.trim(), { style: style.value, dial: dial.value, photo: photo.value,
                                                                   cap: cap.value || null, most: most.value, quiet: !target.value && quiet.value,
-                                                                  around: around.value,
+                                                                  around: around.value, exclude: style.value === 'relay' ? exclude.value : [],
                                                                   target: style.value === 'relay' ? target.value || null : null })
       : await api.createReel(name.value.trim())
     router.push(`/reel/${r.id}`)
@@ -246,6 +283,10 @@ async function make() {
 
 <style scoped>
 .onpins { margin: 0 0 6px; }
+.issue { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid #d8a24a; background: rgb(233 178 122 / 18%); }
+.issue > span { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.issue small { color: var(--muted); }
 .newreel { display: flex; flex-direction: column; gap: 12px; }
 .newreel h2 { margin: 0; }
 .styles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }

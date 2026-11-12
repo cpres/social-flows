@@ -317,7 +317,17 @@ folder* (a shoot) ask for a name and a style:
 - **Weave:** opens the Weave wizard (below).
 - **Stack:** the longest clip goes in lane A, on top the whole way at real
   speed, with the others underneath.
-- **Relay:** long-form reels that stitch themselves. The rule: when one of
+- **Relay:** nothing is on screen for less than 3 seconds (`relay.MIN_SCENE`):
+  every full-frame moment, split and host-alone gap between cameos is 3s
+  or more, or isn't there (a shorter split is a straight cut), and photos
+  stay 3, 4 or 6s. When it can't keep to that (clips under 3s themselves,
+  or more footage than fits the length picked even at the shortest
+  stretches), the dialog says so, and *Make the reel* first opens **Leave
+  things out of the flow**: the shoot's clips and photos full screen, in
+  order, each a click to leave out (or put back), with the estimate
+  following and turning green when it fits. What's left out goes in the
+  reel out of the cut, ready to put back.
+- **Relay (how it flows):** long-form reels that stitch themselves. The rule: when one of
   the two things on screen runs out of time, it leaves and the other takes
   the full frame. Clips go in the order they were shot. Near a clip's end
   the next comes in underneath (a **handoff**), the first finishes, and the

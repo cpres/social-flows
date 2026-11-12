@@ -170,9 +170,14 @@ class Fixtures(unittest.TestCase):
         plan = relay.plan_relay(ALL_PHOTOS, {"dial": 10, "photo_seconds": 4})
         st = plan["stats"]
         self.assertEqual(st["limitedBy"], "photos")
-        self.assertGreater(st["splitPct"], 0)
-        for seg in splits(plan):
-            self.assertLessEqual(seg["len"], 2.0)   # short photo + photo splits
+        # a 4s photo can't be split for 3s and alone for 3s too: no splits at all
+        self.assertEqual(st["splitPct"], 0)
+        # 6s photos can: splits of at least 3s
+        six = relay.plan_relay(ALL_PHOTOS, {"dial": 10, "photo_seconds": 6})
+        self.assertGreater(six["stats"]["splitPct"], 0)
+        self.assertEqual(six["stats"]["limitedBy"], "photos")
+        for seg in splits(six):
+            self.assertGreaterEqual(seg["len"], relay.MIN_SCENE - 0.01)
         on = {}
         for seg in plan["timeline"]:
             for k in (seg["top"], seg["bottom"]):
@@ -180,6 +185,16 @@ class Fixtures(unittest.TestCase):
                     on[k] = on.get(k, 0) + seg["len"]
         self.assertTrue(all(v <= 4.001 for v in on.values()), on)
         self.assertLess(relay.plan_relay(ALL_PHOTOS, {"dial": 6})["stats"]["splitPct"], 1)
+
+    def test_nothing_under_three_seconds(self):
+        for name, items in FIXTURES.items():
+            for d in range(1, 11):
+                plan = relay.plan_relay(items, {"dial": d, "photo_seconds": 4})
+                tiny = [s for s in plan["timeline"] if s["len"] < 3.0 - 0.01]
+                self.assertEqual(tiny, [], (name, d))
+        # what can't be on screen 3s however it's planned is said
+        items = [video(at(1), 1.7), photo(at(2)), video(at(3), 30.0)]
+        self.assertEqual(relay.plan_relay(items, {"dial": 5})["stats"]["tooShort"], [0])
 
     def test_one_long_six_photos(self):
         plan4 = relay.plan_relay(ONE_LONG_SIX_PHOTOS, {"dial": 4, "photo_seconds": 4})
