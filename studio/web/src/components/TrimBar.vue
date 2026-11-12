@@ -41,7 +41,8 @@
       ></button>
     </div>
     <div class="ruler muted">
-      <span>0:00</span><span>{{ fmtTime(duration / 2) }}</span><span>{{ fmtTime(duration) }}</span>
+      <span>0:00</span><span>{{ fmtTime(duration / 2) }}</span>
+      <span class="end">{{ fmtTime(duration) }}<slot name="corner"></slot></span>
     </div>
   </div>
 </template>
@@ -194,5 +195,6 @@ function up() {
   border-radius: 3px; cursor: pointer; opacity: 0.85;
 }
 .part:hover { opacity: 1; outline: 2px solid var(--paper); }
+.ruler .end { display: inline-flex; align-items: center; gap: 8px; }
 .ruler { display: flex; justify-content: space-between; font-size: 11px; margin-top: 4px; font-family: ui-monospace, monospace; }
 </style>

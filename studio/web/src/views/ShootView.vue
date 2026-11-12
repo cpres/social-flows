@@ -103,17 +103,19 @@
             @update="setRange" @seek="player.seek" @pick="activeId = $event"
             @pin-click="(i) => jumpTo(pins[i])" @pin-move="movePin" @pin-drop="savePins()" @pin-remove="removePin"
             @suggest-click="(i) => jumpTo(suggested[i])"
-          />
+          >
+            <template #corner>
+              <button
+                class="speed" :class="{ on: rate > 1 }" @click="nextRate"
+                :title="rate > 1 ? `Playing at ${rate}×: click for ${rate === 2 ? '4×' : 'normal speed'} (S)` : 'Watch faster: click for 2×, again for 4× (S)'"
+              >▶▶ {{ rate > 1 ? `${rate}×` : '1×' }}</button>
+            </template>
+          </TrimBar>
           <div class="controls">
             <button class="btn" @click="player.toggle">{{ player.playing.value ? 'Pause' : 'Play' }} <kbd>Enter</kbd></button>
             <button class="btn" :class="{ active: player.playingPart.value }" @click="player.playPart">▶ Play selection <kbd>Space</kbd></button>
             <span class="muted mono">{{ fmtTime(player.playhead.value) }}</span>
             <span class="spacer"></span>
-            <span class="speed" title="Playback speed (S)">
-              <button
-                v-for="r in RATES" :key="r" class="btn small" :class="{ active: rate === r }" @click="setRate(r)"
-              >{{ r }}×</button>
-            </span>
             <button class="btn small" @click="setIn">Start here <kbd>I</kbd></button>
             <button class="btn small" @click="setOut">End here <kbd>O</kbd></button>
           </div>
@@ -462,6 +464,8 @@ function applyRate() {
   const v = player.video.value
   if (v) { v.defaultPlaybackRate = rate.value; v.playbackRate = rate.value }
 }
+// The toggle (and S): 2×, then 4×, then back to normal.
+const nextRate = () => setRate(RATES[(RATES.indexOf(rate.value) + 1) % RATES.length])
 function setRate(r) {
   rate.value = r
   try { localStorage.setItem('shootRate', String(r)) } catch {}
@@ -684,7 +688,7 @@ function onKey(e) {
   else if ((k === 'i' || k === 'I') && video) setIn()
   else if ((k === 'o' || k === 'O') && video) setOut()
   else if ((k === 'h' || k === 'H') && video) addPin()
-  else if ((k === 's' || k === 'S') && video) setRate(RATES[(RATES.indexOf(rate.value) + 1) % RATES.length])
+  else if ((k === 's' || k === 'S') && video) nextRate()
   else if (k === 'ArrowDown') select(selected.value + 1)
   else if (k === 'ArrowUp') select(selected.value - 1)
   else if (k === 'ArrowLeft' && video) { setRange({ ...range.value, start: range.value.start - (e.shiftKey ? 1 : 0.1) }); player.seek(range.value.start) }
@@ -703,7 +707,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .pickbar .btn.danger { color: var(--danger); border-color: var(--danger); }
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
 .btn.ghost { border-style: dashed; opacity: 0.8; }
-.speed { display: inline-flex; gap: 4px; margin-right: 8px; }
+.speed {
+  font: 600 12px ui-monospace, monospace; padding: 2px 8px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--sage); background: transparent; color: var(--forest); opacity: 0.75;
+}
+.speed:hover { opacity: 1; }
+.speed.on { background: var(--forest); color: #f2c94c; border-color: var(--forest); opacity: 1; }
 .moments-hint { font-size: 12px; margin: 4px 0 8px; }
 .amount { margin-bottom: 8px; }
 .hint { font-size: 12px; margin: 8px 0 0; }
