@@ -335,8 +335,17 @@ class Highlights(unittest.TestCase):
         # a 30s clip gets one stretch: the highlight nearest the middle
         self.assertEqual(relay.pinned_stretches(0, 30, [3, 14, 27], 4, 4), [(12.0, 4.0)])
 
-    def test_no_cap_plays_it_all(self):
-        self.assertIsNone(relay.pinned_stretches(0, 180, [50], None, 4))
+    def test_without_a_cap_just_the_moments(self):
+        # no cap: still only `around` seconds about each highlight, never the whole clip
+        self.assertEqual(relay.pinned_stretches(0, 40, [10, 30], None, 4, around=6, every=True),
+                         [(7.0, 6.0), (27.0, 6.0)])
+        self.assertIsNone(relay.pinned_stretches(0, 40, [], None, 4))
+
+    def test_marked_highlights_all_play(self):
+        # a 30s clip gets one stretch from suggestions, but every marked highlight plays
+        self.assertEqual(len(relay.pinned_stretches(0, 30, [3, 14, 27], None, 4, around=4)), 1)
+        self.assertEqual(relay.pinned_stretches(0, 30, [3, 14, 27], None, 4, around=4, every=True),
+                         [(1.0, 4.0), (12.0, 4.0), (25.0, 4.0)])
 
     def test_amounts_and_suggestions(self):
         self.assertEqual((relay.most_for(4, -1), relay.most_for(4, 0), relay.most_for(4, 1)), (2, 4, 8))

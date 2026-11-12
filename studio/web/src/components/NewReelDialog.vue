@@ -49,8 +49,21 @@
             :title="x.v ? `Long clips' stretches are made as long as fits a reel of about ${x.label}` : 'Long clips play as long as you set below'"
           >{{ x.label }}</button>
         </div>
-        <div class="tbtns" v-if="target">
-          <span class="muted">Long clips ({{ LONG }}s or more) play</span>
+        <div class="tbtns">
+          <span class="muted">Around each ★ highlight, play</span>
+          <button
+            v-for="x in AROUNDS" :key="x" class="btn small" :class="{ active: around === x }" @click="around = x"
+            :title="`${x / 2}s before each highlight and ${x / 2}s after`"
+          >{{ x }}s</button>
+          <small class="muted">(half before, half after; a long clip with highlights plays just those moments)</small>
+        </div>
+        <p v-if="plan && (plan.stats.highlightClips || plan.stats.suggestedClips)" class="muted small onpins">
+          <template v-if="plan.stats.highlightClips">{{ count(plan.stats.highlightClips, 'long clip plays', 'long clips play') }} just the moments around your highlights</template><template
+            v-if="plan.stats.highlightClips && plan.stats.suggestedClips">; </template><template
+            v-if="plan.stats.suggestedClips">{{ count(plan.stats.suggestedClips, 'with', 'with') }} none marked {{ plan.stats.suggestedClips === 1 ? 'plays' : 'play' }} around its suggested ☆ moments</template>.
+        </p>
+        <div class="tbtns" v-if="target && !allOnPins">
+          <span class="muted">Other long clips ({{ LONG }}s or more) play</span>
           <span v-if="plan">
             <template v-if="plan.stats.cap">in stretches of <b>{{ plan.stats.cap }}s</b>, to fit</template>
             <template v-else>all of themselves (it's under {{ fmtTime(target) }} even so)</template>
@@ -82,7 +95,7 @@
           {{ summary }}<i v-if="plan.stats.limitedBy === 'photos'" class="limited">Mostly photos, so splits stay short.</i>
           <small v-if="approx" class="muted"> (a little less once quiet moments are measured)</small>
         </p>
-        <small class="muted">In the order they were shot. A photo shot while a long clip was recording comes in under it at that moment. A long clip plays all of itself less a moment at each end, or the long stretch you picked on the shoot page; you can trim any of it in the reel afterwards.</small>
+        <small class="muted">In the order they were shot. A photo shot while a long clip was recording comes in under it at that moment. A long clip with ★ highlights (marked on the shoot page, or ☆ suggested from where things move) plays just the moments around them; one without plays all of itself less a moment at each end, or the long stretch you picked. You can trim any of it in the reel afterwards.</small>
       </div>
       <p v-if="error" class="warn small">{{ error }}</p>
       <div class="controls">
@@ -134,6 +147,9 @@ const TARGETS = [{ v: 30, label: '0:30' }, { v: 45, label: '0:45' }, { v: 60, la
                  { v: 120, label: '2:00' }, { v: 180, label: '3:00' }, { v: 0, label: 'As long as it takes' }]
 const target = ref(90)
 const most = ref(4)   // stretches per long clip, at most (relay.py MOST_DEFAULT)
+// Seconds of a long clip played around each of its highlights (relay.py AROUND_DEFAULT).
+const AROUNDS = [4, 6, 10, 16, 20]
+const around = ref(10)
 const quiet = ref(false)
 const photo = ref(4)
 // How much is split, 1 (never) to 10 (whenever two things are there to share
@@ -146,19 +162,24 @@ const plans = ref([])
 const approx = ref(false)
 let asked = 0
 let timer = null
-watch([source, style, photo, cap, most, quiet, target], () => {
+watch([source, style, photo, cap, most, quiet, target, around], () => {
   clearTimeout(timer)
   if (style.value !== 'relay' || !source.value) { plans.value = []; return }
   timer = setTimeout(async () => {
     const n = ++asked
     try {
       const r = await api.relayPlan(source.value, { photo: photo.value, cap: cap.value || null, most: most.value, quiet: quiet.value,
-                                                         target: target.value || null })
+                                                         target: target.value || null, around: around.value })
       if (n === asked) { plans.value = r.plans; approx.value = r.approx }
     } catch { if (n === asked) plans.value = [] }
   }, 150)
 }, { immediate: true })
 const plan = computed(() => plans.value.find((p) => p.dial === dial.value) || null)
+// Every long clip plays just the moments around its highlights (marked or suggested).
+const allOnPins = computed(() => {
+  const st = plan.value?.stats
+  return !!st?.longCount && (st.highlightClips || 0) + (st.suggestedClips || 0) >= st.longCount
+})
 const planBar = computed(() => plan.value?.bar?.length ? plan.value.bar : [[1, false]])
 const count = (n, one, many) => `${n} ${n === 1 ? one : many}`
 // 9 long clips, 5 photos (3 as cameos) · about 4:43.6 · 61% split
@@ -192,6 +213,7 @@ async function make() {
     const r = source.value
       ? await api.folderToReel(source.value, name.value.trim(), { style: style.value, dial: dial.value, photo: photo.value,
                                                                   cap: cap.value || null, most: most.value, quiet: quiet.value,
+                                                                  around: around.value,
                                                                   target: style.value === 'relay' ? target.value || null : null })
       : await api.createReel(name.value.trim())
     router.push(`/reel/${r.id}`)
@@ -204,6 +226,7 @@ async function make() {
 </script>
 
 <style scoped>
+.onpins { margin: 0 0 6px; }
 .newreel { display: flex; flex-direction: column; gap: 12px; }
 .newreel h2 { margin: 0; }
 .styles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }

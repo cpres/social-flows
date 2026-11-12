@@ -476,7 +476,9 @@ def relay_opts(body):
             "cap": float(body["cap"]) if body.get("cap") else None,
             "most": int(min(max(int(body.get("most") or relay_mod.MOST_DEFAULT), 1), relay_mod.MOST_MAX)),
             "target": min(max(float(body["target"]), 10.0), 1800.0) if body.get("target") else None,
-            "quiet": bool(body.get("quiet"))}
+            "quiet": bool(body.get("quiet")),
+            # seconds played around each highlight of a long clip (relay.pinned_stretches)
+            "around": min(max(float(body.get("around") or relay_mod.AROUND_DEFAULT), 2.0), 60.0)}
 
 
 def relay_bases(db, parts, opts, cached_only=False):
@@ -513,7 +515,7 @@ def relay_bases(db, parts, opts, cached_only=False):
     return bases, missing
 
 
-def expand_items(bases, cap, most):
+def expand_items(bases, cap, most, around=relay_mod.AROUND_DEFAULT):
     """What the relay planner needs: [{kind, duration, start, length, avail,
     shot_at, keep, clip, match, _row}], _row: which part it's from. A long
     clip plays the long stretch picked in its shoot, or the clip less a
@@ -533,13 +535,17 @@ def expand_items(bases, cap, most):
                 span, breath = (float(pick["start"]), float(pick["length"])), 0
             else:
                 span, breath = (0.0, it["duration"]), relay_mod.BREATH
-            # On its highlights (or, with none, the suggested moments), else spread evenly.
-            st = relay_mod.pinned_stretches(*span, b.get("pins") or b.get("suggested") or [], cap, mine) \
-                or relay_mod.stretches(*span, cap, breath=breath, most=mine)
+            # Just the moments around its highlights (all of the ones marked; with
+            # none, as many suggested ones as it gets stretches), else spread evenly.
+            pinned = relay_mod.pinned_stretches(*span, b.get("pins") or b.get("suggested") or [], cap, mine,
+                                                around, every=bool(b.get("pins")))
+            st = pinned or relay_mod.stretches(*span, cap, breath=breath, most=mine)
             # each stretch claims the photos shot up to halfway to its neighbours
             bounds = [0.0] + [(a + la + c) / 2 for (a, la), (c, _) in zip(st, st[1:])] + [it["duration"]]
             for k, (s, ln) in enumerate(st):
                 one = {**it, "start": s, "avail": ln, "clip": row_i, "match": (bounds[k], bounds[k + 1])}
+                if pinned:
+                    one["pinned"] = "marked" if b.get("pins") else "suggested"
                 if b["points"]:
                     one["keep"] = montage.quiet_cut(b["points"], s, ln)
                 items.append(one)
@@ -555,10 +561,11 @@ def relay_fit(bases, opts):
     from: with a target length, the stretch length whose reel comes
     closest to it (relay.fit_target). -> (items, plan, cap)."""
     if not opts.get("target"):
-        items = expand_items(bases, opts.get("cap"), opts["most"])
+        items = expand_items(bases, opts.get("cap"), opts["most"], opts["around"])
         return items, relay_mod.plan_relay(items, opts), opts.get("cap")
     longest = max([float(b["p"]["duration"] or 0) for b in bases if b["p"]["kind"] == "video"] or [0.0])
-    return relay_mod.fit_target(lambda cap: expand_items(bases, cap, opts["most"]), opts, opts["target"], longest)
+    return relay_mod.fit_target(lambda cap: expand_items(bases, cap, opts["most"], opts["around"]),
+                                opts, opts["target"], longest)
 
 
 @app.post("/api/folders/{name}/relay-plan")
@@ -576,8 +583,12 @@ def relay_preview(name: str, body: dict = Body(default={})):
         bases, missing = relay_bases(db, parts, opts, cached_only=True)
     plans = []
     for d in range(relay_mod.DIAL_MIN, relay_mod.DIAL_MAX + 1):
-        _, plan, cap = relay_fit(bases, {**opts, "dial": d})
-        plans.append({"dial": d, "stats": {**plan["stats"], "cap": cap}, "bar": relay_mod.bar(plan)})
+        items, plan, cap = relay_fit(bases, {**opts, "dial": d})
+        # long clips playing just the moments around their highlights, marked or suggested
+        on = {k: len({it["_row"] for it in items if it.get("pinned") == k}) for k in ("marked", "suggested")}
+        plans.append({"dial": d, "stats": {**plan["stats"], "cap": cap, "highlightClips": on["marked"],
+                                           "suggestedClips": on["suggested"]},
+                      "bar": relay_mod.bar(plan)})
     return {"plans": plans, "approx": missing}
 
 
@@ -639,7 +650,7 @@ def write_relay(db, reel_id, s, items, templates, opts, replace):
             out["grow"] = sc["grow"]
         s["scenes"].append(out)
     s["relay"] = {"dial": opts["dial"], "photo": opts["photo_seconds"], "cap": opts["cap"], "most": opts["most"],
-                  "quiet": opts["quiet"], "target": opts.get("target")}
+                  "quiet": opts["quiet"], "target": opts.get("target"), "around": opts["around"]}
     saved = []
     for it in items:
         one = {k: v for k, v in it.items() if k != "_row"}

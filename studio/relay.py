@@ -166,34 +166,40 @@ def suggest_moments(points, duration, n, breath=BREATH):
     return out
 
 
-def pinned_stretches(start, length, pins, cap, most=MOST_DEFAULT):
-    """A long clip's stretches placed on its highlights (pins, file seconds,
-    within start..start+length): as many as stretch_count allows for it (but
-    no more than there are pins), each up to `cap` long and centred on its
-    pin as far as the clip allows. With fewer stretches than pins, the pin
-    nearest where each evenly spread stretch would sit (one stretch: the pin
-    nearest the middle). Stretches that would overlap become one, so nothing
-    plays twice. [(start, length)] in file order."""
+AROUND_DEFAULT = 10.0   # seconds of a long clip played around each highlight
+
+
+def pinned_stretches(start, length, pins, cap, most=MOST_DEFAULT, around=AROUND_DEFAULT, every=False):
+    """A long clip with highlights (pins, file seconds, within
+    start..start+length) plays only the moments around them, never all of
+    itself: a stretch `around` seconds long (shorter if the cap is, or the
+    clip) centred on each pin as far as the clip allows. every: all of the
+    pins (ones marked by hand); else (suggested ones) as many as
+    stretch_count allows, the pin nearest where each evenly spread stretch
+    would sit (one stretch: the pin nearest the middle). Stretches that would
+    overlap become one, so nothing plays twice. [(start, length)] in file
+    order, or None with no pins."""
     pins = sorted(t for t in pins if start <= t <= start + length)
-    if not pins or not cap:
+    if not pins:
         return None
-    even = stretches(start, length, cap, most=most)
-    n = min(len(even), len(pins)) if len(even) > 1 else 1
+    one = min(float(around or AROUND_DEFAULT), float(cap) if cap else math.inf, length)
+    n = len(pins) if every else min(len(pins), max(1, stretch_count(length, most)))
     if n >= len(pins):
         chosen = pins
     else:
-        targets = [s + ln / 2 for s, ln in (even if len(even) == n else stretches(start, length, cap, most=n))]
+        targets = [s + ln / 2 for s, ln in stretches(start, length, one, most=n)]
+        if len(targets) < n:   # stretches() fits fewer: spread the rest evenly
+            targets = [start + length * (k + 0.5) / n for k in range(n)]
         left, chosen = list(pins), []
-        for c in targets:
+        for c in targets[:n]:
             best = min(left, key=lambda t: abs(t - c))
             chosen.append(best)
             left.remove(best)
         chosen.sort()
     end = start + length
-    one = min(float(cap), length)
-    wins = [[min(max(t - one / 2, start), end - one), 0.0] for t in chosen]
+    wins = [[min(max(t - one / 2, start), end - one)] for t in chosen]
     for w in wins:
-        w[1] = w[0] + one
+        w.append(w[0] + one)
     merged = []
     for a, b in wins:
         if merged and a < merged[-1][1] - 0.01:

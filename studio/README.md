@@ -69,11 +69,13 @@ python3 studio/server.py --open
   *Keep these* turns them into highlights to adjust. *How much of this clip*
   (*Less* / *Normal* / *More*) gives good footage more stretches in a Relay
   (twice as many) and more suggestions, or less of a clip you care less
-  about. In a **Relay** with *Up to Ns* set, a long clip's stretches sit
-  centred on its highlights instead of being spread evenly: one per highlight
-  while there are enough stretches; with fewer, the highlights nearest where
-  the even ones would fall (one stretch: the one nearest the middle).
-  Highlights close enough to share footage share one stretch. Trimming the
+  about. In a **Relay**, a long clip with highlights plays just the moments
+  around them, never all of itself: *Around each ★ highlight, play* 4–20s
+  (half before, half after; shorter if a target length needs it). Every
+  highlight you marked plays; suggested ones play as many as the clip gets
+  stretches, the ones nearest where even ones would fall. Highlights close
+  enough to share footage share one stretch. More, shorter stretches mean
+  more handoffs; how much of each is split is the *Split screen* dial. Trimming the
   selection still limits the clip to that stretch.
 - **Imported into the wrong folder?** The shoot page says what just came in,
   with *Move them* next to it. Any time, *↪ Move files* in a shoot's header
