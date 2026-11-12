@@ -167,6 +167,11 @@ def suggest_moments(points, duration, n, breath=BREATH):
 
 
 AROUND_DEFAULT = 10.0   # seconds of a long clip played around each highlight
+# A highlight moment comes in under the one before it for longer: each may
+# give up to this share of itself to the handoff after it (others: half),
+# and the dial leans further toward that (dial 5 is two thirds of the way).
+PINNED_SHARE = 0.75
+PINNED_LEAN = 0.5   # the dial's share s becomes s ** PINNED_LEAN for these
 
 
 def pinned_stretches(start, length, pins, cap, most=MOST_DEFAULT, around=AROUND_DEFAULT, every=False):
@@ -266,6 +271,7 @@ class Entry:
 
     def __init__(self, idx, it, opts):
         self.idx = idx
+        self.pinned = bool(it.get("pinned"))   # a moment around a highlight (pinned_stretches)
         self.shot_at = float(it.get("shot_at") or 0)
         photo_s = float(opts.get("photo_seconds") or PHOTO_SECONDS)
         cap = opts.get("cap") or None
@@ -438,14 +444,17 @@ def _plan(items, opts, dial):
             x_room = x.life - x.cameos[-1][2] - MIN_SOLO
         else:
             x_room = x.life - x.in_o - MIN_SCENE
+        moments = x.pinned or y.pinned   # highlights handing on: split for longer
+        share = PINNED_SHARE if moments else 0.5
         if y.cameos:
             y_room = y.cameos[0][1] - MIN_SOLO
         else:
             y_room = y.life - MIN_SCENE
-            if j + 2 < len(top) and y_room / 2 >= MIN_OVERLAP:
-                y_room /= 2   # leave it room to hand on to the next (whatever the dial, so turning it up never squeezes this one)
+            if j + 2 < len(top) and y_room * share >= MIN_OVERLAP:
+                y_room *= share   # leave it room to hand on to the next (whatever the dial, so turning it up never squeezes this one)
         max_o = min(x.split_tol, y.split_tol, x_room, y_room)
-        o = lerp(MIN_OVERLAP, max_o, s) if max_o >= MIN_OVERLAP else 0.0
+        lean = s ** PINNED_LEAN if moments else s
+        o = lerp(MIN_OVERLAP, max_o, lean) if max_o >= MIN_OVERLAP else 0.0
         if o >= MIN_OVERLAP - 1e-9:
             x.out_o = y.in_o = round(o, 3)
 

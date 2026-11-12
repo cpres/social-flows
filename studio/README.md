@@ -75,7 +75,9 @@ python3 studio/server.py --open
   highlight you marked plays; suggested ones play as many as the clip gets
   stretches, the ones nearest where even ones would fall. Highlights close
   enough to share footage share one stretch. More, shorter stretches mean
-  more handoffs; how much of each is split is the *Split screen* dial. Trimming the
+  more handoffs, and a highlight moment comes in under the one before it for
+  longer than other clips do (up to three quarters of it, and the *Split
+  screen* dial leans further toward that). Trimming the
   selection still limits the clip to that stretch.
 - **Imported into the wrong folder?** The shoot page says what just came in,
   with *Move them* next to it. Any time, *↪ Move files* in a shoot's header
