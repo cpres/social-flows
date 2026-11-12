@@ -422,15 +422,17 @@ def folder_to_reel(name: str, body: dict = Body(default={})):
         # Left out of the flow (the New reel dialog's Leave things out): in the
         # reel, out of the cut, so they're there to put back.
         leave = {int(i) for i in body.get("exclude") or []}
+        file_of = {}   # new part id -> the folder's file (for sections left out)
         for pos, m, start, length, pick in folder_parts(db, name, side):
-            db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length, "
+            cur = db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length, "
                        "focus_x, focus_y, zoom, layout, frames, keep) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?)",
                        (reel_id, lib.original_of(db, m["id"]), pos, start, length,
                         pick.get("focusX", 0.5), pick.get("focusY", 0.5), pick.get("zoom", 1),
                         pick.get("layout", "") if m["kind"] == "video" else "", 0 if m["id"] in leave else 1))
+            file_of[cur.lastrowid] = m["id"]
         style = body.get("style") or "standard"
         if style in ("stack", "relay"):
-            apply_style(db, reel_id, style, body)
+            apply_style(db, reel_id, style, {**body, "_fileOf": file_of})
     return {"id": reel_id}
 
 
@@ -480,16 +482,33 @@ def relay_opts(body):
             "target": min(max(float(body["target"]), 10.0), 1800.0) if body.get("target") else None,
             "quiet": bool(body.get("quiet")),
             # seconds played around each highlight of a long clip (relay.pinned_stretches)
-            "around": min(max(float(body.get("around") or relay_mod.AROUND_DEFAULT), 2.0), 60.0)}
+            "around": min(max(float(body.get("around") or relay_mod.AROUND_DEFAULT), 2.0), 60.0),
+            # sections of long clips left out (Leave things out): {folder media id: [a moment in each, file seconds]}
+            "drop": relay_drop(body.get("excludeAt"))}
 
 
-def relay_bases(db, parts, opts, cached_only=False):
+def relay_drop(asked):
+    """[{file, at}] -> {file: [at, ...]}: the sections of long clips to
+    leave out, each named by a moment inside it (so it holds whatever
+    length the sections come out at)."""
+    out = {}
+    for e in asked if isinstance(asked, list) else []:
+        try:
+            out.setdefault(int(e["file"]), []).append(float(e["at"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def relay_bases(db, parts, opts, cached_only=False, file_of=None):
     """What relay_items needs to know of each part, looked up once (its
     shoot pick, its movement for skipping quiet moments). Also returns
     whether some movement wasn't measured yet (cached_only)."""
     bases, missing = [], False
     for p in parts:
-        b = {"p": p, "pick": None, "points": None, "pins": [], "amount": 0}
+        # the folder's file it is (for sections left out): a part's own, or by its row id
+        b = {"p": p, "pick": None, "points": None, "pins": [], "amount": 0,
+             "file": p["file_id"] if "file_id" in p.keys() else (file_of or {}).get(p["id"])}
         if p["kind"] == "video":
             b["pick"] = pick_of(db, p["media_id"])
             row = db.execute("SELECT * FROM media WHERE id = ?", (p["media_id"],)).fetchone()
@@ -517,7 +536,7 @@ def relay_bases(db, parts, opts, cached_only=False):
     return bases, missing
 
 
-def expand_items(bases, cap, most, around=relay_mod.AROUND_DEFAULT):
+def expand_items(bases, cap, most, around=relay_mod.AROUND_DEFAULT, drop=None, dropped=None):
     """What the relay planner needs: [{kind, duration, start, length, avail,
     shot_at, keep, clip, match, _row}], _row: which part it's from. A long
     clip plays the long stretch picked in its shoot, or the clip less a
@@ -525,8 +544,12 @@ def expand_items(bases, cap, most, around=relay_mod.AROUND_DEFAULT):
     up to the cap spread evenly through that (at most `most`, all of them
     from two minutes up), one item each (relay.stretches). A short clip
     plays all of itself, or the stretch picked. With quiet moments skipped,
-    `keep` is a stretch with its lulls out."""
+    `keep` is a stretch with its lulls out. drop ({file: [moments]}): a
+    long clip's stretch whose share of the clip holds one of those moments
+    is left out (the others stay where they were), and noted in `dropped`
+    ([{file, start, length}]) when given."""
     items = []
+    drop = drop or {}
     for row_i, b in enumerate(bases):
         p, pick = b["p"], b["pick"]
         it = {"kind": p["kind"], "duration": float(p["duration"] or 0), "start": float(p["start"]),
@@ -545,6 +568,12 @@ def expand_items(bases, cap, most, around=relay_mod.AROUND_DEFAULT):
             # each stretch claims the photos shot up to halfway to its neighbours
             bounds = [0.0] + [(a + la + c) / 2 for (a, la), (c, _) in zip(st, st[1:])] + [it["duration"]]
             for k, (s, ln) in enumerate(st):
+                hits = [at for at in drop.get(b.get("file"), [])
+                        if bounds[k] <= at < bounds[k + 1] or (k + 1 == len(st) and at >= bounds[k])]
+                if hits:
+                    if dropped is not None:
+                        dropped.append({"file": b.get("file"), "start": s, "length": ln, "ats": hits})
+                    continue
                 one = {**it, "start": s, "avail": ln, "clip": row_i, "match": (bounds[k], bounds[k + 1])}
                 if pinned:
                     one["pinned"] = "marked" if b.get("pins") else "suggested"
@@ -561,25 +590,38 @@ def expand_items(bases, cap, most, around=relay_mod.AROUND_DEFAULT):
 def relay_fit(bases, opts):
     """The plan for these parts and settings, and the items and cap it's
     from: with a target length, the stretch length whose reel comes
-    closest to it (relay.fit_target). -> (items, plan, cap)."""
+    closest to it (relay.fit_target). Sections left out (opts["drop"])
+    come out of that layout as it stands: the others stay just as they
+    were, and the reel is that much shorter (it isn't fitted again, which
+    would move and stretch the ones left). -> (items, plan, cap, dropped:
+    the sections left out, [{file, start, length, ats}])."""
+    def make(cap, most, around, drop=None, dropped=None):
+        return expand_items(bases, cap, most, around, drop, dropped)
+
     if not opts.get("target"):
-        items = expand_items(bases, opts.get("cap"), opts["most"], opts["around"])
-        return items, relay_mod.plan_relay(items, opts), opts.get("cap")
-    longest = max([float(b["p"]["duration"] or 0) for b in bases if b["p"]["kind"] == "video"] or [0.0])
-    # With a length to fill, it decides how long each highlight's moment is too
-    # (the fitted length, or all of the clip): `around` is for no target.
-    # Stretches never go under relay.MIN_STRETCH (shorter can't relay), so if
-    # the footage won't fit like that, each long clip gets fewer of them
-    # (At most is a most) before anything has to come out.
-    best = None
-    for most in range(opts["most"], 0, -1):
-        got = relay_mod.fit_target(lambda cap: expand_items(bases, cap, most, cap or math.inf),
-                                   opts, opts["target"], longest)
-        if best is None or got[1]["stats"]["totalSeconds"] < best[1]["stats"]["totalSeconds"]:
-            best = got
-        if relay_mod.fits(got[1]["stats"]["totalSeconds"], opts["target"]):
-            return got
-    return best
+        cap, most, around = opts.get("cap"), opts["most"], opts["around"]
+    else:
+        longest = max([float(b["p"]["duration"] or 0) for b in bases if b["p"]["kind"] == "video"] or [0.0])
+        # With a length to fill, it decides how long each highlight's moment is
+        # too (the fitted length, or all of the clip): `around` is for no target.
+        # Stretches never go under relay.MIN_STRETCH (shorter can't relay), so
+        # if the footage won't fit like that, each long clip gets fewer of them
+        # (At most is a most) before anything has to come out.
+        best = None
+        for most in range(opts["most"], 0, -1):
+            got = relay_mod.fit_target(lambda cap: make(cap, most, cap or math.inf), opts, opts["target"], longest)
+            if best is None or got[1]["stats"]["totalSeconds"] < best[0][1]["stats"]["totalSeconds"]:
+                best = (got, most)
+            if relay_mod.fits(got[1]["stats"]["totalSeconds"], opts["target"]):
+                best = (got, most)
+                break
+        (items, plan, cap), most = best
+        around = cap or math.inf
+        if not opts.get("drop"):
+            return items, plan, cap, []
+    dropped = []
+    items = make(cap, most, around, opts.get("drop"), dropped)
+    return items, relay_mod.plan_relay(items, {**opts, "cap": cap}), cap, dropped
 
 
 @app.post("/api/folders/{name}/relay-plan")
@@ -587,8 +629,10 @@ def relay_preview(name: str, body: dict = Body(default={})):
     """What a Relay reel from this folder would look like at each dial
     setting, for the New reel dialog: {plans: [{dial, stats, bar}] (dial 1
     to 10), approx: quiet moments not measured yet for some clips}.
-    {exclude: [folder media ids]} leaves those out; stats.tooShort: the
-    files that can't be on screen for relay.MIN_SCENE however it's planned."""
+    {exclude: [folder media ids]} leaves those out, {excludeAt: [{file, at}]}
+    the section of a long clip around that moment; stats.tooShort: the files
+    that can't be on screen for relay.MIN_SCENE however it's planned;
+    pieces: each long clip's sections, [{file, start, length, out}]."""
     folder = resolve(name)
     opts = relay_opts(body)
     side = folder_sidecar(folder)
@@ -601,14 +645,18 @@ def relay_preview(name: str, body: dict = Body(default={})):
         bases, missing = relay_bases(db, parts, opts, cached_only=True)
     plans = []
     for d in range(relay_mod.DIAL_MIN, relay_mod.DIAL_MAX + 1):
-        items, plan, cap = relay_fit(bases, {**opts, "dial": d})
+        items, plan, cap, dropped = relay_fit(bases, {**opts, "dial": d})
+        # each long clip's sections as they'd play, and the ones left out, for Leave things out
+        pieces = sorted([{"file": parts[it["_row"]]["file_id"], "start": it["start"], "length": it["avail"], "out": False}
+                         for it in items if it.get("clip") is not None]
+                        + [{**x, "out": True} for x in dropped], key=lambda x: (x["file"], x["start"]))
         # long clips playing just the moments around their highlights, marked or suggested
         on = {k: len({it["_row"] for it in items if it.get("pinned") == k}) for k in ("marked", "suggested")}
         # the files (folder media ids) that can't be on screen 3s, however it's planned
         short = sorted({parts[items[i]["_row"]]["file_id"] for i in plan["stats"]["tooShort"]})
         plans.append({"dial": d, "stats": {**plan["stats"], "cap": cap, "highlightClips": on["marked"],
                                            "suggestedClips": on["suggested"], "tooShort": short},
-                      "bar": relay_mod.bar(plan)})
+                      "bar": relay_mod.bar(plan), "pieces": pieces})
     return {"plans": plans, "approx": missing}
 
 
@@ -630,8 +678,8 @@ def apply_style(db, reel_id, style, body):
                         "a": {"item": top["id"], "in": None, "out": None, "timing": "real", "speed": 1}}]
     else:
         opts = relay_opts(body)
-        bases, _ = relay_bases(db, rows, opts)
-        items, _, opts["cap"] = relay_fit(bases, opts)
+        bases, _ = relay_bases(db, rows, opts, file_of=body.get("_fileOf"))
+        items, _, opts["cap"], _ = relay_fit(bases, opts)
         write_relay(db, reel_id, s, items, rows, opts, [r["id"] for r in rows])
     db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), reel_id))
 

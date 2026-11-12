@@ -7,7 +7,8 @@
           Nothing in a Relay is on screen for less than {{ MIN }}s: any quicker is frantic.
           <template v-if="target">To fit about {{ fmtTime(target) }}, </template>
           <template v-else>To keep it that way, </template>
-          click a clip or photo to take it out. Click it again to put it back.
+          click a section of a clip, or a photo, to take it out. Click it again to put it back.
+          A long clip's sections sit under its bar; click the bar to take the whole clip out.
         </p>
       </div>
       <div class="status" :class="{ ok: fits }">
@@ -22,24 +23,54 @@
     </header>
 
     <div class="selbar">
-      <span><b>{{ inCount.video }}</b> clip{{ inCount.video === 1 ? '' : 's' }} · <b>{{ inCount.photo }}</b> photo{{ inCount.photo === 1 ? '' : 's' }} in<template v-if="out.size"> · {{ out.size }} left out</template></span>
+      <span>
+        <b>{{ inCount.video }}</b> clip{{ inCount.video === 1 ? '' : 's' }}<template v-if="inCount.sections"> ({{ inCount.sections }} sections)</template>
+        · <b>{{ inCount.photo }}</b> photo{{ inCount.photo === 1 ? '' : 's' }} in<template v-if="outCount"> · {{ outCount }} left out</template>
+      </span>
       <span class="spacer"></span>
       <button class="btn small" v-if="short.length" @click="leaveShort">Leave out the {{ short.length }} under {{ MIN }}s</button>
-      <button class="btn small" v-if="out.size" @click="emit('update:exclude', [])">Put everything back</button>
+      <button class="btn small" v-if="outCount" @click="putAllBack">Put everything back</button>
     </div>
 
     <div class="tiles">
-      <div
-        v-for="m in files" :key="m.id" class="tile" :class="{ on: !out.has(m.id), short: shortSet.has(m.id) }"
-        role="button" tabindex="0" :aria-pressed="!out.has(m.id)" :title="`${m.file}: click to ${out.has(m.id) ? 'put it back' : 'leave it out'}`"
-        @click="toggle(m.id)" @keydown.enter.space.prevent="toggle(m.id)"
-      >
-        <img :src="api.thumb(m.folder, m.file, m.kind === 'video' ? (m.duration || 0) * 0.3 : 0, 320)" loading="lazy" alt="" draggable="false" />
-        <span class="x" :aria-label="out.has(m.id) ? 'left out' : 'in'">{{ out.has(m.id) ? '✕' : '✓' }}</span>
-        <span class="tag" v-if="m.kind === 'video'">▶ {{ fmtTime(m.duration) }}</span>
-        <span class="tag" v-else>photo</span>
-        <span class="warnb" v-if="shortSet.has(m.id) && !out.has(m.id)">under {{ MIN }}s</span>
-        <span class="time">{{ clockTime(m.capturedAt) }}</span>
+      <div v-for="g in groups" :key="g.m.id" class="group" :class="{ many: g.sections.length > 1, off: g.off }">
+        <!-- the bar over a long clip's sections: they're one clip -->
+        <button
+          v-if="g.sections.length > 1" class="bar" :title="`${g.m.file}: click to ${g.off ? 'put the clip back' : 'leave the whole clip out'}`"
+          @click="toggleFile(g.m.id)"
+        >
+          <span class="name">{{ g.m.file }}</span>
+          <span>{{ fmtTime(g.m.duration) }} · {{ g.sections.filter((s) => !s.out).length }} of {{ g.sections.length }} sections in</span>
+        </button>
+        <span v-else class="bar none"></span>
+        <div class="row">
+          <template v-if="g.sections.length > 1">
+            <div
+              v-for="s in g.sections" :key="s.start" class="tile" :class="{ on: !s.out && !g.off }" role="button" tabindex="0"
+              :aria-pressed="!s.out && !g.off" :title="`${g.m.file} ${fmtTime(s.start)} to ${fmtTime(s.start + s.length)}: click to ${s.out || g.off ? 'put it back' : 'leave it out'}`"
+              @click="toggleSection(g, s)" @keydown.enter.space.prevent="toggleSection(g, s)"
+            >
+              <img :src="api.thumb(g.m.folder, g.m.file, s.start + s.length / 2, 320)" loading="lazy" alt="" draggable="false" />
+              <span class="x">{{ s.out || g.off ? '✕' : '✓' }}</span>
+              <span class="tag">{{ clock(s.start) }}–{{ clock(s.start + s.length) }}</span>
+              <span class="time">{{ s.length.toFixed(s.length % 1 ? 1 : 0) }}s</span>
+            </div>
+          </template>
+          <div
+            v-else class="tile" :class="{ on: !g.off, short: shortSet.has(g.m.id) }" role="button" tabindex="0"
+            :aria-pressed="!g.off" :title="`${g.m.file}: click to ${g.off ? 'put it back' : 'leave it out'}`"
+            @click="toggleFile(g.m.id)" @keydown.enter.space.prevent="toggleFile(g.m.id)"
+          >
+            <img :src="api.thumb(g.m.folder, g.m.file, thumbAt(g), 320)" loading="lazy" alt="" draggable="false" />
+            <span class="x">{{ g.off ? '✕' : '✓' }}</span>
+            <span class="tag" v-if="g.m.kind !== 'video'">photo</span>
+            <span class="tag" v-else-if="g.sections.length === 1 && g.sections[0].length < g.m.duration - 0.5">{{ clock(g.sections[0].start) }}–{{ clock(g.sections[0].start + g.sections[0].length) }}</span>
+            <span class="tag" v-else>▶ {{ fmtTime(g.m.duration) }}</span>
+            <span class="warnb" v-if="shortSet.has(g.m.id) && !g.off">under {{ MIN }}s</span>
+            <span class="time" v-if="g.m.kind === 'video' && g.sections.length === 1 && g.sections[0].length < g.m.duration - 0.5">{{ g.sections[0].length.toFixed(g.sections[0].length % 1 ? 1 : 0) }}s of {{ fmtTime(g.m.duration) }}</span>
+            <span class="time" v-else>{{ clockTime(g.m.capturedAt) }}</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -54,22 +85,25 @@
 <script setup>
 // The full-screen check before a Relay reel is made, when it can't keep every
 // moment on screen for MIN seconds (relay.py MIN_SCENE): some clips are
-// shorter than that, or there's too much to fit the length picked. Click a
-// clip or photo to leave it out of the flow; the estimate follows (the New
-// reel dialog plans it again with them left out). Left out things go in the
-// reel out of the cut, so they can be put back there.
+// shorter than that, or there's too much to fit the length picked. It shows
+// what would play: each photo and short clip, and each long clip as the
+// sections of it the plan plays (plan.pieces), under a bar that says they're
+// one clip. Click a section, photo or clip to leave it out of the flow (the
+// bar: the whole clip); the estimate follows (the New reel dialog plans it
+// again). A whole file left out goes in the reel out of the cut, to put back.
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { api } from '../api'
 import { clockTime, fmtTime } from '../time'
 
 const props = defineProps({
-  files: { type: Array, required: true },       // the folder's media, in shot order
-  exclude: { type: Array, default: () => [] },  // media ids left out
-  plan: { type: Object, default: null },        // the plan at the dial set, with them left out
-  target: { type: Number, default: 0 },          // seconds, or 0
+  files: { type: Array, required: true },         // the folder's media, in shot order
+  exclude: { type: Array, default: () => [] },    // media ids left out whole
+  excludeAt: { type: Array, default: () => [] },  // sections left out: [{ file: media id, at: a moment in it }]
+  plan: { type: Object, default: null },          // the plan at the dial set, with them left out
+  target: { type: Number, default: 0 },            // seconds, or 0
   busy: Boolean,
 })
-const emit = defineEmits(['update:exclude', 'close', 'make'])
+const emit = defineEmits(['update:exclude', 'update:excludeAt', 'close', 'make'])
 const MIN = 3   // relay.py MIN_SCENE
 
 const out = computed(() => new Set(props.exclude))
@@ -77,20 +111,69 @@ const short = computed(() => props.plan?.stats.tooShort || [])
 const shortSet = computed(() => new Set(short.value))
 const over = computed(() => (props.target && props.plan ? overBy(props.plan.stats.totalSeconds, props.target) : 0))
 const fits = computed(() => !!props.plan && over.value <= 0 && !short.value.length)
+
+// Each file with the sections of it that play (a long clip's; [] for photos
+// and short clips, and for a file left out whole, whose sections aren't planned).
+const lastSections = new Map()   // a clip left out whole keeps showing the sections it had
+const groups = computed(() => {
+  const by = new Map()
+  for (const p of props.plan?.pieces || []) {
+    if (!by.has(p.file)) by.set(p.file, [])
+    by.get(p.file).push(p)
+  }
+  return props.files.map((m) => {
+    const off = out.value.has(m.id)
+    let sections = by.get(m.id) || []
+    if (!off && props.plan) lastSections.set(m.id, sections)
+    if (off) sections = lastSections.get(m.id) || []
+    return { m, off, sections }
+  })
+})
 const inCount = computed(() => {
-  const c = { video: 0, photo: 0 }
-  for (const m of props.files) if (!out.value.has(m.id)) c[m.kind === 'video' ? 'video' : 'photo']++
+  const c = { video: 0, photo: 0, sections: 0 }
+  for (const g of groups.value) {
+    if (g.off) continue
+    const live = g.sections.filter((s) => !s.out).length
+    if (g.sections.length > 1 && !live) continue
+    c[g.m.kind === 'video' ? 'video' : 'photo']++
+    if (g.sections.length > 1) c.sections += live
+  }
   return c
 })
+const outCount = computed(() => props.exclude.length
+  + groups.value.reduce((n, g) => n + (g.off ? 0 : g.sections.filter((s) => s.out).length), 0))
 
-function toggle(id) {
+const clock = (s) => { const t = Math.round(s); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}` }
+const thumbAt = (g) => (g.m.kind !== 'video' ? 0 : g.sections.length === 1 ? g.sections[0].start + g.sections[0].length / 2 : (g.m.duration || 0) * 0.3)
+
+function toggleFile(id) {
   const next = new Set(out.value)
   if (next.has(id)) next.delete(id)
   else next.add(id)
   emit('update:exclude', [...next])
 }
+// A section: left out by a moment inside it (its middle), so it holds however
+// long the sections come out; put back by taking those moments away again.
+function toggleSection(g, s) {
+  if (g.off) {   // the whole clip was out: back in, with just this section
+    emit('update:exclude', props.exclude.filter((id) => id !== g.m.id))
+    const others = g.sections.filter((x) => x !== s).map((x) => ({ file: g.m.id, at: x.start + x.length / 2 }))
+    emit('update:excludeAt', [...props.excludeAt.filter((e) => e.file !== g.m.id), ...others])
+    return
+  }
+  if (s.out) {
+    const ats = new Set(s.ats || [])
+    emit('update:excludeAt', props.excludeAt.filter((e) => !(e.file === g.m.id && ats.has(e.at))))
+  } else {
+    emit('update:excludeAt', [...props.excludeAt, { file: g.m.id, at: Math.round((s.start + s.length / 2) * 100) / 100 }])
+  }
+}
 function leaveShort() {
   emit('update:exclude', [...new Set([...props.exclude, ...short.value])])
+}
+function putAllBack() {
+  emit('update:exclude', [])
+  emit('update:excludeAt', [])
 }
 const onKey = (e) => { if (e.key === 'Escape') emit('close') }
 onMounted(() => window.addEventListener('keydown', onKey))
@@ -112,7 +195,7 @@ export function overBy(total, target) {
 header { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
 .title { flex: 1; min-width: 280px; }
 .title h2 { margin: 0 0 6px; }
-.title p { margin: 0; max-width: 62ch; }
+.title p { margin: 0; max-width: 70ch; }
 .status {
   display: flex; flex-direction: column; gap: 4px; padding: 12px 16px; border-radius: 12px; min-width: 260px;
   border: 1px solid #d8a24a; background: rgb(233 178 122 / 18%);
@@ -121,9 +204,20 @@ header { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
 .status b { font-size: 18px; font-variant-numeric: tabular-nums; }
 .selbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .spacer { flex: 1; }
-.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 10px; flex: 1; align-content: start; }
+.tiles { display: flex; flex-wrap: wrap; gap: 14px 10px; flex: 1; align-content: flex-start; }
+.group { display: flex; flex-direction: column; gap: 5px; max-width: 100%; }
+.row { display: flex; flex-wrap: wrap; gap: 6px; }
+/* the bar that says a clip's sections are one clip */
+.bar {
+  display: flex; justify-content: space-between; gap: 10px; align-items: center; height: 22px; padding: 0 8px;
+  border: 0; border-radius: 6px; background: var(--sage); color: var(--on-sage, #fff); font: inherit; font-size: 11px;
+  font-weight: 600; cursor: pointer; white-space: nowrap; overflow: hidden;
+}
+.bar .name { overflow: hidden; text-overflow: ellipsis; }
+.bar.none { background: transparent; cursor: default; }
+.group.off .bar:not(.none) { background: var(--line, #bbb); color: var(--muted); text-decoration: line-through; }
 .tile {
-  position: relative; aspect-ratio: 3 / 4; border-radius: 10px; overflow: hidden; cursor: pointer;
+  position: relative; width: 132px; aspect-ratio: 3 / 4; border-radius: 10px; overflow: hidden; cursor: pointer;
   background: var(--stage); outline: 3px solid transparent; outline-offset: -3px;
 }
 .tile img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0.3; filter: grayscale(0.8); pointer-events: none; }

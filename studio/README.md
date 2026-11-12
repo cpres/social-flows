@@ -328,9 +328,13 @@ folder* (a shoot) ask for a name and a style:
   can't keep to that (clips under 3s themselves,
   or more footage than fits the length picked even at the shortest
   stretches), the dialog says so, and *Make the reel* first opens **Leave
-  things out of the flow**: the shoot's clips and photos full screen, in
-  order, each a click to leave out (or put back), with the estimate
-  following and turning green when it fits. What's left out goes in the
+  things out of the flow**: what would play, full screen, in order: each
+  photo and short clip, and each long clip as the sections of it the plan
+  plays (their time ranges) under a bar that says they're one clip. Click
+  a section to leave just it out (the others stay exactly where they are
+  and the reel gets that much shorter), a photo or short clip to leave it
+  out, or a clip's bar for the whole clip; click again to put it back.
+  The estimate follows, turning green when it fits. What's left out goes in the
   reel out of the cut, ready to put back.
 - **Relay (how it flows):** long-form reels that stitch themselves. The rule: when one of
   the two things on screen runs out of time, it leaves and the other takes

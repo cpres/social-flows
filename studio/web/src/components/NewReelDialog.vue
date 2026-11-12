@@ -111,7 +111,7 @@
         </div>
         <div v-else class="tbtns">
           <button class="btn small" :disabled="!files.length" @click="leaving = true">Choose what's in…</button>
-          <small class="muted">{{ exclude.length ? `${count(exclude.length, 'thing', 'things')} left out of the flow` : 'every clip and photo from the shoot is in' }}</small>
+          <small class="muted">{{ exclude.length + excludeAt.length ? `${count(exclude.length + excludeAt.length, 'thing', 'things')} left out of the flow` : 'every clip and photo from the shoot is in' }}</small>
         </div>
         <p v-if="summary" class="estimate">
           {{ summary }}<i v-if="plan.stats.limitedBy === 'photos'" class="limited">Mostly photos, so splits stay short.</i>
@@ -120,7 +120,7 @@
         <small class="muted">In the order they were shot. A photo shot while a long clip was recording comes in under it at that moment. A long clip with ★ highlights (marked on the shoot page, or ☆ suggested from where things move) plays just the moments around them; one without plays all of itself less a moment at each end, or the long stretch you picked. You can trim any of it in the reel afterwards.</small>
       </div>
       <LeaveOut
-        v-if="leaving" :files="files" v-model:exclude="exclude" :plan="plan" :target="target" :busy="busy"
+        v-if="leaving" :files="files" v-model:exclude="exclude" v-model:exclude-at="excludeAt" :plan="plan" :target="target" :busy="busy"
         @close="leaving = false" @make="make(true)"
       />
       <p v-if="error" class="warn small">{{ error }}</p>
@@ -181,10 +181,12 @@ const quiet = ref(false)
 const photo = ref(4)
 // Left out of the flow (folder media ids): see LeaveOut. The folder's files, for it.
 const exclude = ref([])
+const excludeAt = ref([])   // sections of long clips left out: [{ file, at }]
 const leaving = ref(false)
 const files = ref([])
 watch(source, async (f) => {
   exclude.value = []
+  excludeAt.value = []
   files.value = []
   if (!f) return
   try {
@@ -202,14 +204,15 @@ const plans = ref([])
 const approx = ref(false)
 let asked = 0
 let timer = null
-watch([source, style, photo, cap, most, quiet, target, around, exclude], () => {
+watch([source, style, photo, cap, most, quiet, target, around, exclude, excludeAt], () => {
   clearTimeout(timer)
   if (style.value !== 'relay' || !source.value) { plans.value = []; return }
   timer = setTimeout(async () => {
     const n = ++asked
     try {
       const r = await api.relayPlan(source.value, { photo: photo.value, cap: cap.value || null, most: most.value, quiet: !target.value && quiet.value,
-                                                         target: target.value || null, around: around.value, exclude: exclude.value })
+                                                         target: target.value || null, around: around.value, exclude: exclude.value,
+                                                         excludeAt: excludeAt.value })
       if (n === asked) { plans.value = r.plans; approx.value = r.approx }
     } catch { if (n === asked) plans.value = [] }
   }, 150)
@@ -273,6 +276,7 @@ async function make(anyway = false) {
       ? await api.folderToReel(source.value, name.value.trim(), { style: style.value, dial: dial.value, photo: photo.value,
                                                                   cap: cap.value || null, most: most.value, quiet: !target.value && quiet.value,
                                                                   around: around.value, exclude: style.value === 'relay' ? exclude.value : [],
+                                                                  excludeAt: style.value === 'relay' ? excludeAt.value : [],
                                                                   target: style.value === 'relay' ? target.value || null : null })
       : await api.createReel(name.value.trim())
     router.push(`/reel/${r.id}`)
