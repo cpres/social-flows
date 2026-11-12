@@ -65,6 +65,8 @@ export const api = {
   savePick: (mediaId, pick) => send('PUT', `/api/media/${mediaId}/pick`, pick),
   deletePick: (mediaId) => send('DELETE', `/api/media/${mediaId}/pick`),
   // A clip's highlights: moments pinned on it, in seconds (see Weave's Moments).
+  // The name a new reel would get: this one, or its next "take N" if it's taken.
+  freeReelName: (name) => fetch(`/api/reel-name?name=${encodeURIComponent(name)}`).then(json),
   saveHighlights: (mediaId, highlights, amount) => send('PUT', `/api/media/${mediaId}/highlights`,
     amount === undefined ? { highlights } : { highlights, amount }),
   // A long clip's highlights, how much of it is wanted, and its suggested moments.

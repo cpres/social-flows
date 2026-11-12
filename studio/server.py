@@ -415,8 +415,7 @@ def folder_to_reel(name: str, body: dict = Body(default={})):
     settings = {**DEFAULT_SETTINGS, **side.get("settings", {})}
     reel_name = (body.get("name") or name).strip()
     with lib.connect() as db:
-        if db.execute("SELECT 1 FROM reels WHERE name = ?", (reel_name,)).fetchone():
-            raise HTTPException(409, f"A reel called '{reel_name}' already exists")
+        reel_name = reel_take_name(db, reel_name)   # taken: the next "take N"
         cur = db.execute("INSERT INTO reels (name, settings, created_at, updated_at) "
                          "VALUES (?, ?, ?, ?)", (reel_name, json.dumps(settings), now(), now()))
         reel_id = cur.lastrowid
@@ -900,6 +899,39 @@ def delete_files(name: str, body: dict = Body(...)):
 
 
 # ---------------------------------------------------------------- reels
+
+TAKE = re.compile(r"^(.*?)\s+take\s+(\d+)$", re.IGNORECASE)
+
+
+def reel_take_name(db, name):
+    """name if no reel has it, else the next take of it: "<name> take N", one
+    more than the highest take of that name so far (archived reels count),
+    from 2 (the first is the name alone). A name already ending in "take N"
+    counts as that name's take."""
+    name = name.strip()
+    if not db.execute("SELECT 1 FROM reels WHERE name = ?", (name,)).fetchone():
+        return name
+    m = TAKE.match(name)
+    base = m.group(1).strip() if m else name
+    takes = [1]
+    for (other,) in db.execute("SELECT name FROM reels"):
+        if other.strip().lower() == base.lower():
+            continue
+        t = TAKE.match(other.strip())
+        if t and t.group(1).strip().lower() == base.lower():
+            takes.append(int(t.group(2)))
+    n = max(takes) + 1
+    while db.execute("SELECT 1 FROM reels WHERE name = ?", (f"{base} take {n}",)).fetchone():
+        n += 1
+    return f"{base} take {n}"
+
+
+@app.get("/api/reel-name")
+def reel_name_free(name: str):
+    """The name a new reel called `name` would get: it, or its next take."""
+    with lib.connect() as db:
+        return {"name": reel_take_name(db, name)}
+
 
 @app.get("/api/reels")
 def list_reels():

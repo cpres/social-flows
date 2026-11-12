@@ -208,6 +208,16 @@ const summary = computed(() => {
 })
 const nameEl = ref(null)
 onMounted(() => nextTick(() => nameEl.value?.focus()))
+// A name some reel already has becomes its next take ("… take 3"), so making
+// another reel from the same folder just works (the server does the same).
+onMounted(async () => {
+  const asked = name.value.trim()
+  if (!asked) return
+  try {
+    const r = await api.freeReelName(asked)
+    if (name.value.trim() === asked) name.value = r.name   // unless it's been typed over meanwhile
+  } catch {}
+})
 
 async function make() {
   if (!name.value.trim() || busy.value) return
