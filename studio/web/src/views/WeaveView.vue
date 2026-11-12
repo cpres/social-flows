@@ -286,7 +286,10 @@
               :duration="moment.media.duration" :starts="moment.parts.map((p) => p.start)" :length="lens(moment)"
               :selected="sel" :playhead="player.playhead.value" :activity="activityOf[moment.mediaId]"
               :thumb-at="(t) => api.thumb(moment.media.folder, moment.media.file, t, 160)"
-              @update="(s) => setStarts(moment, s, true)" @select="selectWindow" @seek="player.seek"
+              :pins="moment.pins || []" :anchors="moment.parts.map((p) => p.anchor ?? null)"
+              @update="(s) => moveWindows(moment, s)" @select="selectWindow" @seek="player.seek"
+              @pin-add="(t) => addPin(moment, t)" @pin-move="(i, t) => movePin(moment, i, t)"
+              @pin-drop="savePins(moment)" @pin-remove="(i) => removePin(moment, i)"
             />
             <div class="controls">
               <button class="btn" :class="{ active: player.playingPart.value }" @click="player.playPart">▶ Play {{ letter(sel) }} <kbd>Space</kbd></button>
@@ -295,12 +298,22 @@
               <span class="spacer"></span>
               <span class="muted">{{ moment.parts.length }} part{{ moment.parts.length === 1 ? '' : 's' }}</span>
               <button class="btn small" @click="removePart(moment)" :disabled="moment.parts.length <= 1" title="One part fewer (−)">−</button>
-              <button class="btn small" @click="addPart(moment)" :disabled="!canAdd(moment)" title="One more part (+)">+</button>
+              <button class="btn small" @click="addPart(moment)" :disabled="!pinned(moment) && !canAdd(moment)" :title="pinned(moment) ? 'A highlight where the playhead is (+)' : 'One more part (+)'">+</button>
             </div>
             <div class="controls">
-              <button class="btn small" @click="suggest(moment)" :disabled="activityOf[moment.mediaId] === null">Suggest busy moments</button>
-              <button class="btn small" @click="spread(moment)">Spread evenly</button>
-              <span class="muted small" v-if="active">{{ letter(sel) }}: {{ fmtTime(active.start) }} → {{ fmtTime(active.start + partLen(active)) }}</span>
+              <button class="btn small" @click="addPin(moment, player.playhead.value)" title="Keep this moment in the middle of a part (H)">★ Highlight here <kbd>H</kbd></button>
+              <template v-if="pinned(moment)">
+                <button class="btn small" @click="unpin(moment)" title="Take every highlight off this clip and cut it automatically again">Clear highlights</button>
+              </template>
+              <template v-else>
+                <button class="btn small" @click="suggest(moment)" :disabled="activityOf[moment.mediaId] === null">Suggest busy moments</button>
+                <button class="btn small" @click="spread(moment)">Spread evenly</button>
+              </template>
+              <span class="muted small" v-if="active">
+                {{ letter(sel) }}: {{ fmtTime(active.start) }} → {{ fmtTime(active.start + partLen(active)) }}<template
+                  v-if="active.merged"> · {{ active.pins.length }} highlights, merged so nothing plays twice</template><template
+                  v-else-if="active.anchor != null && offCentre(moment, active)"> · off-centre: the clip {{ active.start < 0.01 ? 'starts' : 'ends' }} too close to the highlight</template>
+              </span>
             </div>
             <div class="field" v-if="active">
               <span>{{ moment.parts.length > 1 ? `Length of ${letter(sel)}` : 'Length' }} <b class="mono" v-if="!synced">{{ partLen(active).toFixed(1) }}s</b></span>
@@ -316,7 +329,8 @@
               </div>
               <div class="lenrow" v-else>
                 <input
-                  type="range" min="0.5" :max="longest(moment, sel)" step="0.1" :value="partLen(active)"
+                  type="range" min="0.5" :max="pinned(moment) ? Math.max(Math.min(30, moment.media.duration), Math.ceil(partLen(active))) : longest(moment, sel)"
+                  step="0.1" :value="partLen(active)"
                   aria-label="Length of this part" @input="sizePart(moment, sel, Number($event.target.value))"
                 />
                 <button class="btn small" :disabled="!own(active)" @click="sizePart(moment, sel)">Pace · {{ pace.len.toFixed(1) }}s</button>
@@ -328,6 +342,13 @@
               Drag the windows along the filmstrip to pick each moment; they keep their order, so
               <b>a</b> always comes before <b>b</b>. The green lane under it shows where things move.
               Each part runs for the pace ({{ synced ? `${pace.beatsPerCut} beats, ` : '' }}{{ len.toFixed(1) }}s) unless you give it a length of its own.
+            </p>
+            <p class="muted small">
+              <b>★ Highlights</b>: press <kbd>H</kbd> while it plays, or double-click the filmstrip, to pin a moment.
+              Each highlight gets a part with it in the middle, half before and half after, and the
+              parts follow the highlights instead of being spread out. Highlights close enough that their parts would
+              overlap become one longer part. Drag a ★ to move it, double-click it to take it off. They're kept on
+              the clip, so every weave of it starts from them.
             </p>
           </template>
           <template v-else>
@@ -378,7 +399,7 @@
           </div>
           <p class="muted keys">
             <kbd>Space</kbd> play the part{{ songUrl && withMusic ? ' with the music' : '' }} · <kbd>1</kbd>–<kbd>6</kbd> pick a part · <kbd>←</kbd>/<kbd>→</kbd> nudge it 0.1s (<kbd>Shift</kbd> 1s) ·
-            <kbd>[</kbd>/<kbd>]</kbd> shorter/longer · <kbd>+</kbd>/<kbd>−</kbd> more or fewer parts ·
+            <kbd>[</kbd>/<kbd>]</kbd> shorter/longer · <kbd>+</kbd>/<kbd>−</kbd> more or fewer parts · <kbd>H</kbd> highlight ·
             <kbd>X</kbd> leave it out · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next clip
           </p>
         </div>
@@ -445,8 +466,8 @@ import { usePlayer } from '../player'
 import { clamp, clockTime, fmtBeats, fmtTime, folderTitle, reelColor, savedAt } from '../time'
 import { PHOTO_STYLES, STYLES, holdLengths, photoStyles, timeline } from '../hold'
 import {
-  MAX_PARTS, MIN_PARTS, SECONDS_PER_PART, autoParts, busyStarts, fromReel, inOrder, letter,
-  partKey, settle, spreadStarts, weave,
+  MAX_PARTS, MIN_PARTS, SECONDS_PER_PART, anchoredStart, autoParts, busyStarts, fromReel, inOrder, letter,
+  partKey, pinGroups, settle, spreadStarts, weave,
 } from '../weave'
 import ReelFrame from '../components/ReelFrame.vue'
 import SongPicker from '../components/SongPicker.vue'
@@ -618,7 +639,135 @@ function newClip(m, on) {
   if (c.kind === 'video' && pick) Object.assign(c, { auto: false, placed: true, parts: [{ start: pick.start, length: pick.length }] })
   else if (c.kind === 'video') c.parts = spreadStarts(m.duration, autoParts(m.duration, pace.splitOver, len.value), len.value).map((start) => ({ start }))
   else if (pick && Math.abs(pick.length - 1.6) >= 0.05) c.hold = { length: pick.length }
+  if (c.kind === 'video' && m.highlights?.length) {   // highlights win over the shoot's pick
+    c.pins = [...m.highlights]
+    repin(c)
+  }
   return c
+}
+
+// ---------------------------------------------------------------- highlights
+// A clip with highlights (c.pins, seconds) has one part per highlight, with
+// the highlight in its middle; highlights whose parts would overlap share one
+// longer part (pinGroups in weave.js). Each highlight's window is the pace,
+// or a length given to it (c.pinLens: time -> seconds), so a part made longer
+// stays that long when it merges. A part knows its anchor (the middle it's
+// centred on) and its pins. The highlights are saved on the clip, not the
+// reel; their lengths belong to this weave.
+
+const round2 = (t) => Math.round(t * 100) / 100
+const pinned = (c) => c?.kind === 'video' && c.pins?.length > 0
+const offCentre = (c, p) => !p.merged && Math.abs(p.start + partLen(p) / 2 - p.anchor) > 0.05
+const pinLen = (c, t) => c.pinLens?.[t] ?? len.value
+
+function repin(c) {
+  const d = c.media.duration
+  const was = c.parts
+  const groups = pinGroups(c.pins, (t) => pinLen(c, t), d)
+  c.parts = groups.map((g, j) => {
+    let mine = {}
+    if (Math.abs(g.length - len.value) >= 0.05) {
+      const beats = Math.max(1, (g.merged ? Math.ceil : Math.round)(g.length / period.value - (g.merged ? 0.01 : 0)))
+      mine = synced.value ? { beats, length: g.length } : { length: g.length }
+    }
+    const p = { id: was[j]?.id, anchor: g.anchor, pins: g.pins, merged: g.merged, ...mine }
+    p.start = anchoredStart(g.anchor, partLen(p), d)
+    return p
+  })
+  c.auto = false
+  c.placed = true
+}
+// A highlight moved from one time to another keeps its length.
+function relocate(c, from, to) {
+  if (from === to || !c.pinLens || !(from in c.pinLens)) return
+  c.pinLens[to] = c.pinLens[from]
+  delete c.pinLens[from]
+}
+// Part j of a pinned clip made `seconds` long (null: back to the pace). A
+// merged part grows from both ends, and is never shorter than holding its
+// highlights a pace apart from its ends.
+function sizePinned(c, j, seconds) {
+  const p = c.parts[j]
+  c.pinLens = { ...(c.pinLens || {}) }
+  for (const t of p.pins) delete c.pinLens[t]
+  if (seconds != null) {
+    const span = p.pins[p.pins.length - 1] - p.pins[0]
+    const each = Math.max(p.merged ? len.value : 0.5, seconds - span)
+    if (Math.abs(each - len.value) >= 0.05) c.pinLens[p.pins[0]] = c.pinLens[p.pins[p.pins.length - 1]] = round2(each)
+  }
+  repin(c)
+}
+
+const pinSaver = debouncedSaver((mediaId, { pins }) => api.saveHighlights(mediaId, pins).catch((e) => {
+  notice.value = `Highlights not saved: ${e.message}`
+}), 300)
+onBeforeUnmount(() => pinSaver.flushAll())
+function savePins(c) {
+  c.pins = [...(c.pins || [])].sort((a, b) => a - b)
+  c.media.highlights = [...c.pins]
+  pinSaver.queue(c.mediaId, { pins: [...c.pins] })
+}
+// The part a highlight landed in, selected.
+function selectPin(c, t) {
+  const j = c.parts.findIndex((p) => p.pins?.includes(t))
+  if (j >= 0) sel.value = j
+}
+function addPin(c, t) {
+  if (c?.kind !== 'video') return
+  t = round2(clamp(t, 0, c.media.duration))
+  if (c.pins?.some((x) => Math.abs(x - t) < 0.25)) return selectPin(c, c.pins.find((x) => Math.abs(x - t) < 0.25))
+  if (!pinned(c)) c.parts = c.parts.map((q) => ({ id: q.id }))   // the first highlight takes over from the automatic parts (ids kept)
+  c.pins = [...(c.pins || []), t]
+  savePins(c)
+  repin(c)
+  selectPin(c, t)
+}
+// While a ★ is dragged: it moves, and its part (and any merging) follow live.
+function movePin(c, i, t) {
+  const to = round2(clamp(t, 0, c.media.duration))
+  relocate(c, c.pins[i], to)
+  c.pins[i] = to
+  repin(c)
+  selectPin(c, c.pins[i])
+}
+function removePin(c, i) {
+  if (c.pinLens) delete c.pinLens[c.pins[i]]
+  c.pins.splice(i, 1)
+  savePins(c)
+  if (!c.pins.length) return unpin(c)
+  repin(c)
+}
+// No highlights left: the clip is cut automatically again.
+function unpin(c) {
+  c.pins = []
+  c.pinLens = {}
+  savePins(c)
+  c.parts = c.parts.map((q) => ({ id: q.id, start: q.start }))
+  c.auto = true
+  c.placed = false
+  refit(c)
+}
+// A pinned part's window dragged (or nudged): its highlights go with it, so
+// the window ends up centred where it was put.
+function moveWindows(c, starts) {
+  if (!pinned(c)) return setStarts(c, starts, true)
+  const d = c.media.duration
+  const shift = new Map()
+  starts.forEach((s, j) => {
+    const p = c.parts[j]
+    if (!p || Math.abs(s - p.start) < 0.005) return
+    const by = s + partLen(p) / 2 - p.anchor
+    for (const t of p.pins) shift.set(t, by)
+  })
+  if (!shift.size) return
+  c.pins = c.pins.map((t) => {
+    if (!shift.has(t)) return t
+    const to = round2(clamp(t + shift.get(t), 0, d))
+    relocate(c, t, to)
+    return to
+  })
+  repin(c)
+  savePins(c)
 }
 
 // New starts for a clip's windows; parts keep their ids (and lengths) by position.
@@ -648,6 +797,9 @@ function sizePart(c, j, v) {
   let mine = {}
   if (synced.value && v && v !== pace.beatsPerCut) mine = { beats: v, length: Math.round(v * period.value * 10) / 10 }
   else if (!synced.value && v && Math.abs(v - pace.len) >= 0.05) mine = { length: v }
+  if (pinned(c)) {   // the part grows or shrinks around its highlight
+    return sizePinned(c, j, mine.length || mine.beats ? (synced.value ? mine.beats * period.value : mine.length) : null)
+  }
   c.parts[j] = { id: p.id, start: p.start, ...mine }
   const d = c.media.duration
   if (!c.placed) setStarts(c, spreadStarts(d, c.parts.length, lens(c)), false)
@@ -671,6 +823,7 @@ function paceAll() {
   else pace.len = Math.round(clamp(partLen(p), 1, 8) * 10) / 10
   for (const c of videos.value) {
     c.parts = c.parts.map((q) => ({ id: q.id, start: q.start }))
+    c.pinLens = {}
     refit(c)
   }
 }
@@ -688,6 +841,7 @@ function stepLength(c, dir) {
 // The pace or the split length changed: recount and respread the clips that
 // are still automatic, keep the ones placed by hand where they are.
 function refit(c) {
+  if (pinned(c)) return repin(c)
   const d = c.media.duration
   const n = c.auto ? autoParts(d, pace.splitOver, len.value) : c.parts.length
   if (!c.placed || n !== c.parts.length) setStarts(c, spreadStarts(d, n, lens(c, n)), false)
@@ -698,6 +852,7 @@ watch([len, () => pace.splitOver], () => {
 })
 
 function addPart(c) {
+  if (pinned(c)) return addPin(c, player.playhead.value)
   const d = c.media.duration
   if (!canAdd(c)) return
   c.auto = false
@@ -717,6 +872,13 @@ function addPart(c) {
 // The selected part goes; the rest of a clip not placed by hand respread.
 function removePart(c) {
   if (c.parts.length <= 1) return
+  if (pinned(c)) {   // its highlights come off
+    const gone = c.parts[sel.value].pins
+    for (const t of gone) if (c.pinLens) delete c.pinLens[t]
+    c.pins = c.pins.filter((t) => !gone.includes(t))
+    savePins(c)
+    return c.pins.length ? repin(c) : unpin(c)
+  }
   c.auto = false
   c.parts.splice(sel.value, 1)
   if (!c.placed) setStarts(c, spreadStarts(c.media.duration, c.parts.length, lens(c)), false)
@@ -1021,14 +1183,27 @@ function onLoaded() {
 }
 function nudge(by) {
   const c = moment.value
+  if (pinned(c)) {   // the part's highlights move, and it follows them
+    const p = c.parts[sel.value]
+    c.pins = c.pins.map((t) => {
+      if (!p.pins.includes(t)) return t
+      const to = round2(clamp(t + by, 0, c.media.duration))
+      relocate(c, t, to)
+      return to
+    })
+    repin(c)
+    savePins(c)
+    selectPin(c, round2(clamp(p.pins[0] + by, 0, c.media.duration)))
+    return player.seek(c.parts[sel.value].start)
+  }
   const s = c.parts.map((p) => p.start)
   const l = lens(c)
   const j = sel.value
   const lo = j > 0 ? s[j - 1] + l[j - 1] : 0
   const hi = j < s.length - 1 ? s[j + 1] - l[j] : c.media.duration - l[j]
   s[j] = Math.round(clamp(s[j] + by, Math.min(lo, s[j]), Math.max(hi, s[j])) * 100) / 100
-  setStarts(c, s, true)
-  player.seek(s[j])
+  moveWindows(c, s)
+  player.seek(c.parts[j]?.start ?? s[j])
 }
 // Leave a clip or photo out right from its moment, with a way to put it back.
 // An order dragged in Stitch keeps everything else where it was.
@@ -1101,6 +1276,7 @@ function onKey(e) {
   else if (k === '[' && video) stepLength(moment.value, -1)
   else if (k === ']' && video) stepLength(moment.value, 1)
   else if (k === 'x' || k === 'X') leaveOut(moment.value)
+  else if ((k === 'h' || k === 'H') && video) addPin(moment.value, player.playhead.value)
   else if (/^[1-9]$/.test(k) && video && Number(k) <= moment.value.parts.length) selectWindow(Number(k) - 1)
   else return
   e.preventDefault()
@@ -1150,6 +1326,12 @@ function startFresh(imported) {
   Object.assign(chosen, w.styles || {})
   const back = fromReel(reelData.items.filter(managed), w,
                         { beatSync: !!(pace.music && pace.beatSync), beatsPerCut: pace.beatsPerCut, len: pace.len })
+  for (const c of back.clips) {
+    if (c.kind === 'video' && c.media.highlights?.length) {
+      c.pins = [...c.media.highlights]
+      repin(c)
+    }
+  }
   const inReel = new Set(back.clips.map((c) => c.mediaId))
   clips.value = [...back.clips, ...folderMedia.filter((m) => !inReel.has(m.id)).map((m) => newClip(m, false))]
   order.value = back.keys
@@ -1183,6 +1365,7 @@ function snapshot() {
     clips: clips.value.map((c) => ({
       mediaId: c.mediaId, kind: c.kind, on: c.on, auto: c.auto, placed: c.placed, framed: c.framed,
       focusX: c.focusX, focusY: c.focusY, zoom: c.zoom, id: c.id, hold: c.hold,
+      pinLens: c.pinLens && Object.keys(c.pinLens).length ? { ...c.pinLens } : undefined,
       parts: c.parts.map((p) => ({ id: p.id, start: p.start, beats: p.beats, length: p.length })),
     })),
   }
@@ -1203,6 +1386,8 @@ function restore(state, media, imported) {
                           focusY: c.focusY ?? 0.5, zoom: c.zoom || 1, id: c.id })
     if (c.hold) clip.hold = { ...c.hold }
     if (m.kind === 'video' && c.parts?.length) clip.parts = c.parts.map((p) => ({ ...p }))
+    if (c.pinLens) clip.pinLens = { ...c.pinLens }
+    if (pinned(clip)) repin(clip)   // the clip's highlights as they are now
     out.push(clip)
   }
   const added = [...media.values()].filter((m) => !seen.has(m.id))

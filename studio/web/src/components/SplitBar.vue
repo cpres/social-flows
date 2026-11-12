@@ -3,6 +3,7 @@
     <div
       ref="bar" class="bar"
       @pointerdown="down($event, -1)" @pointermove="move" @pointerup="up" @pointercancel="up"
+      @dblclick="addPin"
     >
       <div class="strip">
         <img v-for="t in stripTimes" :key="t" :src="thumbAt(t)" alt="" draggable="false" />
@@ -14,7 +15,14 @@
         @pointerdown.stop="down($event, j)"
       >
         <span class="tag">{{ letter(j) }}</span>
+        <!-- a pinned part's middle: the pin sits here unless the clip's edge is in the way -->
+        <span v-if="anchors[j] != null" class="mid"></span>
       </div>
+      <button
+        v-for="(t, i) in pins" :key="`p${i}`" class="pin" :style="{ left: pct(t) }"
+        :title="`Highlight at ${fmtTime(t)}: drag to move it, double-click to take it off`"
+        @pointerdown.stop="downPin($event, i)"
+      >★</button>
       <div class="playhead" :style="{ left: pct(playhead) }"></div>
     </div>
     <!-- how much happens along the clip: the server's movement measure -->
@@ -43,11 +51,13 @@ const props = defineProps({
   playhead: { type: Number, default: 0 },
   thumbAt: { type: Function, required: true },
   activity: { type: Array, default: undefined },   // [[t, 0..1]]; null while it's being measured
+  pins: { type: Array, default: () => [] },       // highlights: seconds, each kept in its part's middle
+  anchors: { type: Array, default: () => [] },    // per window: the time it's centred on, or null
 })
-const emit = defineEmits(['update', 'select', 'seek', 'dragend'])
+const emit = defineEmits(['update', 'select', 'seek', 'dragend', 'pin-add', 'pin-move', 'pin-drop', 'pin-remove'])
 
 const bar = ref(null)
-let dragging = null   // the window being dragged, or -1 to scrub
+let dragging = null   // the window being dragged, or -1 to scrub, or { pin } for a highlight
 let grabOffset = 0
 
 const stripTimes = computed(() => filmstrip(props.duration))
@@ -88,9 +98,33 @@ function down(e, j) {
   move(e)
 }
 
+// Double-click anywhere on the strip: a highlight there. A ★ double-clicked
+// comes off. (The strip captures the pointer while a ★ is held, so the browser
+// would report that double-click as the strip's: it's counted here instead.)
+let lastPin = { i: -1, at: 0 }
+function addPin(e) {
+  if (performance.now() - lastPin.at < 500) return
+  emit('pin-add', Math.round(timeAt(e) * 100) / 100)
+}
+function downPin(e, i) {
+  const now = performance.now()
+  if (lastPin.i === i && now - lastPin.at < 400) {
+    lastPin = { i: -1, at: now }
+    return emit('pin-remove', i)
+  }
+  lastPin = { i, at: now }
+  dragging = { pin: i }
+  bar.value.setPointerCapture(e.pointerId)
+}
+
 function move(e) {
   if (dragging === null) return
   const t = timeAt(e)
+  if (typeof dragging === 'object') {
+    const at = Math.round(t * 100) / 100
+    emit('pin-move', dragging.pin, at)
+    return emit('seek', at)
+  }
   if (dragging < 0) return emit('seek', t)
   const j = dragging
   const s = props.starts
@@ -110,7 +144,8 @@ function move(e) {
 }
 
 function up() {
-  if (dragging !== null && dragging >= 0) emit('dragend')
+  if (dragging !== null && typeof dragging === 'object') emit('pin-drop')
+  else if (dragging !== null && dragging >= 0) emit('dragend')
   dragging = null
 }
 </script>
@@ -135,6 +170,16 @@ function up() {
   font-size: 12px; font-weight: 700; color: var(--forest); font-family: ui-monospace, monospace;
 }
 .win.on .tag { background: var(--forest); color: var(--cream); padding: 0 6px; border-radius: 999px; }
+.mid {
+  position: absolute; top: 4px; bottom: 4px; left: 50%; width: 0; margin-left: -1px;
+  border-left: 2px dashed rgb(247 241 227 / 70%); pointer-events: none;
+}
+.pin {
+  position: absolute; bottom: -11px; width: 22px; height: 22px; margin-left: -11px; padding: 0;
+  border: 0; border-radius: 999px; background: var(--forest); color: #f2c94c;
+  font-size: 14px; line-height: 22px; cursor: grab; z-index: 4; box-shadow: 0 0 0 2px var(--cream);
+}
+.pin:active { cursor: grabbing; }
 .playhead {
   position: absolute; top: -6px; bottom: -6px; width: 2px; margin-left: -1px;
   background: var(--on-media); box-shadow: 0 0 0 1px #1f2a1f; pointer-events: none; z-index: 3;

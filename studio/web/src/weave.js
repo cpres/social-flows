@@ -81,6 +81,43 @@ export function busyStarts(points, duration, n, len, fallback) {
   return settle(starts, len, duration)
 }
 
+// ---------------------------------------------------------------- highlights
+// A highlight is a moment pinned on a clip (seconds into it). Each one gets a
+// part with the pin in the middle: half the part before it, half after. Near
+// the start or end of the clip the part can't centre it, so it keeps inside
+// the clip and the pin sits off-centre.
+
+// Where a part of this length starts so `anchor` is in its middle.
+export function anchoredStart(anchor, length, duration) {
+  return round2(clamp(anchor - length / 2, 0, Math.max(0, duration - length)))
+}
+
+// Pins whose parts would overlap become one part, so the same footage never
+// plays twice. Each pin has a window lenFor(t) long with it in the middle; a
+// merged part covers its pins' windows end to end and is centred on that
+// stretch. lenFor is a number (every pin) or a function of the pin's time.
+// Returns [{ pins, anchor, length, start, merged }] in time order.
+export function pinGroups(pins, lenFor, duration) {
+  const L = typeof lenFor === 'function' ? lenFor : () => lenFor
+  const ts = [...pins].filter((t) => t >= 0 && t <= duration).sort((a, b) => a - b)
+  let groups = ts.map((t) => [t])
+  const shape = (g) => {
+    const lo = Math.min(...g.map((t) => t - L(t) / 2))
+    const hi = Math.max(...g.map((t) => t + L(t) / 2))
+    const length = round2(Math.min(duration, hi - lo))
+    const anchor = round2((lo + hi) / 2)
+    return { pins: g, anchor, length, merged: g.length > 1, start: anchoredStart(anchor, length, duration) }
+  }
+  // Merge the first pair that overlaps, then look again: a merged part is
+  // longer, so it can reach the next one.
+  for (;;) {
+    const w = groups.map(shape)
+    const j = w.findIndex((g, k) => k + 1 < w.length && w[k + 1].start < g.start + g.length - 0.01)
+    if (j < 0) return w
+    groups = [...groups.slice(0, j), [...groups[j], ...groups[j + 1]], ...groups.slice(j + 2)]
+  }
+}
+
 export const letter = (j) => String.fromCharCode(97 + j)   // 0 -> a
 export const partKey = (mediaId, j) => `${mediaId}:${j}`
 

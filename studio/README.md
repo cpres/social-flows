@@ -566,7 +566,20 @@ at once. It's a four-step wizard that makes a normal reel:
    it a **length** of its own: on the beat, 1, 2, 4 or 8 beats (the pace's is
    marked), else a length in seconds; `[`/`]` makes it shorter or longer.
    *All of a–f* gives that length to every part of this clip; *Every clip* makes
-   it the pace, so every part of every clip runs that long. For a
+   it the pace, so every part of every clip runs that long.
+   **★ Highlights** are for long clips: press `H` while it plays (or *★ Highlight
+   here*, or double-click the filmstrip) to pin a moment, and it gets a part with
+   it in the middle: half the part before it, half after (a 20s part shows 10s
+   either side). Once a clip has highlights its parts follow them instead of
+   being spread out, and making a part longer or shorter grows or shrinks it
+   around its highlight. Highlights close enough that their parts would overlap
+   become one longer part, so nothing plays twice; making a part longer can
+   merge it into the next, and making a merged part shorter splits it again.
+   Near the start or end of the clip a part can't centre its highlight, and it
+   says so. Drag a ★ to move it, double-click it to take it off; *Clear
+   highlights* goes back to automatic parts. Highlights are kept on the clip, so
+   every weave of it starts from them; the lengths given to them belong to the
+   weave. For a
    photo, pick its hold (Medium, Small or Burst); it says why it got the one it
    has. **Leave it out** (`X`) takes the clip or photo out of the reel right
    there, and *Put it back* undoes it. The song is here too (♪, *Change* to

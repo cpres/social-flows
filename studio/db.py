@@ -333,7 +333,8 @@ def migrate(db):
                              ("reel_items", "pane", "TEXT NOT NULL DEFAULT ''"),
                              ("reel_items", "top_after", "REAL NOT NULL DEFAULT 0"),
                              ("reel_items", "frames", "TEXT"),
-                             ("reels", "archived_at", "REAL")]:
+                             ("reels", "archived_at", "REAL"),
+                             ("media", "highlights", "TEXT")]:   # JSON list of seconds, see server.py
         if col not in have[table]:
             db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
     # v1: photo sizes now honour EXIF rotation; re-measure photos once.

@@ -128,10 +128,20 @@ def resolve(*parts):
     return path
 
 
+def highlights_of(row):
+    """A clip's highlights: moments pinned on it, in seconds, in order."""
+    raw = row["highlights"] if "highlights" in row.keys() else None
+    try:
+        return sorted(float(t) for t in json.loads(raw or "[]"))
+    except (TypeError, ValueError):
+        return []
+
+
 def media_dict(row):
     return {"id": row["id"], "folder": row["folder"], "file": row["name"], "kind": row["kind"],
             "duration": row["duration"], "capturedAt": row["captured_at"],
-            "width": row["width"], "height": row["height"], "missing": bool(row["missing"])}
+            "width": row["width"], "height": row["height"], "missing": bool(row["missing"]),
+            "highlights": highlights_of(row)}
 
 
 def item_dict(row):
@@ -1061,6 +1071,24 @@ def save_pick(media_id: int, body: dict = Body(...)):
                    (media_id, v["start"], v["length"], v["focus_x"], v["focus_y"], v["zoom"],
                     v["layout"] if m["kind"] == "video" else "", now()))
         return pick_of(db, media_id)
+
+
+@app.put("/api/media/{media_id}/highlights")
+def save_highlights(media_id: int, body: dict = Body(...)):
+    """Keep a clip's highlights, {highlights: [seconds]}: the moments pinned on
+    it, each kept in the middle of its part. They belong to the clip, so every
+    weave of it starts from them."""
+    with lib.connect() as db:
+        m = db.execute("SELECT * FROM media WHERE id = ?", (media_id,)).fetchone()
+        if not m:
+            raise HTTPException(404, "No such clip")
+        try:
+            ts = sorted({round(min(max(float(t), 0.0), float(m["duration"] or 0)), 2)
+                         for t in body.get("highlights") or []})
+        except (TypeError, ValueError):
+            raise HTTPException(400, "highlights must be a list of seconds")
+        db.execute("UPDATE media SET highlights = ? WHERE id = ?", (json.dumps(ts) if ts else None, media_id))
+        return {"highlights": ts}
 
 
 @app.delete("/api/media/{media_id}/pick")
