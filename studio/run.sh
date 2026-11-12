@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One command to set up (first time) and start Footage Studio.
-#   ./studio/run.sh               # http://localhost:3009
+#   ./studio/run.sh               # http://localhost:3009 (doesn't open a tab)
+#   ./studio/run.sh --start       # same, and opens it in a new browser tab
 #   ./studio/run.sh --port 9000
 #   ./studio/run.sh --beat        # also install beat detection (for cutting on the beat)
 #   ./studio/run.sh --voice       # fetch the speech model now (and retry installing transcribing if that failed)
@@ -9,9 +10,11 @@ cd "$(dirname "$0")"
 
 BEAT=0
 VOICE=0
+START=0
 ARGS=()
 for arg in "$@"; do
-  if [ "$arg" = "--beat" ]; then BEAT=1
+  if [ "$arg" = "--start" ]; then START=1
+  elif [ "$arg" = "--beat" ]; then BEAT=1
   elif [ "$arg" = "--voice" ]; then VOICE=1
   else ARGS+=("$arg"); fi
 done
@@ -113,4 +116,6 @@ if [ -t 0 ]; then
   trap 'stty "$TTY_STATE"' EXIT
   trap 'exit 130' INT TERM
 fi
-.venv/bin/python server.py --open ${ARGS[@]+"${ARGS[@]}"}
+OPEN_ARGS=()
+[ "$START" = 1 ] && OPEN_ARGS=(--open)
+.venv/bin/python server.py ${OPEN_ARGS[@]+"${OPEN_ARGS[@]}"} ${ARGS[@]+"${ARGS[@]}"}
