@@ -69,6 +69,7 @@
             v-if="plan.stats.highlightClips && plan.stats.suggestedClips">; </template><template
             v-if="plan.stats.suggestedClips">{{ count(plan.stats.suggestedClips, 'with', 'with') }} none marked {{ plan.stats.suggestedClips === 1 ? 'plays' : 'play' }} around its suggested ☆ moments</template>.
         </p>
+        <!-- With a length, it decides how much of each long clip plays: nothing to set. -->
         <div class="tbtns" v-if="target && !allOnPins">
           <span class="muted">Other long clips ({{ LONG }}s or more) play</span>
           <span v-if="plan">
@@ -76,20 +77,20 @@
             <template v-else>all of themselves (it's under {{ fmtTime(target) }} even so)</template>
           </span>
         </div>
-        <div class="tbtns" v-else>
+        <div class="tbtns" v-if="!target">
           <span class="muted">Long clips ({{ LONG }}s or more) play</span>
           <button
             v-for="c in CAPS" :key="c.v" class="btn small" :class="{ active: cap === c.v }" @click="cap = c.v"
             :title="c.v ? `Each long clip plays as a few stretches of up to ${c.v}s, spread evenly through it` : 'Each long clip plays all of itself, less a moment at each end (or the long stretch you picked in the shoot)'"
           >{{ c.label }}</button>
         </div>
-        <div class="tbtns" v-if="target || cap">
+        <div class="tbtns" v-if="!target && cap">
           <span class="muted">At most</span>
           <button v-for="x in [2, 3, 4, 5, 6]" :key="x" class="btn small" :class="{ active: most === x }" @click="most = x">{{ x }}</button>
           <span class="muted">stretches per long clip</span>
           <small class="muted">(spread evenly through it; clips of 2 minutes or more get them all, shorter ones fewer)</small>
         </div>
-        <label class="check">
+        <label class="check" v-if="!target">
           <input type="checkbox" v-model="quiet" /> Skip quiet moments in long clips
           <small class="muted">(real speed; where nothing much happens is cut out)</small>
         </label>
@@ -175,7 +176,7 @@ watch([source, style, photo, cap, most, quiet, target, around], () => {
   timer = setTimeout(async () => {
     const n = ++asked
     try {
-      const r = await api.relayPlan(source.value, { photo: photo.value, cap: cap.value || null, most: most.value, quiet: quiet.value,
+      const r = await api.relayPlan(source.value, { photo: photo.value, cap: cap.value || null, most: most.value, quiet: !target.value && quiet.value,
                                                          target: target.value || null, around: around.value })
       if (n === asked) { plans.value = r.plans; approx.value = r.approx }
     } catch { if (n === asked) plans.value = [] }
@@ -230,7 +231,7 @@ async function make() {
   try {
     const r = source.value
       ? await api.folderToReel(source.value, name.value.trim(), { style: style.value, dial: dial.value, photo: photo.value,
-                                                                  cap: cap.value || null, most: most.value, quiet: quiet.value,
+                                                                  cap: cap.value || null, most: most.value, quiet: !target.value && quiet.value,
                                                                   around: around.value,
                                                                   target: style.value === 'relay' ? target.value || null : null })
       : await api.createReel(name.value.trim())
