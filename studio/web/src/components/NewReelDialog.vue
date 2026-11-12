@@ -109,7 +109,10 @@
           </span>
           <button class="btn primary small" @click="leaving = true">Choose what to leave out…</button>
         </div>
-        <p v-else-if="exclude.length" class="muted small">{{ count(exclude.length, 'thing', 'things') }} left out of the flow. <button class="link" @click="leaving = true">Change</button></p>
+        <div v-else class="tbtns">
+          <button class="btn small" :disabled="!files.length" @click="leaving = true">Choose what's in…</button>
+          <small class="muted">{{ exclude.length ? `${count(exclude.length, 'thing', 'things')} left out of the flow` : 'every clip and photo from the shoot is in' }}</small>
+        </div>
         <p v-if="summary" class="estimate">
           {{ summary }}<i v-if="plan.stats.limitedBy === 'photos'" class="limited">Mostly photos, so splits stay short.</i>
           <small v-if="approx" class="muted"> (a little less once quiet moments are measured)</small>

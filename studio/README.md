@@ -320,7 +320,12 @@ folder* (a shoot) ask for a name and a style:
 - **Relay:** nothing is on screen for less than 3 seconds (`relay.MIN_SCENE`):
   every full-frame moment, split and host-alone gap between cameos is 3s
   or more, or isn't there (a shorter split is a straight cut), and photos
-  stay 3, 4 or 6s. When it can't keep to that (clips under 3s themselves,
+  stay 3, 4 or 6s. A length picked never makes a long clip's stretches
+  shorter than 9s (3s coming in under the one before, 3s alone, 3s on top
+  of the next: any shorter and they'd only cut, not relay); if the footage
+  won't fit like that, each long clip gets fewer stretches first (At most
+  is a most). *Choose what's in…* opens the screen below any time. When it
+  can't keep to that (clips under 3s themselves,
   or more footage than fits the length picked even at the shortest
   stretches), the dialog says so, and *Make the reel* first opens **Leave
   things out of the flow**: the shoot's clips and photos full screen, in

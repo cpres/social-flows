@@ -88,7 +88,12 @@ BREATH = 2.0
 MOST_DEFAULT = 4
 MOST_MAX = 12
 FULL_AT = 120.0
-MIN_STRETCH = 4.0   # shortest stretch a target length can ask of a long clip
+# Shortest stretch a target length can ask of a long clip: long enough to
+# relay, coming in under the one before (MIN_OVERLAP), alone (MIN_SCENE)
+# and carrying on over the next (MIN_OVERLAP). Any shorter and stretches only
+# cut from one to the next, which isn't a relay; if the footage still won't
+# fit the length at this, something has to come out (the dialog says so).
+MIN_STRETCH = MIN_SCENE + 2 * MIN_OVERLAP
 
 LONG, SHORT, PHOTO = "LONG", "SHORT", "PHOTO"
 
@@ -214,6 +219,12 @@ def pinned_stretches(start, length, pins, cap, most=MOST_DEFAULT, around=AROUND_
         else:
             merged.append([a, b])
     return [(round(a, 3), round(b - a, 3)) for a, b in merged]
+
+
+def fits(total, target):
+    """Whether a reel this long is near enough a target length (as the
+    New reel dialog's LeaveOut.overBy)."""
+    return total <= target + max(5.0, target * 0.1)
 
 
 def fit_target(make_items, opts, target, longest):

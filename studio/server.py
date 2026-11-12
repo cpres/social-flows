@@ -568,8 +568,18 @@ def relay_fit(bases, opts):
     longest = max([float(b["p"]["duration"] or 0) for b in bases if b["p"]["kind"] == "video"] or [0.0])
     # With a length to fill, it decides how long each highlight's moment is too
     # (the fitted length, or all of the clip): `around` is for no target.
-    return relay_mod.fit_target(lambda cap: expand_items(bases, cap, opts["most"], cap or math.inf),
-                                opts, opts["target"], longest)
+    # Stretches never go under relay.MIN_STRETCH (shorter can't relay), so if
+    # the footage won't fit like that, each long clip gets fewer of them
+    # (At most is a most) before anything has to come out.
+    best = None
+    for most in range(opts["most"], 0, -1):
+        got = relay_mod.fit_target(lambda cap: expand_items(bases, cap, most, cap or math.inf),
+                                   opts, opts["target"], longest)
+        if best is None or got[1]["stats"]["totalSeconds"] < best[1]["stats"]["totalSeconds"]:
+            best = got
+        if relay_mod.fits(got[1]["stats"]["totalSeconds"], opts["target"]):
+            return got
+    return best
 
 
 @app.post("/api/folders/{name}/relay-plan")

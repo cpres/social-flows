@@ -306,19 +306,25 @@ class Fixtures(unittest.TestCase):
                 else:
                     out.append(c)
             return out
-        for target in (60, 90, 120, 180):
+        for target in (120, 150, 180, 240):
             for dial in (1, 5, 9):
                 opts = {"dial": dial, "photo_seconds": 4}
                 items, plan, cap = relay.fit_target(make, opts, target, 180.0)
                 got = plan["stats"]["totalSeconds"]
                 self.assertLess(abs(got - target), max(4.0, target * 0.05), (target, dial, got, cap))
                 self.assertEqual(relay.check(plan, items, {**opts, "cap": cap}), [])
+                # stretches stay long enough to relay: they hand on, never just cut
+                self.assertGreaterEqual(cap or 999, relay.MIN_STRETCH)
+                if dial >= relay.PAIR_LONG_LONG:
+                    self.assertGreater(plan["stats"]["splitPct"], 0, (target, dial, cap))
         # everything at full length is under the target: full length, no cap
         _, plan, cap = relay.fit_target(make, {"dial": 5}, 2000, 180.0)
         self.assertIsNone(cap)
-        # can't get that short: the shortest stretches
-        _, plan, cap = relay.fit_target(make, {"dial": 5}, 5, 180.0)
+        # can't get that short: the shortest stretches that still relay, and it says it doesn't fit
+        _, plan, cap = relay.fit_target(make, {"dial": 5}, 30, 180.0)
         self.assertEqual(cap, relay.MIN_STRETCH)
+        self.assertFalse(relay.fits(plan["stats"]["totalSeconds"], 30))
+        self.assertGreater(plan["stats"]["splitPct"], 0)
 
     def test_dial_and_migration(self):
         self.assertEqual(relay.dial_of(None, "single"), 3)
