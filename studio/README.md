@@ -56,7 +56,11 @@ python3 studio/server.py --open
   or more videos (or one of 15s or more), the shoot page offers to **weave** them
   (below).
 - **★ Highlights** (long clips, 10s or more): a video opens showing all of
-  itself. Press `H` as it plays (or *★ Highlight*) to mark a moment; nothing
+  itself (a short pick saved on it before is set aside, keeping its framing,
+  until you change the selection). Watch it at **1×, 2× or 4×** (`S` cycles;
+  remembered); a highlight marked sped up goes back a little for the moment
+  it took to press the key. The file you're on is in the address (`?file=`), so
+  a refresh comes back to it. Press `H` as it plays (or *★ Highlight*) to mark a moment; nothing
   else moves and it keeps playing. Mark as many as you like: they're kept on
   the file, so every reel made from the folder later uses them. Click a ★ or
   its chip to go there, drag it to move it, double-click it to take it off.

@@ -109,6 +109,11 @@
             <button class="btn" :class="{ active: player.playingPart.value }" @click="player.playPart">▶ Play selection <kbd>Space</kbd></button>
             <span class="muted mono">{{ fmtTime(player.playhead.value) }}</span>
             <span class="spacer"></span>
+            <span class="speed" title="Playback speed (S)">
+              <button
+                v-for="r in RATES" :key="r" class="btn small" :class="{ active: rate === r }" @click="setRate(r)"
+              >{{ r }}×</button>
+            </span>
             <button class="btn small" @click="setIn">Start here <kbd>I</kbd></button>
             <button class="btn small" @click="setOut">End here <kbd>O</kbd></button>
           </div>
@@ -200,7 +205,7 @@
 
         <p class="muted keys">
           <kbd>Space</kbd> play selection · <kbd>Enter</kbd> play/pause whole clip · <kbd>I</kbd>/<kbd>O</kbd> start/end at playhead ·
-          <kbd>←</kbd>/<kbd>→</kbd> nudge 0.1s · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next · <kbd>H</kbd> highlight ·
+          <kbd>←</kbd>/<kbd>→</kbd> nudge 0.1s · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next · <kbd>H</kbd> highlight · <kbd>S</kbd> speed 1×/2×/4× ·
           <kbd>1</kbd>–<kbd>9</kbd> add to reel · <kbd>G</kbd> Instagram overlays
         </p>
         </div>
@@ -220,8 +225,8 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
 import { useRefreshOnFocus } from '../refresh'
@@ -238,6 +243,7 @@ import NewReelDialog from '../components/NewReelDialog.vue'
 const props = defineProps({ name: { type: String, required: true } })
 const emit = defineEmits(['root'])
 const router = useRouter()
+const route = useRoute()
 
 const media = ref([])
 const items = ref([])
@@ -268,11 +274,20 @@ const segments = computed(() =>
     .map((p) => ({ id: p.id, start: p.start, length: p.length, color: reelColor(p.reelId),
                    label: `${reelName(p.reelId)} · ${fmtTime(p.start)} (${p.length.toFixed(1)}s)` })))
 
+const LONG_CLIP = 10   // seconds: as relay.py LONG_THRESHOLD
 const DEFAULT_LENGTH = 2   // seconds, for a new selection on a video
 
 // A clip's selection: the one picked here before, else a fresh one where
 // the engine would cut by default.
 function initDraft(m) {
+  // A long clip's short pick (from before highlights, a guess at one moment)
+  // isn't shown: it opens whole, keeping the pick's framing. Relay ignores a
+  // pick that short anyway; the pick is replaced once the selection changes.
+  if (m.pick && m.kind === 'video' && m.duration >= LONG_CLIP && m.pick.length < LONG_CLIP) {
+    drafts[m.id] = { ...m.pick, start: 0, length: m.duration }
+    kept.delete(m.id)
+    return
+  }
   if (m.pick) {
     drafts[m.id] = { ...m.pick }
     kept.add(m.id)
@@ -310,6 +325,12 @@ onMounted(async () => {
     const data = await api.folder(props.name)
     apply(data)
     emit('root', data.path)
+    // The file in the address (?file=), so a refresh comes back to it.
+    const at = media.value.findIndex((m) => m.file === route.query.file)
+    if (at > 0) {
+      selected.value = at   // before the address is written back with the first file
+      nextTick(() => select(at))   // scrolls the list to it
+    }
   } catch (e) {
     error.value = e.message
   } finally {
@@ -342,6 +363,12 @@ onBeforeUnmount(() => { saver.flushAll(); pickSaver.flushAll() })
 
 // ---------------------------------------------------------------- selection
 
+// The file you're on goes in the address, so a refresh (after an update,
+// say) opens it again.
+watch(() => current.value?.file, (file) => {
+  if (file && route.query.file !== file) router.replace({ query: { ...route.query, file } })
+})
+
 function select(i) {
   if (i < 0 || i >= media.value.length) return
   selected.value = i
@@ -358,6 +385,7 @@ function select(i) {
 }
 
 function onLoaded() {
+  applyRate()
   player.seek(range.value.start)
 }
 
@@ -398,7 +426,6 @@ function setOut() {
 // it shows the moments reels would focus on instead (suggested, from how much
 // moves), and how much of it reels want (Less / Normal / More).
 
-const LONG_CLIP = 10   // seconds: as relay.py LONG_THRESHOLD
 const AMOUNTS = [
   { v: -1, label: 'Less', hint: 'Fewer stretches of this clip in a reel' },
   { v: 0, label: 'Normal', hint: 'As many stretches as its length gets' },
@@ -428,11 +455,29 @@ function savePins(m = current.value) {
   m.highlights = [...(m.highlights || [])].sort((a, b) => a - b)
   pinSaver.queue(m.id, { highlights: [...m.highlights], amount: m.amount || 0 })
 }
+// Watching faster to find the moments: 1×, 2× or 4×, remembered.
+const RATES = [1, 2, 4]
+const rate = ref(RATES.includes(Number(localStorage.getItem('shootRate'))) ? Number(localStorage.getItem('shootRate')) : 1)
+function applyRate() {
+  const v = player.video.value
+  if (v) { v.defaultPlaybackRate = rate.value; v.playbackRate = rate.value }
+}
+function setRate(r) {
+  rate.value = r
+  try { localStorage.setItem('shootRate', String(r)) } catch {}
+  applyRate()
+}
+watch(() => player.video.value, applyRate)
+// A key press lands a moment after what you reacted to; sped up, that's
+// more of the clip, so a sped-up highlight goes back by the extra.
+const REACTION = 0.3   // seconds
+
 // H: mark where the playhead is. Nothing else moves; the video keeps playing.
 function addPin() {
   const m = current.value
   if (m?.kind !== 'video') return
-  const t = Math.round(player.playhead.value * 100) / 100
+  const back = player.playing.value ? REACTION * (rate.value - 1) : 0
+  const t = Math.round(Math.max(0, player.playhead.value - back) * 100) / 100
   if (pins.value.some((x) => Math.abs(x - t) < 0.25)) return
   m.highlights = [...pins.value, t]
   savePins()
@@ -639,6 +684,7 @@ function onKey(e) {
   else if ((k === 'i' || k === 'I') && video) setIn()
   else if ((k === 'o' || k === 'O') && video) setOut()
   else if ((k === 'h' || k === 'H') && video) addPin()
+  else if ((k === 's' || k === 'S') && video) setRate(RATES[(RATES.indexOf(rate.value) + 1) % RATES.length])
   else if (k === 'ArrowDown') select(selected.value + 1)
   else if (k === 'ArrowUp') select(selected.value - 1)
   else if (k === 'ArrowLeft' && video) { setRange({ ...range.value, start: range.value.start - (e.shiftKey ? 1 : 0.1) }); player.seek(range.value.start) }
@@ -657,6 +703,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .pickbar .btn.danger { color: var(--danger); border-color: var(--danger); }
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
 .btn.ghost { border-style: dashed; opacity: 0.8; }
+.speed { display: inline-flex; gap: 4px; margin-right: 8px; }
 .moments-hint { font-size: 12px; margin: 4px 0 8px; }
 .amount { margin-bottom: 8px; }
 .hint { font-size: 12px; margin: 8px 0 0; }
