@@ -99,7 +99,9 @@
             :duration="current.duration" :start="range.start" :length="range.length"
             :playhead="player.playhead.value" :segments="segments"
             :thumb-at="(t) => api.thumb(current.folder, current.file, t, 160)"
+            :pins="pins" :pin-on="pinOn"
             @update="setRange" @seek="player.seek" @pick="activeId = $event"
+            @pin-click="centreOn" @pin-move="movePin" @pin-drop="savePins" @pin-remove="removePin"
           />
           <div class="controls">
             <button class="btn" @click="player.toggle">{{ player.playing.value ? 'Pause' : 'Play' }} <kbd>Enter</kbd></button>
@@ -109,11 +111,20 @@
             <button class="btn small" @click="setIn">Start here <kbd>I</kbd></button>
             <button class="btn small" @click="setOut">End here <kbd>O</kbd></button>
           </div>
+          <div class="controls highlights">
+            <button class="btn small" @click="addPin" title="Pin the moment at the playhead and centre the selection on it">★ Highlight <kbd>H</kbd></button>
+            <button
+              v-for="(t, i) in pins" :key="i" class="btn small" :class="{ active: i === pinOn }"
+              :title="`Centre the selection on ${fmtTime(t)}`" @click="centreOn(i)"
+            >★ {{ fmtTime(t) }}</button>
+            <span v-if="pinOn >= 0 && offCentre" class="muted small">off-centre: the clip {{ range.start < 0.01 ? 'starts' : 'ends' }} too close</span>
+            <span v-else-if="!pins.length" class="muted small">Pin the moments that matter in a long clip; the selection sits with each one in its middle.</span>
+          </div>
         </template>
 
         <TimingFields
           :kind="current.kind" :start="range.start" :length="range.length"
-          :duration="current.duration" @update="setRange"
+          :duration="current.duration" @update="setTiming"
         >
           <p v-if="!active && kept.has(current.id)" class="muted kept">
             Kept for this file: reels and Weave start from this pick.
@@ -168,7 +179,7 @@
 
         <p class="muted keys">
           <kbd>Space</kbd> play selection · <kbd>Enter</kbd> play/pause whole clip · <kbd>I</kbd>/<kbd>O</kbd> start/end at playhead ·
-          <kbd>←</kbd>/<kbd>→</kbd> nudge 0.1s · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next ·
+          <kbd>←</kbd>/<kbd>→</kbd> nudge 0.1s · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next · <kbd>H</kbd> highlight ·
           <kbd>1</kbd>–<kbd>9</kbd> add to reel · <kbd>G</kbd> Instagram overlays
         </p>
         </div>
@@ -358,6 +369,71 @@ function setOut() {
   if (player.playhead.value - r.start >= 0.2) setRange({ start: r.start, length: player.playhead.value - r.start })
 }
 
+// ---------------------------------------------------------------- highlights
+// Moments pinned on a clip (saved on it, so Weave starts from them too). The
+// selection can sit centred on one: half its length before, half after. While
+// it is, changing the length keeps it centred.
+
+const pins = computed(() => (current.value?.kind === 'video' ? current.value.highlights || [] : []))
+const centreOf = (r) => r.start + r.length / 2
+// The highlight the selection is centred on, or the one it would be if the
+// clip's edge weren't in the way (it's inside the selection, nearest the middle).
+const pinOn = computed(() => {
+  const r = range.value
+  let best = -1
+  pins.value.forEach((t, i) => {
+    if (t < r.start - 0.01 || t > r.start + r.length + 0.01) return
+    const want = fitRange(t - r.length / 2, r.length, current.value.duration).start
+    if (Math.abs(want - r.start) < 0.06 && (best < 0 || Math.abs(t - centreOf(r)) < Math.abs(pins.value[best] - centreOf(r)))) best = i
+  })
+  return best
+})
+const offCentre = computed(() => pinOn.value >= 0 && Math.abs(pins.value[pinOn.value] - centreOf(range.value)) > 0.05)
+
+const pinSaver = debouncedSaver((id, { pins: ts }) => api.saveHighlights(id, ts).catch((e) => showFlash(e.message)), 300)
+onBeforeUnmount(() => pinSaver.flushAll())
+function savePins() {
+  const m = current.value
+  m.highlights = [...(m.highlights || [])].sort((a, b) => a - b)
+  pinSaver.queue(m.id, { pins: [...m.highlights] })
+}
+function centreOn(i) {
+  const t = pins.value[i]
+  if (t === undefined) return
+  setRange({ start: t - range.value.length / 2, length: range.value.length })
+  player.seek(range.value.start)
+}
+function addPin() {
+  const m = current.value
+  if (m?.kind !== 'video') return
+  const t = Math.round(player.playhead.value * 100) / 100
+  const near = pins.value.findIndex((x) => Math.abs(x - t) < 0.25)
+  if (near >= 0) return centreOn(near)
+  m.highlights = [...pins.value, t]
+  savePins()
+  centreOn(m.highlights.indexOf(t))
+  showFlash(`Highlight at ${fmtTime(t)}`)
+}
+// Dragging a ★ the selection is centred on brings the selection with it.
+function movePin(i, t) {
+  const m = current.value
+  const was = pinOn.value === i
+  m.highlights[i] = Math.min(Math.max(t, 0), m.duration)
+  if (was) setRange({ start: m.highlights[i] - range.value.length / 2, length: range.value.length })
+}
+function removePin(i) {
+  current.value.highlights.splice(i, 1)
+  savePins()
+}
+// Start/length typed or a quick length: centred on a highlight, it stays centred.
+function setTiming({ start, length }) {
+  const i = pinOn.value
+  if (i >= 0 && Math.abs(start - range.value.start) < 0.01 && Math.abs(length - range.value.length) >= 0.01) {
+    start = pins.value[i] - length / 2
+  }
+  setRange({ start, length })
+}
+
 // ---------------------------------------------------------------- layout
 
 // For landscape footage (a timelapse): crop it, or show it whole over a blurred copy.
@@ -535,6 +611,7 @@ function onKey(e) {
   else if (k === 'Enter') player.toggle()
   else if ((k === 'i' || k === 'I') && video) setIn()
   else if ((k === 'o' || k === 'O') && video) setOut()
+  else if ((k === 'h' || k === 'H') && video) addPin()
   else if (k === 'ArrowDown') select(selected.value + 1)
   else if (k === 'ArrowUp') select(selected.value - 1)
   else if (k === 'ArrowLeft' && video) { setRange({ ...range.value, start: range.value.start - (e.shiftKey ? 1 : 0.1) }); player.seek(range.value.start) }
