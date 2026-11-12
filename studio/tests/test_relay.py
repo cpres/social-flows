@@ -316,3 +316,29 @@ class Fixtures(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Highlights(unittest.TestCase):
+    """A long clip's stretches on its highlights (relay.pinned_stretches)."""
+
+    def test_one_per_highlight_centred(self):
+        self.assertEqual(relay.pinned_stretches(0, 180, [20, 60, 100, 170], 6, 4),
+                         [(17.0, 6.0), (57.0, 6.0), (97.0, 6.0), (167.0, 6.0)])
+
+    def test_close_highlights_share_a_stretch(self):
+        self.assertEqual(relay.pinned_stretches(0, 180, [50, 53], 6, 4), [(47.0, 9.0)])
+
+    def test_kept_inside_the_clip(self):
+        self.assertEqual(relay.pinned_stretches(0, 180, [1], 6, 4), [(0, 6.0)])
+
+    def test_fewer_stretches_take_the_nearest(self):
+        # a 30s clip gets one stretch: the highlight nearest the middle
+        self.assertEqual(relay.pinned_stretches(0, 30, [3, 14, 27], 4, 4), [(12.0, 4.0)])
+
+    def test_no_cap_plays_it_all(self):
+        self.assertIsNone(relay.pinned_stretches(0, 180, [50], None, 4))
+
+    def test_amounts_and_suggestions(self):
+        self.assertEqual((relay.most_for(4, -1), relay.most_for(4, 0), relay.most_for(4, 1)), (2, 4, 8))
+        self.assertEqual([relay.suggest_count(d) for d in (20, 90, 300)], [2, 3, 5])
+        self.assertEqual(len(relay.suggest_moments([], 90, 3)), 3)

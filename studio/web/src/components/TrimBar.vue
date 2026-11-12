@@ -22,8 +22,13 @@
         <span class="tip">{{ fmtTime(start + length) }}</span>
       </div>
       <button
+        v-for="(t, i) in suggested" :key="`s${i}`" class="pin ghost" :style="{ left: pct(t) }"
+        :title="`Suggested moment at ${fmtTime(t)}: reels focus here until the clip has highlights`"
+        @pointerdown.stop @click.stop="emit('suggest-click', i)"
+      >☆</button>
+      <button
         v-for="(t, i) in pins" :key="`p${i}`" class="pin" :class="{ on: i === pinOn }" :style="{ left: pct(t) }"
-        :title="`Highlight at ${fmtTime(t)}: click to centre the selection on it, drag to move it, double-click to take it off`"
+        :title="`Highlight at ${fmtTime(t)}: click to go there, drag to move it, double-click to take it off`"
         @pointerdown.stop="downPin($event, i)"
       >★</button>
       <div class="playhead" :style="{ left: pct(playhead) }"></div>
@@ -57,9 +62,10 @@ const props = defineProps({
   segments: { type: Array, default: () => [] },
   // Highlights: moments pinned on the clip (seconds), drawn as ★ on the bar.
   pins: { type: Array, default: () => [] },
-  pinOn: { type: Number, default: -1 },   // the one the selection is centred on
+  pinOn: { type: Number, default: -1 },   // one to ring, if any
+  suggested: { type: Array, default: () => [] },   // ☆ moments shown while there are no highlights
 })
-const emit = defineEmits(['update', 'seek', 'dragend', 'pick', 'pin-click', 'pin-move', 'pin-drop', 'pin-remove'])
+const emit = defineEmits(['update', 'seek', 'dragend', 'pick', 'pin-click', 'pin-move', 'pin-drop', 'pin-remove', 'suggest-click'])
 
 const bar = ref(null)
 let mode = null
@@ -175,6 +181,7 @@ function up() {
   border: 0; border-radius: 999px; background: var(--forest); color: #f2c94c;
   font-size: 14px; line-height: 22px; cursor: grab; z-index: 4; box-shadow: 0 0 0 2px var(--paper);
 }
+.pin.ghost { background: var(--paper); color: var(--forest); cursor: pointer; opacity: 0.85; box-shadow: 0 0 0 2px var(--forest); }
 .pin.on { box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px #f2c94c; }
 .pin:active { cursor: grabbing; }
 .playhead {

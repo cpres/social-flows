@@ -141,7 +141,12 @@ def media_dict(row):
     return {"id": row["id"], "folder": row["folder"], "file": row["name"], "kind": row["kind"],
             "duration": row["duration"], "capturedAt": row["captured_at"],
             "width": row["width"], "height": row["height"], "missing": bool(row["missing"]),
-            "highlights": highlights_of(row)}
+            "highlights": highlights_of(row), "amount": amount_of(row)}
+
+
+def amount_of(row):
+    """How much of a clip reels want: -1 less, 0 as usual, 1 more."""
+    return int(row["amount"] or 0) if "amount" in row.keys() else 0
 
 
 def item_dict(row):
@@ -480,17 +485,28 @@ def relay_bases(db, parts, opts, cached_only=False):
     whether some movement wasn't measured yet (cached_only)."""
     bases, missing = [], False
     for p in parts:
-        b = {"p": p, "pick": None, "points": None}
+        b = {"p": p, "pick": None, "points": None, "pins": [], "amount": 0}
         if p["kind"] == "video":
             b["pick"] = pick_of(db, p["media_id"])
-            if opts.get("quiet") and float(p["duration"] or 0) >= relay_mod.LONG_THRESHOLD:
+            row = db.execute("SELECT * FROM media WHERE id = ?", (p["media_id"],)).fetchone()
+            if row:
+                b["pins"], b["amount"] = highlights_of(row), amount_of(row)
+            long = float(p["duration"] or 0) >= relay_mod.LONG_THRESHOLD
+            # Movement: for skipping quiet moments, and for suggested moments
+            # on a long clip with no highlights.
+            if long and (opts.get("quiet") or not b["pins"]):
                 path = ROOT / p["path"]
                 try:
                     act = activity_cached(path) if cached_only else activity_of(path)
                 except Exception:
                     act = None
                 if act:
-                    b["points"] = [(float(a), float(v)) for a, v in act["points"]]
+                    pts = [(float(a), float(v)) for a, v in act["points"]]
+                    if opts.get("quiet"):
+                        b["points"] = pts
+                    if not b["pins"]:
+                        dur = float(p["duration"])
+                        b["suggested"] = relay_mod.suggest_moments(pts, dur, relay_mod.suggest_count(dur, b["amount"]))
                 else:
                     missing = True
         bases.append(b)
@@ -512,10 +528,14 @@ def expand_items(bases, cap, most):
         it = {"kind": p["kind"], "duration": float(p["duration"] or 0), "start": float(p["start"]),
               "length": float(p["length"]), "shot_at": float(p["captured_at"] or 0), "_row": row_i}
         if p["kind"] == "video" and it["duration"] >= relay_mod.LONG_THRESHOLD:
+            mine = relay_mod.most_for(most, b.get("amount", 0))   # Less / More of this clip
             if pick and pick["length"] >= relay_mod.LONG_THRESHOLD:   # the stretch picked: just as picked
-                st = relay_mod.stretches(float(pick["start"]), float(pick["length"]), cap, breath=0, most=most)
+                span, breath = (float(pick["start"]), float(pick["length"])), 0
             else:
-                st = relay_mod.stretches(0.0, it["duration"], cap, most=most)
+                span, breath = (0.0, it["duration"]), relay_mod.BREATH
+            # On its highlights (or, with none, the suggested moments), else spread evenly.
+            st = relay_mod.pinned_stretches(*span, b.get("pins") or b.get("suggested") or [], cap, mine) \
+                or relay_mod.stretches(*span, cap, breath=breath, most=mine)
             # each stretch claims the photos shot up to halfway to its neighbours
             bounds = [0.0] + [(a + la + c) / 2 for (a, la), (c, _) in zip(st, st[1:])] + [it["duration"]]
             for k, (s, ln) in enumerate(st):
@@ -1137,9 +1157,10 @@ def save_pick(media_id: int, body: dict = Body(...)):
 
 @app.put("/api/media/{media_id}/highlights")
 def save_highlights(media_id: int, body: dict = Body(...)):
-    """Keep a clip's highlights, {highlights: [seconds]}: the moments pinned on
-    it, each kept in the middle of its part. They belong to the clip, so every
-    weave of it starts from them."""
+    """Keep a clip's highlights, {highlights: [seconds], amount?: -1|0|1}: the
+    moments marked on it in its shoot, and how much of it reels want. They
+    belong to the clip, so every reel of it starts from them: a Relay's
+    stretches of a long clip sit on them (relay.pinned_stretches)."""
     with lib.connect() as db:
         m = db.execute("SELECT * FROM media WHERE id = ?", (media_id,)).fetchone()
         if not m:
@@ -1150,7 +1171,31 @@ def save_highlights(media_id: int, body: dict = Body(...)):
         except (TypeError, ValueError):
             raise HTTPException(400, "highlights must be a list of seconds")
         db.execute("UPDATE media SET highlights = ? WHERE id = ?", (json.dumps(ts) if ts else None, media_id))
-        return {"highlights": ts}
+        if "amount" in body:
+            db.execute("UPDATE media SET amount = ? WHERE id = ?", (min(max(int(body["amount"] or 0), -1), 1), media_id))
+        row = db.execute("SELECT * FROM media WHERE id = ?", (media_id,)).fetchone()
+        return {"highlights": ts, "amount": amount_of(row)}
+
+
+@app.get("/api/media/{media_id}/moments")
+def moments(media_id: int):
+    """A long clip's moments for its shoot page: {highlights, amount,
+    suggested}: suggested are where reels focus while it has no highlights
+    (2 to 5 of them, more for a longer clip; fewer or more with amount),
+    from how much moves (measured once, cached)."""
+    with lib.connect() as db:
+        m = db.execute("SELECT * FROM media WHERE id = ?", (media_id,)).fetchone()
+    if not m or m["kind"] != "video":
+        raise HTTPException(404, "No such clip")
+    dur = float(m["duration"] or 0)
+    suggested = []
+    if dur >= relay_mod.LONG_THRESHOLD:
+        try:
+            points = [(float(t), float(v)) for t, v in activity_of(ROOT / m["path"])["points"]]
+        except Exception:
+            points = []
+        suggested = relay_mod.suggest_moments(points, dur, relay_mod.suggest_count(dur, amount_of(m)))
+    return {"highlights": highlights_of(m), "amount": amount_of(m), "suggested": suggested}
 
 
 @app.delete("/api/media/{media_id}/pick")

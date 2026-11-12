@@ -55,6 +55,22 @@ python3 studio/server.py --open
   Downloads. `DOWNLOADS_DIR` points it somewhere else. If what came in is two
   or more videos (or one of 15s or more), the shoot page offers to **weave** them
   (below).
+- **★ Highlights** (long clips, 10s or more): a video opens showing all of
+  itself. Press `H` as it plays (or *★ Highlight*) to mark a moment; nothing
+  else moves and it keeps playing. Mark as many as you like: they're kept on
+  the file, so every reel made from the folder later uses them. Click a ★ or
+  its chip to go there, drag it to move it, double-click it to take it off.
+  Until a clip has highlights it shows **☆ suggested moments**, the busiest
+  stretches (2 to 5, more for a longer clip), and reels focus on those;
+  *Keep these* turns them into highlights to adjust. *How much of this clip*
+  (*Less* / *Normal* / *More*) gives good footage more stretches in a Relay
+  (twice as many) and more suggestions, or less of a clip you care less
+  about. In a **Relay** with *Up to Ns* set, a long clip's stretches sit
+  centred on its highlights instead of being spread evenly: one per highlight
+  while there are enough stretches; with fewer, the highlights nearest where
+  the even ones would fall (one stretch: the one nearest the middle).
+  Highlights close enough to share footage share one stretch. Trimming the
+  selection still limits the clip to that stretch.
 - **Imported into the wrong folder?** The shoot page says what just came in,
   with *Move them* next to it. Any time, *↪ Move files* in a shoot's header
   puts checkboxes on the clip list (*All* / *None*, `Esc` to stop); pick some

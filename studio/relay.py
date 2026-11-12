@@ -128,6 +128,81 @@ def stretches(start, length, cap=None, breath=BREATH, most=MOST_DEFAULT):
     return [(round(start + pad + i * share + (share - cap) / 2, 3), round(float(cap), 3)) for i in range(n)]
 
 
+# ---------------------------------------------------------------- highlights
+# Moments marked on a clip in its shoot (or, until any are, ones suggested
+# from how much moves). With a cap, a long clip's stretches sit on them
+# instead of being spread evenly: each stretch centred on one.
+
+AMOUNT_MOST = {-1: 0.5, 0: 1.0, 1: 2.0}   # Less / Normal / More of a clip: its share of stretches
+SUGGEST_EVERY = 30.0   # a suggested moment per 30s of clip…
+SUGGEST_RANGE = (2, 5)  # …between 2 and 5 (Less: one fewer, More: two more)
+STILL = 0.05           # a share of the clip moving less than this: no peak, its middle
+
+
+def most_for(most, amount=0):
+    """Stretches a clip may have, given how much of it is wanted."""
+    return int(min(max(round(max(1, int(most or MOST_DEFAULT)) * AMOUNT_MOST.get(amount, 1.0)), 1), MOST_MAX))
+
+
+def suggest_count(duration, amount=0):
+    """How many moments to suggest in a clip this long."""
+    lo, hi = SUGGEST_RANGE
+    n = min(max(round(duration / SUGGEST_EVERY), lo), hi)
+    return max(1, n - 1) if amount < 0 else n + 2 if amount > 0 else n
+
+
+def suggest_moments(points, duration, n, breath=BREATH):
+    """n moments worth showing: the clip less `breath` at each end in n equal
+    shares, the busiest point of each (points: [(seconds, 0..1)], movement),
+    or its middle where nothing much moves. Seconds, in order."""
+    lo, hi = min(breath, duration / 4), max(min(breath, duration / 4), duration - breath)
+    share = (hi - lo) / max(1, n)
+    out = []
+    for k in range(max(1, n)):
+        a, b = lo + k * share, lo + (k + 1) * share
+        inside = [(t, v) for t, v in points or [] if a <= t <= b]
+        best = max(inside, key=lambda p: p[1], default=None)
+        out.append(round(best[0] if best and best[1] > STILL else (a + b) / 2, 2))
+    return out
+
+
+def pinned_stretches(start, length, pins, cap, most=MOST_DEFAULT):
+    """A long clip's stretches placed on its highlights (pins, file seconds,
+    within start..start+length): as many as stretch_count allows for it (but
+    no more than there are pins), each up to `cap` long and centred on its
+    pin as far as the clip allows. With fewer stretches than pins, the pin
+    nearest where each evenly spread stretch would sit (one stretch: the pin
+    nearest the middle). Stretches that would overlap become one, so nothing
+    plays twice. [(start, length)] in file order."""
+    pins = sorted(t for t in pins if start <= t <= start + length)
+    if not pins or not cap:
+        return None
+    even = stretches(start, length, cap, most=most)
+    n = min(len(even), len(pins)) if len(even) > 1 else 1
+    if n >= len(pins):
+        chosen = pins
+    else:
+        targets = [s + ln / 2 for s, ln in (even if len(even) == n else stretches(start, length, cap, most=n))]
+        left, chosen = list(pins), []
+        for c in targets:
+            best = min(left, key=lambda t: abs(t - c))
+            chosen.append(best)
+            left.remove(best)
+        chosen.sort()
+    end = start + length
+    one = min(float(cap), length)
+    wins = [[min(max(t - one / 2, start), end - one), 0.0] for t in chosen]
+    for w in wins:
+        w[1] = w[0] + one
+    merged = []
+    for a, b in wins:
+        if merged and a < merged[-1][1] - 0.01:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    return [(round(a, 3), round(b - a, 3)) for a, b in merged]
+
+
 def fit_target(make_items, opts, target, longest):
     """The stretch length (cap) whose reel comes out closest to `target`
     seconds: make_items(cap) -> the items with long clips in stretches of

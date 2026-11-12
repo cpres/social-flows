@@ -99,9 +99,10 @@
             :duration="current.duration" :start="range.start" :length="range.length"
             :playhead="player.playhead.value" :segments="segments"
             :thumb-at="(t) => api.thumb(current.folder, current.file, t, 160)"
-            :pins="pins" :pin-on="pinOn"
+            :pins="pins" :suggested="suggested"
             @update="setRange" @seek="player.seek" @pick="activeId = $event"
-            @pin-click="centreOn" @pin-move="movePin" @pin-drop="savePins" @pin-remove="removePin"
+            @pin-click="(i) => jumpTo(pins[i])" @pin-move="movePin" @pin-drop="savePins()" @pin-remove="removePin"
+            @suggest-click="(i) => jumpTo(suggested[i])"
           />
           <div class="controls">
             <button class="btn" @click="player.toggle">{{ player.playing.value ? 'Pause' : 'Play' }} <kbd>Enter</kbd></button>
@@ -112,19 +113,39 @@
             <button class="btn small" @click="setOut">End here <kbd>O</kbd></button>
           </div>
           <div class="controls highlights">
-            <button class="btn small" @click="addPin" title="Pin the moment at the playhead and centre the selection on it">★ Highlight <kbd>H</kbd></button>
+            <button class="btn small" @click="addPin" title="Mark the moment at the playhead">★ Highlight <kbd>H</kbd></button>
             <button
-              v-for="(t, i) in pins" :key="i" class="btn small" :class="{ active: i === pinOn }"
-              :title="`Centre the selection on ${fmtTime(t)}`" @click="centreOn(i)"
+              v-for="(t, i) in pins" :key="i" class="btn small"
+              :title="`Go to ${fmtTime(t)}`" @click="jumpTo(t)"
             >★ {{ fmtTime(t) }}</button>
-            <span v-if="pinOn >= 0 && offCentre" class="muted small">off-centre: the clip {{ range.start < 0.01 ? 'starts' : 'ends' }} too close</span>
-            <span v-else-if="!pins.length" class="muted small">Pin the moments that matter in a long clip; the selection sits with each one in its middle.</span>
+            <template v-if="!pins.length && isLong">
+              <span class="muted small" v-if="measuringMoments">Finding the busy moments…</span>
+              <template v-else-if="suggested.length">
+                <button
+                  v-for="(t, i) in suggested" :key="`s${i}`" class="btn small ghost"
+                  :title="`Suggested: go to ${fmtTime(t)}`" @click="jumpTo(t)"
+                >☆ {{ fmtTime(t) }}</button>
+                <button class="link small" @click="keepSuggested" title="Make these highlights, to move or take off">Keep these</button>
+              </template>
+            </template>
+          </div>
+          <p class="muted small moments-hint" v-if="isLong">
+            <template v-if="pins.length">Reels focus on your {{ pins.length }} highlight{{ pins.length === 1 ? '' : 's' }}: with fewer stretches than highlights, the ones nearest where they'd fall.</template>
+            <template v-else>No highlights yet: reels focus on the ☆ suggested moments. Press <kbd>H</kbd> as it plays to mark your own, and only yours are used.</template>
+            Drag a ★ to move it, double-click to take it off.
+          </p>
+          <div class="controls amount" v-if="isLong">
+            <span class="muted small">How much of this clip</span>
+            <button
+              v-for="a in AMOUNTS" :key="a.v" class="btn small" :class="{ active: (current.amount || 0) === a.v }"
+              :title="a.hint" @click="setAmount(a.v)"
+            >{{ a.label }}</button>
           </div>
         </template>
 
         <TimingFields
           :kind="current.kind" :start="range.start" :length="range.length"
-          :duration="current.duration" @update="setTiming"
+          :duration="current.duration" @update="setRange"
         >
           <p v-if="!active && kept.has(current.id)" class="muted kept">
             Kept for this file: reels and Weave start from this pick.
@@ -204,7 +225,7 @@ import { useRouter } from 'vue-router'
 import { api, debouncedSaver } from '../api'
 import { usePlayer } from '../player'
 import { useRefreshOnFocus } from '../refresh'
-import { clockTime, defaultStart, fitRange, fmtTime, folderTitle, reelColor, savedAt } from '../time'
+import { clockTime, fitRange, fmtTime, folderTitle, reelColor, savedAt } from '../time'
 import ClipCard from '../components/ClipCard.vue'
 import MoveDialog from '../components/MoveDialog.vue'
 import DeleteDialog from '../components/DeleteDialog.vue'
@@ -258,8 +279,10 @@ function initDraft(m) {
     return
   }
   kept.delete(m.id)
-  const length = m.kind === 'video' ? Math.min(DEFAULT_LENGTH, m.duration || DEFAULT_LENGTH) : 1.6
-  drafts[m.id] = { start: m.kind === 'video' ? defaultStart(m.duration, length) : 0, length, focusX: 0.5, focusY: 0.5, zoom: 1, layout: '' }
+  // A video starts as all of itself: its highlights (or suggested moments)
+  // say where reels focus. Trim it only to leave footage out.
+  const length = m.kind === 'video' ? m.duration || DEFAULT_LENGTH : 1.6
+  drafts[m.id] = { start: 0, length, focusX: 0.5, focusY: 0.5, zoom: 1, layout: '' }
 }
 const draftOf = (m) => (m && drafts[m.id]) || { start: 0, length: DEFAULT_LENGTH, focusX: 0.5, focusY: 0.5, zoom: 1, layout: '' }
 const guides = ref(false)
@@ -370,68 +393,72 @@ function setOut() {
 }
 
 // ---------------------------------------------------------------- highlights
-// Moments pinned on a clip (saved on it, so Weave starts from them too). The
-// selection can sit centred on one: half its length before, half after. While
-// it is, changing the length keeps it centred.
+// Moments marked on a clip (saved on it, so every reel of it uses them: a
+// Relay's stretches of a long clip sit on them). Until a long clip has any,
+// it shows the moments reels would focus on instead (suggested, from how much
+// moves), and how much of it reels want (Less / Normal / More).
 
+const LONG_CLIP = 10   // seconds: as relay.py LONG_THRESHOLD
+const AMOUNTS = [
+  { v: -1, label: 'Less', hint: 'Fewer stretches of this clip in a reel' },
+  { v: 0, label: 'Normal', hint: 'As many stretches as its length gets' },
+  { v: 1, label: 'More', hint: 'Good footage: twice the stretches, and more suggested moments' },
+]
 const pins = computed(() => (current.value?.kind === 'video' ? current.value.highlights || [] : []))
-const centreOf = (r) => r.start + r.length / 2
-// The highlight the selection is centred on, or the one it would be if the
-// clip's edge weren't in the way (it's inside the selection, nearest the middle).
-const pinOn = computed(() => {
-  const r = range.value
-  let best = -1
-  pins.value.forEach((t, i) => {
-    if (t < r.start - 0.01 || t > r.start + r.length + 0.01) return
-    const want = fitRange(t - r.length / 2, r.length, current.value.duration).start
-    if (Math.abs(want - r.start) < 0.06 && (best < 0 || Math.abs(t - centreOf(r)) < Math.abs(pins.value[best] - centreOf(r)))) best = i
-  })
-  return best
-})
-const offCentre = computed(() => pinOn.value >= 0 && Math.abs(pins.value[pinOn.value] - centreOf(range.value)) > 0.05)
+const isLong = computed(() => current.value?.kind === 'video' && current.value.duration >= LONG_CLIP)
+const suggestedOf = reactive({})   // mediaId -> suggested moments; null while measuring
+const suggested = computed(() => (isLong.value && !pins.value.length ? suggestedOf[current.value.id] || [] : []))
+const measuringMoments = computed(() => isLong.value && suggestedOf[current.value.id] === null)
 
-const pinSaver = debouncedSaver((id, { pins: ts }) => api.saveHighlights(id, ts).catch((e) => showFlash(e.message)), 300)
+async function loadMoments(m) {
+  if (!m || m.kind !== 'video' || m.duration < LONG_CLIP || suggestedOf[m.id] !== undefined) return
+  suggestedOf[m.id] = null
+  try {
+    suggestedOf[m.id] = (await api.moments(m.id)).suggested
+  } catch {
+    suggestedOf[m.id] = []
+  }
+}
+watch(current, loadMoments, { immediate: true })
+
+const pinSaver = debouncedSaver((id, patch) => api.saveHighlights(id, patch.highlights, patch.amount)
+  .catch((e) => showFlash(e.message)), 300)
 onBeforeUnmount(() => pinSaver.flushAll())
-function savePins() {
-  const m = current.value
+function savePins(m = current.value) {
   m.highlights = [...(m.highlights || [])].sort((a, b) => a - b)
-  pinSaver.queue(m.id, { pins: [...m.highlights] })
+  pinSaver.queue(m.id, { highlights: [...m.highlights], amount: m.amount || 0 })
 }
-function centreOn(i) {
-  const t = pins.value[i]
-  if (t === undefined) return
-  setRange({ start: t - range.value.length / 2, length: range.value.length })
-  player.seek(range.value.start)
-}
+// H: mark where the playhead is. Nothing else moves; the video keeps playing.
 function addPin() {
   const m = current.value
   if (m?.kind !== 'video') return
   const t = Math.round(player.playhead.value * 100) / 100
-  const near = pins.value.findIndex((x) => Math.abs(x - t) < 0.25)
-  if (near >= 0) return centreOn(near)
+  if (pins.value.some((x) => Math.abs(x - t) < 0.25)) return
   m.highlights = [...pins.value, t]
   savePins()
-  centreOn(m.highlights.indexOf(t))
-  showFlash(`Highlight at ${fmtTime(t)}`)
+  showFlash(`★ ${fmtTime(t)}`)
 }
-// Dragging a ★ the selection is centred on brings the selection with it.
+const jumpTo = (t) => player.seek(t)
 function movePin(i, t) {
   const m = current.value
-  const was = pinOn.value === i
   m.highlights[i] = Math.min(Math.max(t, 0), m.duration)
-  if (was) setRange({ start: m.highlights[i] - range.value.length / 2, length: range.value.length })
 }
 function removePin(i) {
   current.value.highlights.splice(i, 1)
   savePins()
 }
-// Start/length typed or a quick length: centred on a highlight, it stays centred.
-function setTiming({ start, length }) {
-  const i = pinOn.value
-  if (i >= 0 && Math.abs(start - range.value.start) < 0.01 && Math.abs(length - range.value.length) >= 0.01) {
-    start = pins.value[i] - length / 2
-  }
-  setRange({ start, length })
+// The suggested moments, kept as highlights to change from there.
+function keepSuggested() {
+  current.value.highlights = [...suggested.value]
+  savePins()
+}
+async function setAmount(v) {
+  const m = current.value
+  m.amount = v
+  savePins()
+  await pinSaver.flushAll()
+  delete suggestedOf[m.id]   // more or fewer suggested
+  loadMoments(m)
 }
 
 // ---------------------------------------------------------------- layout
@@ -629,6 +656,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 <style scoped>
 .pickbar .btn.danger { color: var(--danger); border-color: var(--danger); }
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn.ghost { border-style: dashed; opacity: 0.8; }
+.moments-hint { font-size: 12px; margin: 4px 0 8px; }
+.amount { margin-bottom: 8px; }
 .hint { font-size: 12px; margin: 8px 0 0; }
 .count {
   font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px;

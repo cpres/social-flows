@@ -65,7 +65,10 @@ export const api = {
   savePick: (mediaId, pick) => send('PUT', `/api/media/${mediaId}/pick`, pick),
   deletePick: (mediaId) => send('DELETE', `/api/media/${mediaId}/pick`),
   // A clip's highlights: moments pinned on it, in seconds (see Weave's Moments).
-  saveHighlights: (mediaId, highlights) => send('PUT', `/api/media/${mediaId}/highlights`, { highlights }),
+  saveHighlights: (mediaId, highlights, amount) => send('PUT', `/api/media/${mediaId}/highlights`,
+    amount === undefined ? { highlights } : { highlights, amount }),
+  // A long clip's highlights, how much of it is wanted, and its suggested moments.
+  moments: (mediaId) => fetch(`/api/media/${mediaId}/moments`).then(json),
   addItem: (reelId, item) => send('POST', `/api/reels/${reelId}/items`, item),
   updateItem: (id, patch) => send('PATCH', `/api/items/${id}`, patch),
   deleteItem: (id) => send('DELETE', `/api/items/${id}`),
