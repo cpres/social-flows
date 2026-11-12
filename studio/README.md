@@ -70,8 +70,12 @@ python3 studio/server.py --open
   (*Less* / *Normal* / *More*) gives good footage more stretches in a Relay
   (twice as many) and more suggestions, or less of a clip you care less
   about. In a **Relay**, a long clip with highlights plays just the moments
-  around them, never all of itself: *Around each ★ highlight, play* 4–20s
-  (half before, half after; shorter if a target length needs it). Every
+  around them, never all of itself: with a *How long?* set, each highlight's
+  moment grows (or shrinks) until the reel is that long, up to all of the
+  clip: the length you pick comes first. With *As long as it takes*, *Around
+  each ★ highlight, play* 4–20s sets it (half before, half after). If even all
+  of the footage comes out short, it says so: heavy splitting overlaps clips,
+  so a lower split makes a longer reel. Every
   highlight you marked plays; suggested ones play as many as the clip gets
   stretches, the ones nearest where even ones would fall. Highlights close
   enough to share footage share one stretch. More, shorter stretches mean

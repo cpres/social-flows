@@ -49,7 +49,14 @@
             :title="x.v ? `Long clips' stretches are made as long as fits a reel of about ${x.label}` : 'Long clips play as long as you set below'"
           >{{ x.label }}</button>
         </div>
-        <div class="tbtns">
+        <div class="tbtns" v-if="target">
+          <span class="muted">Around each ★ highlight, play</span>
+          <span v-if="plan">
+            <template v-if="plan.stats.cap"><b>{{ plan.stats.cap }}s</b> (half before, half after), to fill {{ fmtTime(target) }}</template>
+            <template v-else>all of the clip, to fill {{ fmtTime(target) }}</template>
+          </span>
+        </div>
+        <div class="tbtns" v-else>
           <span class="muted">Around each ★ highlight, play</span>
           <button
             v-for="x in AROUNDS" :key="x" class="btn small" :class="{ active: around === x }" @click="around = x"
@@ -196,7 +203,8 @@ const summary = computed(() => {
   const list = bits.length > 1 ? `${bits.slice(0, -1).join(', ')} and ${bits[bits.length - 1]}` : bits.join('')
   const what = list + (s.cameoCount ? ` (${s.cameoCount} as cameo${s.cameoCount === 1 ? '' : 's'})` : '')
   const off = target.value && Math.abs(s.totalSeconds - target.value) > Math.max(5, target.value * 0.1)
-  return `${what} · about ${fmtTime(s.totalSeconds)}${off ? (s.totalSeconds > target.value ? ' (the shortest it can be with this footage)' : '') : ''} · ${s.splitPct}% split`
+  const short = s.splitPct ? 'all of the footage; splitting overlaps clips, so turn the split down for longer' : 'all of the footage there is'
+  return `${what} · about ${fmtTime(s.totalSeconds)}${off ? (s.totalSeconds > target.value ? ' (the shortest it can be with this footage)' : ` (${short})`) : ''} · ${s.splitPct}% split`
 })
 const nameEl = ref(null)
 onMounted(() => nextTick(() => nameEl.value?.focus()))

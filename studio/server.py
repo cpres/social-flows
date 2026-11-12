@@ -564,7 +564,9 @@ def relay_fit(bases, opts):
         items = expand_items(bases, opts.get("cap"), opts["most"], opts["around"])
         return items, relay_mod.plan_relay(items, opts), opts.get("cap")
     longest = max([float(b["p"]["duration"] or 0) for b in bases if b["p"]["kind"] == "video"] or [0.0])
-    return relay_mod.fit_target(lambda cap: expand_items(bases, cap, opts["most"], opts["around"]),
+    # With a length to fill, it decides how long each highlight's moment is too
+    # (the fitted length, or all of the clip): `around` is for no target.
+    return relay_mod.fit_target(lambda cap: expand_items(bases, cap, opts["most"], cap or math.inf),
                                 opts, opts["target"], longest)
 
 
