@@ -227,6 +227,26 @@ def fits(total, target):
     return total <= target + max(5.0, target * 0.1)
 
 
+# A reel length to suggest for a shoot (tune here): a quarter of its video
+# plus 3s a photo, to the nearest 15s, between 1 and 4 minutes.
+SUGGEST_VIDEO_SHARE = 0.25
+SUGGEST_PER_PHOTO = 3.0
+SUGGEST_STEP = 15.0
+SUGGEST_RANGE_SECONDS = (60.0, 240.0)
+
+
+def suggest_target(video_seconds, photo_count, photo_seconds=PHOTO_SECONDS):
+    """The reel length (seconds) to start a shoot's New reel on, or None when
+    all of it played whole is under a minute anyway (play everything)."""
+    video_seconds = max(0.0, float(video_seconds or 0))
+    photo_count = max(0, int(photo_count or 0))
+    lo, hi = SUGGEST_RANGE_SECONDS
+    if video_seconds + photo_count * photo_seconds < lo:
+        return None
+    raw = SUGGEST_VIDEO_SHARE * video_seconds + SUGGEST_PER_PHOTO * photo_count
+    return int(min(hi, max(lo, round(raw / SUGGEST_STEP) * SUGGEST_STEP)))
+
+
 def fit_target(make_items, opts, target, longest):
     """The stretch length (cap) whose reel comes out closest to `target`
     seconds: make_items(cap) -> the items with long clips in stretches of

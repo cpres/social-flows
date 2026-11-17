@@ -150,6 +150,18 @@ export const api = {
     `/api/thumb/${enc(folder)}/${enc(file)}?t=${Math.max(0, t).toFixed(1)}&w=${w}`,
 }
 
+// Google Photos, through Google's own picker (gphotos.py): sign-in, a picking
+// session, and downloading what was picked into a shoot folder.
+export const gphotos = {
+  status: () => fetch('/api/gphotos/status').then(json),            // -> { configured, signedIn }
+  signOut: () => send('POST', '/api/gphotos/signout'),
+  newSession: () => send('POST', '/api/gphotos/session'),            // -> { sessionId, pickerUri, pollSeconds, timeoutSeconds }
+  session: (id) => fetch(`/api/gphotos/session/${enc(id)}`).then(json),   // -> { ready, items }
+  // { sessionId, folder, create, intent: { style, target, albumLink } } -> { job, total, skipped }
+  importItems: (body) => send('POST', '/api/gphotos/import', body),
+  importState: (job) => fetch(`/api/gphotos/import/${enc(job)}`).then(json),
+}
+
 // Saves the latest patch for each key after a short pause, so dragging a
 // handle doesn't send a request per pixel.
 export function debouncedSaver(save, wait = 400) {

@@ -8,7 +8,10 @@
         <h1>{{ folderTitle(name) }}</h1>
         <p class="muted">
           {{ media.length }} files · {{ items.length }} part{{ items.length === 1 ? '' : 's' }} tagged into reels
+          <template v-if="intent?.albumLink"> ·
+            <a :href="intent.albumLink" target="_blank" rel="noopener" title="The Google Photos album this came from">album ↗</a></template>
         </p>
+        <p v-if="contentSummary" class="content">{{ contentSummary }}</p>
       </div>
       <button
         v-if="draftAt" class="btn" @click="weave"
@@ -17,7 +20,10 @@
       <button class="btn" @click="makingReel = true" title="Make a reel from everything in this folder, in a style you pick">
         {{ hasSidecar ? 'Turn earlier trims into a reel' : 'Make a reel from this folder' }}
       </button>
-      <NewReelDialog v-if="makingReel" :folder="name" :default-name="folderTitle(name)" @close="makingReel = false" />
+      <NewReelDialog
+        v-if="makingReel" :folder="name" :default-name="folderTitle(name)" :content="content"
+        :initial-style="intent?.style || ''" :initial-target="intent?.target ?? undefined" @close="makingReel = false"
+      />
       <button
         class="btn" :class="{ active: picking }" @click="picking ? stopPicking() : startPicking()" :disabled="!media.length"
         title="Move clips or photos into another shoot folder, or delete them"
@@ -241,6 +247,7 @@ import TimingFields from '../components/TimingFields.vue'
 import TrimBar from '../components/TrimBar.vue'
 import WeavePrompt from '../components/WeavePrompt.vue'
 import NewReelDialog from '../components/NewReelDialog.vue'
+import { contentLine } from '../reelStyles'
 
 const props = defineProps({ name: { type: String, required: true } })
 const emit = defineEmits(['root'])
@@ -320,6 +327,8 @@ function apply(data) {
   reels.value = data.reels.filter((r) => !r.archivedAt).sort((a, b) => a.id - b.id)
   hasSidecar.value = data.hasSidecar
   draftAt.value = data.draftAt || null
+  intent.value = data.intent || null
+  content.value = data.content || null
 }
 
 onMounted(async () => {
@@ -327,6 +336,7 @@ onMounted(async () => {
     const data = await api.folder(props.name)
     apply(data)
     emit('root', data.path)
+    openNewReelAfterImport()
     // The file in the address (?file=), so a refresh comes back to it.
     const at = media.value.findIndex((m) => m.file === route.query.file)
     if (at > 0) {
@@ -595,6 +605,7 @@ async function newReelAndTag() {
 const imported = ref(window.history.state?.imported || null)
 const offer = computed(() => {
   if (!imported.value?.length) return null
+  if (intent.value && intent.value.style !== 'weave') return null   // brought in for another kind of reel
   const mine = media.value.filter((m) => imported.value.includes(m.file))
   const vids = mine.filter((m) => m.kind === 'video')
   const long = vids.filter((m) => m.duration >= 15).length
@@ -611,8 +622,20 @@ function weave() {
                 state: { imported: imported.value ? [...imported.value] : null } })
 }
 
-// Making a reel from this folder: NewReelDialog asks its name and style.
+// Making a reel from this folder: NewReelDialog asks its name and style,
+// starting from what the shoot was brought in for (its intent) if anything,
+// and a length suggested from how much footage there is.
 const makingReel = ref(false)
+const intent = ref(null)      // { style, target, albumLink, source } (Import from Google Photos)
+const content = ref(null)     // { videoSeconds, photoCount, suggestedTarget }
+const contentSummary = computed(() => contentLine(content.value))
+// Straight from Import from Google Photos: New reel opens, set up from the
+// intent (a Weave goes by the offer below instead). Once.
+function openNewReelAfterImport() {
+  if (!window.history.state?.newReel) return
+  window.history.replaceState({ ...window.history.state, newReel: false }, '')
+  if (intent.value && intent.value.style !== 'weave' && media.value.length) makingReel.value = true
+}
 
 // ---------------------------------------------------------------- moving
 
@@ -722,6 +745,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 }
 .key { opacity: 0.55; }
 .justin { margin: 6px 0 0; font-size: 14px; }
+.title .content { margin: 2px 0 0; font-size: 13px; color: var(--forest); font-weight: 600; }
+.title a { text-decoration: underline; }
 .justin a { font-weight: 600; text-decoration: underline; }
 .pickbar {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px; margin-bottom: 4px;

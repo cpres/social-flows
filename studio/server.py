@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import logging
 import hashlib
+import html
 import json
 import math
 import os
@@ -30,7 +31,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 if sys.version_info < (3, 9):
@@ -41,8 +42,8 @@ if sys.version_info < (3, 9):
 try:
     import uvicorn
     import yaml
-    from fastapi import Body, FastAPI, HTTPException
-    from fastapi.responses import FileResponse
+    from fastapi import Body, FastAPI, HTTPException, Request
+    from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
     from fastapi.staticfiles import StaticFiles
 except ImportError as missing:
     sys.exit(f"Missing Python package: {missing.name}\n\n"
@@ -80,7 +81,8 @@ def load_dotenv(*files):
 
 load_dotenv(HERE.parent / ".env", HERE / ".env")
 import looks  # noqa: E402
-from db import VOICE_FOLDER, DEFAULT_SETTINGS, Library, default_start, now, settings_of  # noqa: E402
+from db import VOICE_FOLDER, DEFAULT_SETTINGS, Library, default_start, now, probe, settings_of  # noqa: E402
+from gphotos import GooglePhotos, HttpError as GPhotosHttpError, already_in as gphotos_already  # noqa: E402
 import audio  # noqa: E402
 import beats as beats_mod  # noqa: E402
 import compose  # noqa: E402
@@ -392,8 +394,11 @@ def get_folder(name: str):
             WHERE m.folder = ? ORDER BY i.start""", (name,))]
         reels = reel_summaries(db)
         draft_at = draft_time(db, draft_key(folder=name))
+        intent = shoot_intent(db, name)
+    content = content_of([{"kind": m["kind"], "duration": m["duration"]} for m in media])
     return {"name": name, "path": str(folder), "media": media, "items": items, "reels": reels,
-            "hasSidecar": (folder / SIDECAR).exists(), "draftAt": draft_at}
+            "hasSidecar": (folder / SIDECAR).exists(), "draftAt": draft_at,
+            "intent": intent, "content": content}
 
 
 @app.post("/api/folders/{name}/to-reel")
@@ -3193,28 +3198,18 @@ def import_files(body: dict = Body(...)):
     ever one of each.
     """
     name = (body.get("folder") or "").strip()
-    if not folder_name_ok(name):
-        raise HTTPException(400, "Give the folder a name (no slashes or colons)")
-    if not ROOT.is_dir():
-        raise HTTPException(400, f"{ROOT} does not exist")
+    check_dest(name)
     sources = sorted((download_path(f) for f in body.get("files") or []),
                      key=lambda p: arrived(p.stat()))
     if not sources:
         raise HTTPException(400, "Pick at least one file to import")
-    dest = ROOT / name
-    if body.get("create"):
-        if dest.exists():
-            raise HTTPException(409, f"There's already a folder called '{name}'")
-        dest.mkdir()
-    elif not dest.is_dir():
-        raise HTTPException(404, f"No folder called '{name}'")
+    dest = open_dest(name, body.get("create"))
 
     lib.scan()   # so files dropped into Footage by hand count as already there
     seen = {}
     copies = {src: copy_in_batch(src, seen) for src in sources}   # before anything moves
     imported, removed, failed = [], [], []
     for src in sources:
-        heic = src.suffix.lower() in HEIC_EXTS
         try:
             with lib.connect() as db:
                 dup = in_footage(db, src)
@@ -3222,21 +3217,56 @@ def import_files(body: dict = Body(...)):
                 src.unlink()
                 removed.append(src.name)
                 continue
-            target = dest / (src.with_suffix(".jpg").name if heic else src.name)
-            if target.exists():
-                target = free_name(target)   # a different file with the same name
-            if heic:
-                to_jpeg(src, target)
-                src.unlink()
-            else:
-                shutil.move(str(src), str(target))
-            imported.append(target.name)
+            imported.append(place_file(src, dest).name)
         except Exception as e:   # one bad file shouldn't stop the rest
             failed.append({"name": src.name, "error": str(e)})
-    lib.scan([dest])
-    if not any(dest.iterdir()) and body.get("create"):
-        dest.rmdir()   # everything was a duplicate: no empty folder left behind
+    close_dest(dest, body.get("create"))
     return {"folder": name, "imported": imported, "removed": removed, "failed": failed}
+
+
+def check_dest(name):
+    if not folder_name_ok(name):
+        raise HTTPException(400, "Give the folder a name (no slashes or colons)")
+    if not ROOT.is_dir():
+        raise HTTPException(400, f"{ROOT} does not exist")
+
+
+def open_dest(name, create):
+    """The shoot folder an import goes into: made now (create), or one already there."""
+    check_dest(name)
+    dest = ROOT / name
+    if create:
+        if dest.exists():
+            raise HTTPException(409, f"There's already a folder called '{name}'")
+        dest.mkdir()
+    elif not dest.is_dir():
+        raise HTTPException(404, f"No folder called '{name}'")
+    return dest
+
+
+def close_dest(dest, created):
+    """After an import: the folder scanned, or removed if it was made for it
+    and nothing came in (everything a duplicate)."""
+    lib.scan([dest])
+    if created and dest.is_dir() and not any(dest.iterdir()):
+        dest.rmdir()
+
+
+def place_file(src, dest, name=None):
+    """Move src into the shoot folder dest as `name` (default its own): a
+    HEIC photo becomes a JPEG, and a different file already there with that
+    name means this one gets " (2)". -> where it ended up."""
+    name = Path(name or src.name).name
+    heic = Path(name).suffix.lower() in HEIC_EXTS
+    target = dest / (Path(name).with_suffix(".jpg").name if heic else name)
+    if target.exists():
+        target = free_name(target)
+    if heic:
+        to_jpeg(src, target)
+        src.unlink()
+    else:
+        shutil.move(str(src), str(target))
+    return target
 
 
 def fingerprint(path):
@@ -3309,6 +3339,268 @@ def to_jpeg(src, target):
         raise RuntimeError("couldn't convert it to JPEG")
     st = src.stat()
     os.utime(target, (st.st_atime, st.st_mtime))
+
+
+# ---------------------------------------------------------------- Google Photos
+# The Photos Picker (gphotos.py): sign in once, pick items in Google's own
+# picker, and they're downloaded into a shoot folder in the background, with
+# what kind of reel they're for kept as the shoot's intent.
+
+gphotos = GooglePhotos(lib.home)
+GP_JOBS = {}       # job id -> progress (see gphotos_import)
+GP_PICKED = {}     # session id -> its picked items, listed once
+REEL_STYLES = ("standard", "weave", "stack", "relay")
+
+
+def gp_ready():
+    if not gphotos.configured:
+        raise HTTPException(400, "Google Photos isn't set up yet: add GOOGLE_CLIENT_ID and "
+                                 "GOOGLE_CLIENT_SECRET to .env (see the README), then restart the studio")
+    if not gphotos.signed_in:
+        raise HTTPException(401, "Sign in to Google Photos first")
+
+
+def gp_call(fn, *args):
+    """A Picker call, its failures as messages the dialog can show."""
+    gp_ready()
+    try:
+        return fn(*args)
+    except PermissionError as e:
+        raise HTTPException(401, str(e))
+    except GPhotosHttpError as e:
+        raise HTTPException(502, f"Google Photos said no ({e})")
+    except OSError as e:
+        raise HTTPException(502, f"Couldn't reach Google Photos: {e}")
+
+
+def shoot_intent(db, folder):
+    row = db.execute("SELECT intent FROM shoot_intents WHERE folder = ?", (folder,)).fetchone()
+    try:
+        return json.loads(row["intent"]) if row else None
+    except ValueError:
+        return None
+
+
+def clean_intent(raw):
+    """{style, target, albumLink, source}: a starting point for the New reel dialog."""
+    raw = raw if isinstance(raw, dict) else {}
+    style = raw.get("style") if raw.get("style") in REEL_STYLES else "relay"
+    try:
+        target = int(raw["target"]) if raw.get("target") else None
+    except (TypeError, ValueError):
+        target = None
+    link = str(raw.get("albumLink") or "").strip()
+    if not re.match(r"^https://[^\s]+$", link):
+        link = ""   # only a web link is kept (it's opened in a tab, nothing more)
+    return {"style": style, "target": target if target and 10 <= target <= 1200 else None,
+            "albumLink": link[:500], "source": raw.get("source") or "gphotos"}
+
+
+def content_of(rows):
+    """How much footage a shoot has, and the reel length to suggest for it."""
+    video = sum(r["duration"] for r in rows if r["kind"] == "video")
+    photos = sum(1 for r in rows if r["kind"] == "photo")
+    return {"videoSeconds": round(video, 1), "videoCount": sum(1 for r in rows if r["kind"] == "video"),
+            "photoCount": photos, "suggestedTarget": relay_mod.suggest_target(video, photos)}
+
+
+def looks_like(path):
+    """What a downloaded file really is, from its first bytes: jpeg | heic | None."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(12)
+    except OSError:
+        return None
+    if head[:3] == b"\xff\xd8\xff":
+        return "jpeg"
+    if head[4:8] == b"ftyp" and head[8:12] in (b"heic", b"heix", b"mif1", b"msf1", b"heim", b"heis"):
+        return "heic"
+    return None
+
+
+def gp_file_name(item, path):
+    """Google's file name, unless the bytes say otherwise (a .HEIC that came
+    down as a JPEG keeps its name with .jpg, so it isn't converted)."""
+    name = Path(item["filename"]).name.replace(":", "-") or f"{item['id']}"
+    if name.startswith("."):
+        name = name.lstrip(".") or item["id"]
+    if not Path(name).suffix:
+        name += {"video": ".mp4"}.get(item["kind"], ".jpg")
+    kind = looks_like(path)
+    if kind == "jpeg" and Path(name).suffix.lower() in HEIC_EXTS:
+        name = Path(name).with_suffix(".jpg").name
+    return name
+
+
+def set_capture_time(path, at):
+    """Make the studio see the file as taken at `at`: its mtime, and for a
+    video whose own creation_time disagrees (a transcode's can be when it was
+    made), that too, rewritten without re-encoding."""
+    os.utime(path, (at, at))
+    if Library.kind_of(path) != "video":
+        return
+    info = probe(path)
+    if abs(info["captured_at"] - at) < 2:
+        return
+    fixed = path.with_name(f".fix-{path.name}")
+    stamp = datetime.fromtimestamp(at, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+    r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(path), "-map", "0", "-c", "copy",
+                        "-metadata", f"creation_time={stamp}", str(fixed)], capture_output=True, timeout=600)
+    if r.returncode == 0 and fixed.exists():
+        fixed.replace(path)
+    else:
+        fixed.unlink(missing_ok=True)
+    os.utime(path, (at, at))
+
+
+@app.get("/api/gphotos/status")
+def gphotos_status():
+    return {"configured": gphotos.configured, "signedIn": gphotos.signed_in}
+
+
+@app.get("/api/gphotos/auth")
+def gphotos_auth(request: Request):
+    """Start signing in: off to Google, which comes back to /callback here."""
+    if not gphotos.configured:
+        raise HTTPException(400, "Google Photos isn't set up yet (see the README)")
+    port = request.url.port or 3009
+    return RedirectResponse(gphotos.auth_url(f"http://127.0.0.1:{port}/api/gphotos/callback"))
+
+
+def gp_page(title, text):
+    return HTMLResponse(f"""<!doctype html><meta charset="utf-8"><title>{title}</title>
+<body style="font:16px system-ui;max-width:32em;margin:15vh auto;padding:0 16px;color:#1f2a1f">
+<h1 style="font-size:22px">{title}</h1><p>{text}</p>
+<script>setTimeout(() => window.close(), 1500)</script></body>""")
+
+
+@app.get("/api/gphotos/callback")
+def gphotos_callback(code: str = "", state: str = "", error: str = ""):
+    if error:
+        return gp_page("Not signed in", f"Google said: {html.escape(error)}. Close this tab and try again.")
+    try:
+        gphotos.finish_sign_in(code, state)
+    except Exception as e:
+        return gp_page("Not signed in", f"{html.escape(str(e))} Close this tab and try again.")
+    return gp_page("Signed in to Google Photos", "You can close this tab and go back to the studio.")
+
+
+@app.post("/api/gphotos/signout")
+def gphotos_signout():
+    gphotos.sign_out()
+    return gphotos_status()
+
+
+@app.post("/api/gphotos/session")
+def gphotos_session():
+    """A new picking session: open pickerUri in a tab and choose there."""
+    s = gp_call(gphotos.create_session)
+    # /autoclose: the picker's tab closes itself once the choice is done.
+    return {**s, "pickerUri": s["pickerUri"].rstrip("/") + "/autoclose"}
+
+
+@app.get("/api/gphotos/session/{session_id}")
+def gphotos_session_state(session_id: str):
+    """{ready, items: [{id, filename, kind, createTime, already}]}; items once ready."""
+    if session_id not in GP_PICKED:
+        s = gp_call(gphotos.session, session_id)
+        if not s.get("mediaItemsSet"):
+            return {"ready": False, "items": []}
+        GP_PICKED[session_id] = gp_call(gphotos.list_items, session_id)
+    items = GP_PICKED[session_id]
+    with lib.connect() as db:
+        view = [{"id": i["id"], "filename": i["filename"], "kind": i["kind"], "createTime": i["createTime"],
+                 "capturedAt": i["capturedAt"], "already": gphotos_already(db, i)} for i in items]
+    return {"ready": True, "items": view}
+
+
+@app.post("/api/gphotos/import")
+def gphotos_import(body: dict = Body(...)):
+    """Download a session's picked items into a shoot folder, in the background.
+
+    {sessionId, folder, create, intent: {style, target, albumLink}} -> {job}.
+    Items Footage already has are left out. Progress: /api/gphotos/import/{job}.
+    """
+    session_id = body.get("sessionId") or ""
+    name = (body.get("folder") or "").strip()
+    check_dest(name)
+    if session_id not in GP_PICKED:
+        gphotos_session_state(session_id)
+    items = [dict(i) for i in GP_PICKED.get(session_id) or []]
+    if not items:
+        raise HTTPException(400, "Nothing was picked in Google Photos")
+    with lib.connect() as db:
+        todo = [i for i in items if not gphotos_already(db, i)]
+    todo.sort(key=lambda i: i["capturedAt"] or 0)   # shot order
+    dest = open_dest(name, body.get("create"))
+    intent = clean_intent({**(body.get("intent") or {}), "source": "gphotos"})
+    with lib.connect() as db:
+        db.execute("INSERT OR REPLACE INTO shoot_intents (folder, intent, updated_at) VALUES (?, ?, ?)",
+                   (name, json.dumps(intent), now()))
+    job = {"id": uuid.uuid4().hex[:12], "folder": name, "done": 0, "total": len(todo), "bytes": 0,
+           "failed": [], "imported": [], "skipped": len(items) - len(todo), "finished": False, "error": "",
+           "content": None}
+    GP_JOBS[job["id"]] = job
+    threading.Thread(target=gp_run, args=(job, session_id, todo, dest, bool(body.get("create"))),
+                     daemon=True).start()
+    return {"job": job["id"], "total": job["total"], "skipped": job["skipped"]}
+
+
+def gp_run(job, session_id, items, dest, created):
+    placed = {}   # picker id -> where it went
+
+    def target_of(item):
+        return dest / f".gphotos-{uuid.uuid4().hex[:8]}.part"   # hidden: scans skip it
+
+    def done_with(item, path, error):
+        job["done"] += 1
+        if error:
+            job["failed"].append({"name": item["filename"], "error": error})
+            return
+        try:
+            final = place_file(Path(path), dest, gp_file_name(item, path))
+            if item.get("capturedAt"):
+                set_capture_time(final, item["capturedAt"])
+            placed[item["id"]] = (final, item)
+            job["imported"].append(final.name)
+        except Exception as e:   # one bad file shouldn't stop the rest
+            Path(path).unlink(missing_ok=True)
+            job["failed"].append({"name": item["filename"], "error": str(e)})
+
+    def on_bytes(n):
+        job["bytes"] += n
+
+    try:
+        gphotos.download_all(session_id, items, target_of, done_with, on_bytes)
+    except Exception as e:
+        job["error"] = str(e)
+    try:
+        close_dest(dest, created)
+        with lib.connect() as db:
+            for pid, (path, item) in placed.items():
+                row = db.execute("SELECT id FROM media WHERE path = ?",
+                                 (path.relative_to(ROOT).as_posix(),)).fetchone()
+                db.execute("INSERT OR REPLACE INTO gphotos_items (picker_id, media_id, filename, create_time, "
+                           "imported_at) VALUES (?, ?, ?, ?, ?)",
+                           (pid, row["id"] if row else None, item["filename"], item.get("capturedAt"), now()))
+            if dest.is_dir():
+                job["content"] = content_of(db.execute(
+                    "SELECT kind, duration FROM media WHERE folder = ? AND missing = 0", (dest.name,)).fetchall())
+            else:
+                db.execute("DELETE FROM shoot_intents WHERE folder = ?", (dest.name,))
+    except Exception as e:
+        job["error"] = job["error"] or str(e)
+    gphotos.delete_session(session_id)
+    GP_PICKED.pop(session_id, None)
+    job["finished"] = True
+
+
+@app.get("/api/gphotos/import/{job_id}")
+def gphotos_import_state(job_id: str):
+    job = GP_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(404, "No such import")
+    return job
 
 
 DIST = HERE / "web" / "dist"

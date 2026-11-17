@@ -107,53 +107,10 @@
           </button>
         </div>
 
-        <div class="dest">
-          <div class="choice" :class="{ on: mode === 'new' }" @click="mode = 'new'">
-            <label class="pick"><input type="radio" value="new" v-model="mode" />
-              <span class="ctitle">New shoot folder</span></label>
-            <div class="row" v-if="mode === 'new'">
-              <label class="field date">
-                Date
-                <input type="date" v-model="newDate" />
-              </label>
-              <label class="field grow">
-                What was it? <span class="opt">(optional)</span>
-                <input
-                  ref="labelInput" v-model="newLabel" placeholder="e.g. garden build"
-                  @keydown.enter="go"
-                />
-              </label>
-            </div>
-            <p class="preview" v-if="mode === 'new'">
-              <span class="folder-ico">▣</span>
-              <b>{{ folderTitle(newName) || '—' }}</b>
-              <span class="mono muted" v-if="newName">{{ root }}/{{ newName }}</span>
-            </p>
-            <p class="warn" v-if="mode === 'new' && clash">
-              You already have this folder.
-              <button class="link" @click.stop="useExisting(newName)">Add to it instead</button>
-            </p>
-          </div>
-
-          <div class="choice" :class="{ on: mode === 'existing' }" v-if="folders.length" @click="mode = 'existing'">
-            <label class="pick"><input type="radio" value="existing" v-model="mode" />
-              <span class="ctitle">Add to an existing folder</span></label>
-            <div class="existing" v-if="mode === 'existing'">
-              <button
-                v-for="f in folders" :key="f.name" class="exf" :class="{ on: target === f.name }"
-                @click="target = f.name"
-              >
-                <img v-if="f.cover" :src="api.thumb(f.name, f.cover, f.coverTime, 160)" loading="lazy" alt="" />
-                <span v-else class="noimg"></span>
-                <span class="exmeta">
-                  <b>{{ folderTitle(f.name) }}</b>
-                  <span class="muted">{{ f.clipCount }} clip{{ f.clipCount === 1 ? '' : 's' }}<template
-                    v-if="f.photoCount"> · {{ f.photoCount }} photo{{ f.photoCount === 1 ? '' : 's' }}</template></span>
-                </span>
-              </button>
-            </div>
-          </div>
-        </div>
+        <ShootDestination
+          :folders="folders" :root="root" v-model:mode="mode" v-model:date="newDate"
+          v-model:label="newLabel" v-model:target="target" @enter="go"
+        />
         </template>
       </template>
 
@@ -171,8 +128,9 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api } from '../api'
+import ShootDestination, { folderNameOf } from './ShootDestination.vue'
 import { clockTime, fmtTime, folderTitle } from '../time'
 
 const props = defineProps({
@@ -202,7 +160,6 @@ const target = ref('')
 const notice = ref('')
 const busy = ref(false)
 const failure = ref('')
-const labelInput = ref(null)
 
 const isDup = (f) => !!(f.importedTo || f.copyOf)
 const dayFiles = computed(() => files.value.filter((f) => f.day === day.value))
@@ -225,7 +182,7 @@ const chosenCounts = computed(() => {
 })
 const chosenDups = computed(() => dayFiles.value.filter((f) => chosen.value.has(f.name) && isDup(f)).length)
 const chosenNew = computed(() => chosen.value.size - chosenDups.value)
-const newName = computed(() => [newDate.value, newLabel.value.trim()].filter(Boolean).join(' '))
+const newName = computed(() => folderNameOf(newDate.value, newLabel.value))
 const clash = computed(() => props.folders.some((f) => f.name === newName.value))
 const destName = computed(() => (mode.value === 'new' ? newName.value : target.value))
 const canImport = computed(() =>
@@ -314,18 +271,6 @@ async function moveSongs() {
 
 const selectAll = (on) => { chosen.value = new Set(on ? dayFiles.value.map((f) => f.name) : []) }
 
-function useExisting(name) {
-  target.value = name
-  mode.value = 'existing'
-}
-
-watch(mode, async (m) => {
-  if (m === 'new') {
-    await nextTick()
-    labelInput.value?.focus()
-  }
-})
-
 async function go() {
   if (!canImport.value) return
   busy.value = true
@@ -335,7 +280,7 @@ async function go() {
       files: [...chosen.value], folder: destName.value,
       create: mode.value === 'new',
     })
-    if (r.failed.length && !r.imported.length && !r.skipped.length) {
+    if (r.failed.length && !r.imported.length && !r.removed.length) {
       failure.value = r.failed.map((f) => `${f.name}: ${f.error}`).join('\n')
       return
     }
@@ -450,39 +395,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-.dest { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
-.choice {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 14px;
-  border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; background: var(--paper);
-}
-.choice:hover { border-color: var(--sage); }
-.choice.on { border-color: var(--sage); background: var(--sage-soft); cursor: default; }
-.pick { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.choice input[type='radio'] { accent-color: var(--forest); margin: 0; }
-.ctitle { font-weight: 600; color: var(--forest); }
-.row { display: flex; gap: 10px; width: 100%; margin-top: 4px; }
-.field.date { flex: none; width: 150px; }
-.field.grow { flex: 1; min-width: 0; }
-.opt { opacity: 0.7; }
-.preview { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; width: 100%; margin: 2px 0 0; font-size: 14px; }
-.preview .mono { font-size: 11px; word-break: break-all; }
-.folder-ico { color: var(--sage); }
-.warn { width: 100%; margin: 0; font-size: 13px; color: var(--warn); }
-.existing {
-  width: 100%; display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto;
-  margin-top: 4px;
-}
-.exf {
-  display: flex; align-items: center; gap: 10px; text-align: left; padding: 4px;
-  border: 1px solid transparent; border-radius: 8px; background: transparent; cursor: pointer;
-}
-.exf:hover { background: var(--paper); }
-.exf.on { background: var(--paper); border-color: var(--forest); }
-.exf img, .noimg { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; flex: none; background: var(--forest); }
-.exmeta { display: flex; flex-direction: column; font-size: 13px; min-width: 0; }
-.exmeta b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.exmeta .muted { font-size: 12px; }
-
 .songs { display: flex; flex-direction: column; gap: 6px; }
 .song {
   display: flex; align-items: center; gap: 10px; padding: 6px 10px; cursor: pointer;
@@ -499,7 +411,4 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   background: var(--sage-soft); color: var(--ink);
 }
 .ok { margin: 0; color: var(--forest); font-weight: 600; }
-@media (max-width: 700px) {
-  .dest { grid-template-columns: 1fr; }
-}
 </style>

@@ -68,6 +68,9 @@
           ⇣ Import from Downloads
           <span class="count" v-if="waiting" :title="`${waiting} new from today`">{{ waiting }}</span>
         </button>
+        <button class="btn import" @click="fromGoogle = true" title="Pick photos and videos (an album's, say) in Google Photos">
+          ⇣ Import from Google Photos
+        </button>
       </div>
       <p v-if="!folders.length" class="notice">
         No folders in <code>{{ root }}</code> yet. AirDrop clips from your phone and
@@ -104,6 +107,10 @@
       v-if="importing" :folders="folders" :root="root"
       @close="importing = false" @imported="imported"
     />
+    <GooglePhotosImport
+      v-if="fromGoogle" :folders="folders" :root="root"
+      @close="fromGoogle = false" @imported="importedFromGoogle"
+    />
   </main>
 </template>
 
@@ -111,6 +118,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
+import GooglePhotosImport from '../components/GooglePhotosImport.vue'
 import ImportDialog from '../components/ImportDialog.vue'
 import NewReelDialog from '../components/NewReelDialog.vue'
 import { useRefreshOnFocus } from '../refresh'
@@ -134,6 +142,7 @@ const totalFootage = computed(() => folders.value.reduce((a, f) => a + f.totalDu
 
 const refreshing = ref(false)
 const importing = ref(false)
+const fromGoogle = ref(false)
 const waiting = ref(0)   // photos and videos from today in Downloads, not yet imported
 
 async function load() {
@@ -174,6 +183,13 @@ function imported(r) {
   router.push({ path: `/shoot/${encodeURIComponent(r.folder)}`, state: { imported: r.imported } })
 }
 
+// From Google Photos: the shoot opens New reel, set up for the kind of reel
+// it was brought in for (its intent, kept with the shoot).
+function importedFromGoogle(r) {
+  fromGoogle.value = false
+  router.push({ path: `/shoot/${encodeURIComponent(r.folder)}`, state: { imported: r.imported, newReel: true } })
+}
+
 async function setArchived(r, archived) {
   try {
     await api.updateReel(r.id, { archived })
@@ -193,6 +209,7 @@ const makingReel = ref(false)
 .head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
 .head.shoots { margin-top: 44px; }
 .refresh.inline { width: auto; margin-left: auto; }
+.import + .import { margin-left: -8px; }
 .import { display: inline-flex; align-items: center; gap: 8px; }
 .import .count {
   background: var(--sage); color: var(--on-sage); border-radius: 999px; font-size: 12px;

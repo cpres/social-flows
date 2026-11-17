@@ -55,6 +55,19 @@ python3 studio/server.py --open
   Downloads. `DOWNLOADS_DIR` points it somewhere else. If what came in is two
   or more videos (or one of 15s or more), the shoot page offers to **weave** them
   (below).
+- **Import from Google Photos** (next to *Import from Downloads*; see
+  [below](#import-from-google-photos) for the one-time setup). Say first what
+  kind of reel it's for (Relay unless you pick another), optionally paste the
+  album's link (kept with the shoot as a note, with *album ↗* on the shoot
+  page), then *Choose in Google Photos* opens Google's own picker in a tab.
+  An app can't read an album from its link, so the picking happens there:
+  open *Albums*, the album, and select its photos and videos. The dialog
+  then says what was picked and how much of it is already in Footage (those
+  aren't downloaded again). The new shoot folder is named for the day the
+  first of it was taken, not today. It downloads with a progress bar, then
+  the shoot opens with *New reel* set to that style and a suggested length
+  (*2m 10s of video, 1 photo. Suggested reel: about 1:00.*); all of it can
+  be changed. Brought in for Relay, the shoot doesn't offer Weave.
 - **★ Highlights** (long clips, 10s or more): a video opens showing all of
   itself (a short pick saved on it before is set aside, keeping its framing,
   until you change the selection). Watch it faster with the **▶▶** toggle at the timeline's bottom right
@@ -728,3 +741,42 @@ macOS may ask whether Python may accept incoming connections: allow it.
 Thumbnails are cached in `~/.cache/footage-studio/`.
 
 UI development: run the server, then `npm run dev` in `studio/web` (proxies `/api`).
+
+## Import from Google Photos
+
+Uses Google's **Photos Picker API**: you choose items in Google's own picker
+and the studio downloads them. Videos come down as Google's high-quality
+copy, not the original file, so a clip that also arrived by AirDrop or
+LocalSend is recognised by its name and the time it was taken, not by its
+content. Each file's capture time is set from Google Photos, so clips and
+photos come in in shot order. Each shoot page shows how much footage there
+is, and *New reel* starts on a suggested length: a quarter of the video plus
+3s a photo, to the nearest 15s, between 1:00 and 4:00 (*As long as it takes*
+if everything played whole is under a minute). Tune it in `relay.py`
+(`suggest_target`).
+
+One-time setup, in the [Google Cloud console](https://console.cloud.google.com/):
+
+1. Make a project (any name), then under *APIs & Services → Library* enable
+   the **Photos Picker API**.
+2. *OAuth consent screen*: External, leave it in **Testing**, and add your
+   own Google account under *Test users*.
+3. *Credentials → Create credentials → OAuth client ID*, type **Desktop
+   app**.
+4. Put its ID and secret in `.env` at the top of the repo (it's ignored by
+   git):
+
+   ```
+   GOOGLE_CLIENT_ID=1234-abc.apps.googleusercontent.com
+   GOOGLE_CLIENT_SECRET=GOCSPX-...
+   ```
+
+5. Restart `./studio/run.sh`. *Import from Google Photos* now offers *Sign in
+   with Google*; do that once. The sign-in is kept in
+   `~/Footage/.studio/gphotos-token.json`.
+
+While the consent screen is in Testing, Google ends a sign-in after 7 days;
+the dialog then just asks you to sign in again.
+
+If the downloaded quality of videos ever matters, Google Photos' own
+*Download all* on an album gives a zip of the originals in Downloads instead.

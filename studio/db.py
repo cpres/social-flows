@@ -12,6 +12,11 @@ The studio's library: one SQLite file at ~/Footage/.studio/studio.db.
                 being re-woven), until it's made into a reel
     songs       a name, artist and categories given to a song in the music
                 folder (by file name), over what the file itself says
+    shoot_intents  what a shoot was brought in for (Import from Google
+                Photos): the reel style, a length, an album link. Only where
+                the New reel dialog starts; nothing is held to it
+    gphotos_items  files that came from Google Photos, by the picker's item
+                id, so picking the same thing again isn't downloaded twice
 
 Files are only moved when asked (Import, Move files). Each media row remembers size and capture
 time, so a file that is renamed or moved to another shoot folder is relinked
@@ -117,6 +122,20 @@ CREATE TABLE IF NOT EXISTS voice_takes (
     path       TEXT PRIMARY KEY,    -- relative to the footage root, e.g. Voice/New Recording 3.m4a
     reading_id INTEGER REFERENCES readings(id) ON DELETE SET NULL,
     added_at   REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS shoot_intents (
+    folder     TEXT PRIMARY KEY,   -- the shoot folder's name
+    intent     TEXT NOT NULL,      -- JSON {style, target (seconds or null), albumLink, source}
+    updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS gphotos_items (
+    picker_id   TEXT PRIMARY KEY,          -- the Photos Picker item id (stable for an item)
+    media_id    INTEGER REFERENCES media(id) ON DELETE SET NULL,
+    filename    TEXT NOT NULL,             -- Google's name for it
+    create_time REAL,                      -- when it was taken (epoch seconds)
+    imported_at REAL NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS songs (

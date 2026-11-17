@@ -14,6 +14,7 @@
         </select>
       </label>
 
+      <p v-if="contentSummary" class="content">{{ contentSummary }}</p>
       <span class="muted">What style?</span>
       <div class="styles">
         <button
@@ -47,7 +48,7 @@
           <button
             v-for="x in TARGETS" :key="x.v" class="btn small" :class="{ active: target === x.v }" @click="target = x.v"
             :title="x.v ? `Long clips' stretches are made as long as fits a reel of about ${x.label}` : 'Long clips play as long as you set below'"
-          >{{ x.label }}</button>
+          >{{ x.label }}<small v-if="content && x.v === (suggested || 0)" class="sugg"> suggested</small></button>
         </div>
         <div class="tbtns" v-if="target">
           <span class="muted">Around each ★ highlight, play</span>
@@ -143,6 +144,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
+import { STYLES, clock, contentLine } from '../reelStyles'
 import { fmtTime, folderTitle } from '../time'
 import LeaveOut, { overBy } from './LeaveOut.vue'
 
@@ -150,29 +152,37 @@ const props = defineProps({
   folder: { type: String, default: '' },     // making it from this shoot
   folders: { type: Array, default: () => [] }, // or picking one (Home)
   defaultName: { type: String, default: '' },
+  // Where to start (a shoot's intent, from Import from Google Photos): a
+  // style, and a length (seconds; null: as long as it takes). All changeable.
+  initialStyle: { type: String, default: '' },
+  initialTarget: { type: Number, default: undefined },
+  content: { type: Object, default: null },   // the shoot's { videoSeconds, photoCount, suggestedTarget }
 })
 defineEmits(['close'])
 const router = useRouter()
 
-const STYLES = [
-  { v: 'standard', label: 'Standard', hint: 'One part after another, full frame.', frames: ['b', 'b', 'b'] },
-  { v: 'weave', label: 'Weave', hint: 'Clips cut into parts and interleaved: a bit of each, then back for more.', frames: ['b', 'a1', 'b'], footage: true },
-  { v: 'stack', label: 'Stack', hint: 'The longest clip on top the whole way, the others underneath, at real speed.', frames: ['ab', 'ab', 'ab'], footage: true },
-  { v: 'relay', label: 'Relay', hint: 'Long-form: each clip plays at its own length and hands the frame on to the next; photos come in under long clips for a moment.', frames: ['b', 'ab', 'b', 'ab'], footage: true },
-]
 const name = ref(props.defaultName)
 const from = ref('')
 const source = computed(() => props.folder || from.value)
-const style = ref('standard')
+const style = ref(STYLES.some((st) => st.v === props.initialStyle) ? props.initialStyle : 'standard')
 const busy = ref(false)
 const error = ref('')
 const LONG = 10   // as relay.py LONG_THRESHOLD
 const CAPS = [{ v: 0, label: 'Their full length' }, { v: 20, label: 'Up to 20s' }, { v: 30, label: 'Up to 30s' }, { v: 60, label: 'Up to 60s' }]
 const cap = ref(0)
 // How long the reel should be, about: long clips' stretches are made to fit (0: as long as it takes).
-const TARGETS = [{ v: 30, label: '0:30' }, { v: 45, label: '0:45' }, { v: 60, label: '1:00' }, { v: 90, label: '1:30' },
-                 { v: 120, label: '2:00' }, { v: 180, label: '3:00' }, { v: 0, label: 'As long as it takes' }]
-const target = ref(90)
+const LENGTHS = [{ v: 30, label: '0:30' }, { v: 45, label: '0:45' }, { v: 60, label: '1:00' }, { v: 90, label: '1:30' },
+                 { v: 120, label: '2:00' }, { v: 180, label: '3:00' }]
+const ANY_LENGTH = { v: 0, label: 'As long as it takes' }
+// The length to start on: the shoot's own (its intent, or the one suggested
+// for its footage), else 1:30. One that isn't a button gets a button of its own.
+const startTarget = props.initialTarget !== undefined ? props.initialTarget || 0
+  : props.content ? props.content.suggestedTarget || 0 : 90
+const TARGETS = [...LENGTHS, ...(startTarget && !LENGTHS.some((x) => x.v === startTarget)
+  ? [{ v: startTarget, label: clock(startTarget) }] : [])].sort((a, b) => a.v - b.v).concat([ANY_LENGTH])
+const suggested = props.content?.suggestedTarget ?? null
+const target = ref(startTarget)
+const contentSummary = computed(() => contentLine(props.content))
 const most = ref(4)   // stretches per long clip, at most (relay.py MOST_DEFAULT)
 // Seconds of a long clip played around each of its highlights (relay.py AROUND_DEFAULT).
 const AROUNDS = [4, 6, 10, 16, 20]
@@ -290,6 +300,8 @@ async function make(anyway = false) {
 
 <style scoped>
 .onpins { margin: 0 0 6px; }
+.content { margin: 0; font-weight: 600; color: var(--forest); }
+.sugg { opacity: 0.75; font-weight: 400; }
 .issue { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px;
   border: 1px solid #d8a24a; background: rgb(233 178 122 / 18%); }
 .issue > span { display: flex; flex-direction: column; gap: 2px; flex: 1; }
