@@ -180,6 +180,55 @@ class PickerClient(unittest.TestCase):
         self.assertAlmostEqual(gphotos.parse_time("2026-10-06T14:00:00.123456789Z"), 1791295200.123456, places=5)
 
 
+class SigningIn(unittest.TestCase):
+    """The code Google sends back, traded for a token; failures said plainly."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def sign_in(self, status, body):
+        class Token:
+            def request(self, method, url, headers=None, data=None):
+                self.sent = dict(urllib.parse.parse_qsl(data.decode()))
+                return status, json.dumps(body).encode()
+        http = Token()
+        gp = gphotos.GooglePhotos(self.dir, "cid", "secret", http=http)
+        url = gp.auth_url("http://127.0.0.1:3009/api/gphotos/callback")
+        state = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))["state"]
+        try:
+            gp.finish_sign_in("the-code", state)
+        except ValueError:
+            pass
+        return gp, http
+
+    def test_signed_in(self):
+        gp, http = self.sign_in(200, {"access_token": "a", "refresh_token": "r", "expires_in": 3599})
+        self.assertTrue(gp.signed_in)
+        self.assertEqual(gp.last_error, "")
+        self.assertEqual(http.sent["redirect_uri"], "http://127.0.0.1:3009/api/gphotos/callback")
+        self.assertTrue(http.sent["code_verifier"])
+
+    def test_turned_down_says_why(self):
+        gp, _ = self.sign_in(400, {"error": "invalid_client", "error_description": "Unauthorized"})
+        self.assertFalse(gp.signed_in)
+        self.assertIn("invalid_client Unauthorized", gp.last_error)
+
+    def test_no_lasting_access(self):
+        gp, _ = self.sign_in(200, {"access_token": "a", "expires_in": 3599})
+        self.assertFalse(gp.signed_in)
+        self.assertIn("no lasting access", gp.last_error)
+
+    def test_stale_state(self):
+        gp = gphotos.GooglePhotos(self.dir, "cid", "secret", http=FakeHttp([[]]))
+        with self.assertRaises(ValueError):
+            gp.finish_sign_in("code", "unknown")
+        self.assertIn("restarted", gp.last_error)
+
+
 class AlreadyInFootage(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

@@ -30,7 +30,8 @@ GOOGLE_CLIENT_SECRET=…</pre></li>
       <section v-else-if="!status.signedIn" class="signin">
         <p>Sign in once with the Google account your photos are in. It opens in a new tab and comes back here.</p>
         <button class="btn primary" @click="signIn">{{ signingIn ? 'Waiting for Google…' : 'Sign in with Google' }}</button>
-        <small v-if="signingIn" class="muted">Finish in the other tab; this updates by itself.</small>
+        <small v-if="signingIn" class="muted">Finish in the other tab; this updates by itself.
+          <button class="link" @click="signingIn = false">Stop waiting</button></small>
       </section>
 
       <template v-else>
@@ -151,13 +152,20 @@ function openAlbum() { if (linkOk.value) window.open(albumLink.value.trim(), '_b
 const signingIn = ref(false)
 let signTimer = null
 function signIn() {
+  failure.value = ''
   window.open('/api/gphotos/auth', '_blank')
   signingIn.value = true
   clearInterval(signTimer)
+  // Until the other tab has signed in, or it says why it couldn't.
   signTimer = setInterval(async () => {
     try {
       const s = await gphotos.status()
-      if (s.signedIn) { status.value = s; signingIn.value = false; clearInterval(signTimer) }
+      if (s.signedIn || s.error) {
+        status.value = s
+        signingIn.value = false
+        clearInterval(signTimer)
+        if (s.error) failure.value = `Couldn't sign in: ${s.error}`
+      }
     } catch { /* keep waiting */ }
   }, 2000)
 }

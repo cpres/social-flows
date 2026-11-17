@@ -3455,7 +3455,7 @@ def set_capture_time(path, at):
 
 @app.get("/api/gphotos/status")
 def gphotos_status():
-    return {"configured": gphotos.configured, "signedIn": gphotos.signed_in}
+    return {"configured": gphotos.configured, "signedIn": gphotos.signed_in, "error": gphotos.last_error}
 
 
 @app.get("/api/gphotos/auth")
@@ -3463,26 +3463,32 @@ def gphotos_auth(request: Request):
     """Start signing in: off to Google, which comes back to /callback here."""
     if not gphotos.configured:
         raise HTTPException(400, "Google Photos isn't set up yet (see the README)")
+    gphotos.last_error = ""
     port = request.url.port or 3009
     return RedirectResponse(gphotos.auth_url(f"http://127.0.0.1:{port}/api/gphotos/callback"))
 
 
-def gp_page(title, text):
+def gp_page(title, text, close=False):
+    """The page the sign-in tab ends on. It closes itself only when it worked:
+    an error stays up to be read (the dialog shows it too)."""
     return HTMLResponse(f"""<!doctype html><meta charset="utf-8"><title>{title}</title>
 <body style="font:16px system-ui;max-width:32em;margin:15vh auto;padding:0 16px;color:#1f2a1f">
 <h1 style="font-size:22px">{title}</h1><p>{text}</p>
-<script>setTimeout(() => window.close(), 1500)</script></body>""")
+{'<script>setTimeout(() => window.close(), 1500)</script>' if close else ''}</body>""")
 
 
 @app.get("/api/gphotos/callback")
 def gphotos_callback(code: str = "", state: str = "", error: str = ""):
     if error:
+        gphotos.last_error = f"Google said: {error}"
+        print(f"  Google Photos sign-in: {gphotos.last_error}", flush=True)
         return gp_page("Not signed in", f"Google said: {html.escape(error)}. Close this tab and try again.")
     try:
         gphotos.finish_sign_in(code, state)
     except Exception as e:
-        return gp_page("Not signed in", f"{html.escape(str(e))} Close this tab and try again.")
-    return gp_page("Signed in to Google Photos", "You can close this tab and go back to the studio.")
+        print(f"  Google Photos sign-in failed: {e}", flush=True)
+        return gp_page("Not signed in", f"{html.escape(str(e))}<br><br>Close this tab and try again.")
+    return gp_page("Signed in to Google Photos", "You can close this tab and go back to the studio.", close=True)
 
 
 @app.post("/api/gphotos/signout")

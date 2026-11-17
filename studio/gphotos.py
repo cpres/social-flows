@@ -27,6 +27,7 @@ import hashlib
 import json
 import os
 import secrets
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -43,28 +44,64 @@ EXPIRED = (401, 403, 404, 410)   # what a stale base URL answers with
 
 class HttpError(Exception):
     def __init__(self, status, body=b""):
-        super().__init__(f"HTTP {status}: {body[:300].decode('utf-8', 'replace')}")
+        super().__init__(f"HTTP {status}: {said(body)}")
         self.status = status
         self.body = body
+
+
+def said(body):
+    """What an error response says: Google's error and its description, if it's JSON."""
+    try:
+        e = json.loads(body)
+        if isinstance(e.get("error"), dict):   # the API's {error: {code, message, status}}
+            return f"{e['error'].get('status', '')} {e['error'].get('message', '')}".strip()
+        return " ".join(str(e[k]) for k in ("error", "error_description") if e.get(k))
+    except (ValueError, AttributeError, TypeError):
+        return (body or b"")[:300].decode("utf-8", "replace")
+
+
+def tls_context():
+    """Certificates to check Google's with: certifi's when it's installed (the
+    python.org Python on a Mac has none of its own until "Install
+    Certificates" is run), else the system's."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+def reason(e):
+    """A network failure, said plainly."""
+    text = str(getattr(e, "reason", e))
+    if "CERTIFICATE_VERIFY_FAILED" in text:
+        return ("This Python can't check Google's certificate. Run ./studio/run.sh again (it installs "
+                "certifi), or run 'Install Certificates.command' from your Python's Applications folder.")
+    return f"Couldn't reach Google: {text}"
 
 
 class Http:
     """The network, as two calls. Tests replace it with a fake."""
 
+    def __init__(self):
+        self.tls = tls_context()
+
     def request(self, method, url, headers=None, data=None):
         """-> (status, body bytes). Never raises on an HTTP status."""
         req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
         try:
-            with urllib.request.urlopen(req, timeout=60) as res:
+            with urllib.request.urlopen(req, timeout=60, context=self.tls) as res:
                 return res.status, res.read()
         except urllib.error.HTTPError as e:
             return e.code, e.read()
+        except urllib.error.URLError as e:
+            raise OSError(reason(e)) from e
 
     def download(self, url, headers, target, on_bytes=None):
         """Stream url into the file at target. -> status (200 when written)."""
         req = urllib.request.Request(url, headers=headers or {})
         try:
-            with urllib.request.urlopen(req, timeout=120) as res, open(target, "wb") as f:
+            with urllib.request.urlopen(req, timeout=120, context=self.tls) as res, open(target, "wb") as f:
                 while chunk := res.read(1 << 20):
                     f.write(chunk)
                     if on_bytes:
@@ -117,6 +154,7 @@ class GooglePhotos:
         self.http = http or Http()
         self.clock = clock
         self._pending = {}   # OAuth state -> (PKCE verifier, redirect_uri)
+        self.last_error = ""  # why the last sign-in didn't work, for the dialog
 
     # ------------------------------------------------------------ OAuth
 
@@ -156,12 +194,27 @@ class GooglePhotos:
         return f"{AUTH_URL}?{urllib.parse.urlencode(q)}"
 
     def finish_sign_in(self, code, state):
-        if state not in self._pending:
-            raise ValueError("That sign-in link is stale; start again from the studio.")
-        verifier, redirect_uri = self._pending.pop(state)
-        tok = self._token_call({"grant_type": "authorization_code", "code": code, "code_verifier": verifier,
-                                "redirect_uri": redirect_uri})
-        self._save_token(tok)
+        """Trade the code Google sent back for a token, and keep it. Whatever
+        goes wrong is kept in last_error too, for the dialog to show."""
+        try:
+            if state not in self._pending:
+                raise ValueError("That sign-in was started before the studio restarted; sign in again.")
+            verifier, redirect_uri = self._pending.pop(state)
+            try:
+                tok = self._token_call({"grant_type": "authorization_code", "code": code, "code_verifier": verifier,
+                                        "redirect_uri": redirect_uri})
+            except HttpError as e:
+                raise ValueError(f"Google turned down the sign-in ({said(e.body)}).") from e
+            if not tok.get("refresh_token"):
+                tok["refresh_token"] = self._token().get("refresh_token")
+            if not tok.get("refresh_token"):
+                raise ValueError("Google signed in but gave no lasting access. Remove the app at "
+                                 "myaccount.google.com/permissions and sign in again.")
+            self._save_token(tok)
+        except Exception as e:
+            self.last_error = str(e)
+            raise
+        self.last_error = ""
 
     def _token_call(self, fields):
         data = urllib.parse.urlencode({"client_id": self.client_id, "client_secret": self.client_secret,
