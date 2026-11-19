@@ -99,10 +99,16 @@ GOOGLE_CLIENT_SECRET=…</pre></li>
 
         <!-- 5. downloading -->
         <section v-if="job" class="progress">
-          <div class="bar"><i :style="{ width: `${pct}%` }"></i></div>
+          <div class="bar" :class="{ waiting }"><i :style="{ width: `${pct}%` }"></i></div>
           <span class="muted small">
             {{ job.done }} of {{ job.total }} · {{ mb(job.bytes) }}<template v-if="job.failed.length">
               · {{ job.failed.length }} couldn't be downloaded</template>
+          </span>
+          <span v-if="job.current" class="muted small current">
+            {{ job.current.name }}:
+            <template v-if="!job.current.bytes">waiting for Google…</template>
+            <template v-else-if="job.current.size">{{ mb(job.current.bytes) }} of {{ mb(job.current.size) }}</template>
+            <template v-else>{{ mb(job.current.bytes) }}</template>
           </span>
         </section>
       </template>
@@ -255,7 +261,16 @@ const job = ref(null)
 const busy = ref(false)
 const canImport = computed(() => !busy.value && !!fresh.value.length && !!destName.value
   && !(mode.value === 'new' && clash.value))
-const pct = computed(() => (job.value?.total ? (100 * job.value.done) / job.value.total : 0))
+// Finished files, plus how far into the one coming down (when Google said its size).
+const pct = computed(() => {
+  const j = job.value
+  if (!j?.total) return 0
+  const cur = j.current
+  const part = cur?.size ? Math.min(1, cur.bytes / cur.size) : 0
+  return (100 * (j.done + part)) / j.total
+})
+// Nothing measurable is arriving yet: the bar shimmers so it doesn't look stuck.
+const waiting = computed(() => busy.value && !!job.value && !job.value.current?.size)
 const mb = (b) => `${(b / 1e6).toFixed(b > 1e8 ? 0 : 1)} MB`
 let jobTimer = null
 
@@ -269,7 +284,7 @@ async function go() {
       sessionId: session.value.sessionId, folder, create: mode.value === 'new',
       intent: { style: style.value, target: null, albumLink: linkOk.value ? albumLink.value.trim() : '' },
     })
-    job.value = { done: 0, total: r.total, bytes: 0, failed: [] }
+    job.value = { done: 0, total: r.total, bytes: 0, failed: [], current: null }
     await follow(r.job)
   } catch (e) {
     failure.value = e.message
@@ -372,7 +387,16 @@ section { display: flex; flex-direction: column; gap: 8px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .progress { gap: 4px; }
 .bar { height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.bar { position: relative; }
 .bar i { display: block; height: 100%; background: var(--sage); transition: width 0.3s; }
+.bar.waiting::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--sage) 45%, transparent), transparent);
+  animation: shimmer 1.4s linear infinite;
+}
+@keyframes shimmer { from { transform: translateX(-100%) } to { transform: translateX(100%) } }
+@media (prefers-reduced-motion: reduce) { .bar.waiting::after { animation: none; opacity: 0.4; } }
+.current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .link {
   border: 0; background: none; padding: 0; color: var(--forest); font-weight: 600;
   cursor: pointer; font-size: 13px; text-decoration: underline; text-underline-offset: 2px;

@@ -3545,7 +3545,7 @@ def gphotos_import(body: dict = Body(...)):
                    (name, json.dumps(intent), now()))
     job = {"id": uuid.uuid4().hex[:12], "folder": name, "done": 0, "total": len(todo), "bytes": 0,
            "failed": [], "imported": [], "skipped": len(items) - len(todo), "finished": False, "error": "",
-           "content": None}
+           "content": None, "current": None}   # current: {name, bytes, size} of the file coming down
     GP_JOBS[job["id"]] = job
     threading.Thread(target=gp_run, args=(job, session_id, todo, dest, bool(body.get("create"))),
                      daemon=True).start()
@@ -3556,9 +3556,11 @@ def gp_run(job, session_id, items, dest, created):
     placed = {}   # picker id -> where it went
 
     def target_of(item):
+        job["current"] = {"name": item["filename"], "bytes": 0, "size": None}
         return dest / f".gphotos-{uuid.uuid4().hex[:8]}.part"   # hidden: scans skip it
 
     def done_with(item, path, error):
+        job["current"] = None
         job["done"] += 1
         if error:
             job["failed"].append({"name": item["filename"], "error": error})
@@ -3573,8 +3575,13 @@ def gp_run(job, session_id, items, dest, created):
             Path(path).unlink(missing_ok=True)
             job["failed"].append({"name": item["filename"], "error": str(e)})
 
-    def on_bytes(n):
+    def on_bytes(n, size=None):
         job["bytes"] += n
+        cur = job["current"]
+        if cur:
+            cur["bytes"] += n
+            if size:
+                cur["size"] = size
 
     try:
         gphotos.download_all(session_id, items, target_of, done_with, on_bytes)

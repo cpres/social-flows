@@ -98,11 +98,16 @@ class Http:
             raise OSError(reason(e)) from e
 
     def download(self, url, headers, target, on_bytes=None):
-        """Stream url into the file at target. -> status (200 when written)."""
+        """Stream url into the file at target. -> status (200 when written).
+        on_bytes(0, size) once the response starts (size from Content-Length,
+        or None), then on_bytes(n) per chunk, so progress moves within a file."""
         req = urllib.request.Request(url, headers=headers or {})
         try:
             with urllib.request.urlopen(req, timeout=120, context=self.tls) as res, open(target, "wb") as f:
-                while chunk := res.read(1 << 20):
+                if on_bytes:
+                    size = res.headers.get("Content-Length")
+                    on_bytes(0, int(size) if size and size.isdigit() else None)
+                while chunk := res.read(1 << 18):
                     f.write(chunk)
                     if on_bytes:
                         on_bytes(len(chunk))
