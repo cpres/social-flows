@@ -190,6 +190,13 @@ class PickerClient(unittest.TestCase):
         self.assertFalse(gp.configured)
         self.assertFalse(gp.signed_in)
 
+    def test_times_keep_their_zone_whatever_the_fraction(self):
+        # Before: the zone's digits were taken as fraction, so it read as local time.
+        utc = 1794765870.0   # 2026-11-15T18:04:30Z
+        for text in ("2026-11-15T18:04:30Z", "2026-11-15T18:04:30.925Z", "2026-11-15T18:04:30.925000000Z",
+                     "2026-11-15T10:04:30.925-08:00"):
+            self.assertAlmostEqual(gphotos.parse_time(text), utc + (0.925 if "." in text else 0), places=3, msg=text)
+
     def test_nanosecond_times(self):
         self.assertAlmostEqual(gphotos.parse_time("2026-10-06T14:00:00.123456789Z"), 1791295200.123456, places=5)
 

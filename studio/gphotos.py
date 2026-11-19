@@ -133,7 +133,7 @@ def parse_time(text):
         # Python before 3.11 takes at most 6 fraction digits; Google may send 9.
         if "." in t:
             head, rest = t.split(".", 1)
-            frac = "".join(c for c in rest if c.isdigit())
+            frac = rest[:len(rest) - len(rest.lstrip("0123456789"))]   # the digits up to the zone
             tz = rest[len(frac):]
             t = f"{head}.{frac[:6]}{tz}"
         return datetime.fromisoformat(t).timestamp()
