@@ -354,7 +354,9 @@ def migrate(db):
                              ("reel_items", "frames", "TEXT"),
                              ("reels", "archived_at", "REAL"),
                              ("media", "highlights", "TEXT"),   # JSON list of seconds, see server.py
-                             ("media", "amount", "INTEGER NOT NULL DEFAULT 0")]:   # -1 less, 0, 1 more of it in reels
+                             ("media", "amount", "INTEGER NOT NULL DEFAULT 0"),   # -1 less, 0, 1 more of it in reels
+                             # dragged to another spot on its shoot page: the time it's taken as (its own stays in captured_at)
+                             ("media", "moved_at", "REAL")]:
         if col not in have[table]:
             db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
     # v1: photo sizes now honour EXIF rotation; re-measure photos once.

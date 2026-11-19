@@ -139,9 +139,21 @@ def highlights_of(row):
         return []
 
 
+# When a file counts as taken: where it was dragged to on its shoot page
+# (media.moved_at), else its own capture time. Order and Relay go by this.
+SHOT_TIME = "COALESCE(moved_at, captured_at)"
+
+
+def shot_time(row):
+    moved = row["moved_at"] if "moved_at" in row.keys() else None
+    return moved if moved is not None else row["captured_at"]
+
+
 def media_dict(row):
     return {"id": row["id"], "folder": row["folder"], "file": row["name"], "kind": row["kind"],
-            "duration": row["duration"], "capturedAt": row["captured_at"],
+            "duration": row["duration"], "capturedAt": shot_time(row),
+            # dragged to another spot: capturedAt is that; takenAt is the file's own
+            "moved": ("moved_at" in row.keys() and row["moved_at"] is not None), "takenAt": row["captured_at"],
             "width": row["width"], "height": row["height"], "missing": bool(row["missing"]),
             "highlights": highlights_of(row), "amount": amount_of(row)}
 
@@ -354,7 +366,7 @@ def list_folders():
     with lib.connect() as db:
         for d in lib.shoot_folders():
             rows = db.execute("SELECT * FROM media WHERE folder = ? AND missing = 0 "
-                              "ORDER BY captured_at", (d.name,)).fetchall()
+                              f"ORDER BY {SHOT_TIME}, id", (d.name,)).fetchall()
             videos = [r for r in rows if r["kind"] == "video"]
             cover = videos[0] if videos else (rows[0] if rows else None)
             used = db.execute("""SELECT COUNT(DISTINCT i.media_id) FROM reel_items i
@@ -384,7 +396,7 @@ def get_folder(name: str):
     lib.scan([folder])
     with lib.connect() as db:
         media = [media_dict(r) for r in db.execute(
-            "SELECT * FROM media WHERE folder = ? AND missing = 0 ORDER BY captured_at", (name,))]
+            f"SELECT * FROM media WHERE folder = ? AND missing = 0 ORDER BY {SHOT_TIME}, id", (name,))]
         picks = {r["media_id"]: pick_dict(r) for r in db.execute(
             "SELECT p.* FROM picks p JOIN media m ON m.id = p.media_id WHERE m.folder = ?", (name,))}
         for m in media:
@@ -459,7 +471,7 @@ def folder_parts(db, name, side):
     saved = side.get("clips", {})
     settings = {**DEFAULT_SETTINGS, **side.get("settings", {})}
     rows = db.execute("SELECT * FROM media WHERE folder = ? AND missing = 0 "
-                      "ORDER BY captured_at", (name,)).fetchall()
+                      f"ORDER BY {SHOT_TIME}, id", (name,)).fetchall()
     out = []
     for pos, m in enumerate(rows):
         s = saved.get(m["name"], {})
@@ -670,7 +682,7 @@ def relay_preview(name: str, body: dict = Body(default={})):
     with lib.connect() as db:
         leave = {int(i) for i in body.get("exclude") or []}
         parts = [{"kind": m["kind"], "duration": m["duration"], "start": start, "length": length,
-                  "media_id": lib.original_of(db, m["id"]), "path": m["path"], "captured_at": m["captured_at"],
+                  "media_id": lib.original_of(db, m["id"]), "path": m["path"], "captured_at": shot_time(m),
                   "file_id": m["id"]}
                  for _, m, start, length, _ in folder_parts(db, name, side) if m["id"] not in leave]
         bases, missing = relay_bases(db, parts, opts, cached_only=True)
@@ -693,7 +705,8 @@ def relay_preview(name: str, body: dict = Body(default={})):
 
 def apply_style(db, reel_id, style, body):
     """Lay a new reel out in a style (see folder_to_reel)."""
-    rows = db.execute("""SELECT i.*, m.kind, m.duration, m.captured_at, m.path FROM reel_items i
+    rows = db.execute("""SELECT i.*, m.kind, m.duration, COALESCE(m.moved_at, m.captured_at) AS captured_at, m.path
+                         FROM reel_items i
                          JOIN media m ON m.id = i.media_id
                          WHERE i.reel_id = ? AND i.keep = 1 ORDER BY i.position, i.id""", (reel_id,)).fetchall()
     s = settings_of(db.execute("SELECT settings FROM reels WHERE id = ?", (reel_id,)).fetchone())
@@ -773,7 +786,8 @@ def relay_restitch_items(db, reel_id, s):
     take what was trimmed); those whose parts are all gone left out; parts
     from elsewhere (added since, or a reel planned before this) grouped
     into items by where they carry on from each other. -> (items, rows)."""
-    rows = db.execute("""SELECT i.*, m.kind, m.duration, m.captured_at, m.path FROM reel_items i
+    rows = db.execute("""SELECT i.*, m.kind, m.duration, COALESCE(m.moved_at, m.captured_at) AS captured_at, m.path
+                         FROM reel_items i
                          JOIN media m ON m.id = i.media_id
                          WHERE i.reel_id = ? AND i.keep = 1 AND m.missing = 0
                          ORDER BY i.position, i.id""", (reel_id,)).fetchall()
@@ -1281,6 +1295,24 @@ def update_item(item_id: int, body: dict = Body(...)):
         db.execute(f"UPDATE reel_items SET {sets} WHERE id = :id", {**fields, "id": item_id})
         touch(db, row["reel_id"])
     return {"ok": True}
+
+
+@app.put("/api/media/{media_id}/moved")
+def save_moved(media_id: int, body: dict = Body(...)):
+    """A file dragged to another spot on its shoot page: {at: seconds} is the
+    time it's taken as from now on (between its new neighbours'), so the
+    shoot's order, Relay and photos matched to a recording video all follow;
+    {at: null} puts back its own. -> the file."""
+    at = body.get("at")
+    try:
+        at = None if at is None else float(at)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "at: seconds, or null")
+    with lib.connect() as db:
+        if not db.execute("SELECT 1 FROM media WHERE id = ?", (media_id,)).fetchone():
+            raise HTTPException(404, "No such file")
+        db.execute("UPDATE media SET moved_at = ? WHERE id = ?", (at, media_id))
+        return media_dict(db.execute("SELECT * FROM media WHERE id = ?", (media_id,)).fetchone())
 
 
 @app.put("/api/media/{media_id}/pick")

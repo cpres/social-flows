@@ -63,12 +63,21 @@
         <ClipCard
           v-for="(m, i) in media" :key="m.id" :media="m"
           :thumb-time="m.kind === 'video' ? draftOf(m).start : 0"
-          :sub="clockTime(m.capturedAt) + (kept.has(m.id) ? ' · picked' : '')"
+          :sub="clockTime(m.capturedAt) + (m.moved ? ' · moved' : '') + (kept.has(m.id) ? ' · picked' : '')"
           :dots="partsOf(m.id).map((p) => ({ color: reelColor(p.reelId), label: reelName(p.reelId) }))"
           :selected="!picking && i === selected" :used="partsOf(m.id).length > 0"
+          :draggable="!picking && media.length > 1"
+          :class="{ dragging: dragFrom === i, 'drop-before': dropAt?.i === i && !dropAt.after,
+                    'drop-after': dropAt?.i === i && dropAt.after }"
+          @dragstart="dragStart(i, $event)" @dragover.prevent="dragOver(i, $event)"
+          @dragleave="dropAt = null" @drop.prevent="drop" @dragend="dragFrom = dropAt = null"
           @select="picking ? togglePick(m.id) : select(i)"
         >
           <input v-if="picking" type="checkbox" class="pickbox" :checked="picked.has(m.id)" tabindex="-1" />
+          <button
+            v-else-if="m.moved" class="unmove" @click.stop="putBack(m)"
+            :title="`Moved here by hand. Put it back where it was taken (${clockTime(m.takenAt)})`"
+          >↺</button>
         </ClipCard>
         <button class="refresh" @click="reload" :disabled="refreshing" title="Look for new clips in this folder">
           ↻ {{ refreshing ? 'Checking…' : 'Check for new clips' }}
@@ -381,6 +390,51 @@ async function reload() {
 }
 useRefreshOnFocus(reload)
 onBeforeUnmount(() => { saver.flushAll(); pickSaver.flushAll() })
+
+// ---------------------------------------------------------------- reordering
+// Drag a file to another spot: it's taken as shot between its new
+// neighbours (halfway between their times; a second past either end), so
+// this order, Relay and photos matched to a recording video all follow. Its
+// own time is kept: ↺ on its card puts it back.
+const dragFrom = ref(null)
+const dropAt = ref(null)   // { i, after }: where it would land
+function dragStart(i, e) {
+  dragFrom.value = i
+  e.dataTransfer.effectAllowed = 'move'
+  e.dataTransfer.setData('text/plain', media.value[i].file)
+}
+function dragOver(i, e) {
+  if (dragFrom.value === null) return
+  const r = e.currentTarget.getBoundingClientRect()
+  dropAt.value = { i, after: e.clientY > r.top + r.height / 2 }
+}
+async function drop() {
+  const from = dragFrom.value
+  const to = dropAt.value
+  dragFrom.value = dropAt.value = null
+  if (from === null || !to) return
+  const moving = media.value[from]
+  const rest = media.value.filter((_, k) => k !== from)
+  const k = to.i + (to.after ? 1 : 0) - (from < to.i + (to.after ? 1 : 0) ? 1 : 0)
+  if (k === from) return
+  const prev = rest[k - 1]
+  const next = rest[k]
+  const at = prev && next ? (prev.capturedAt + next.capturedAt) / 2 : prev ? prev.capturedAt + 1 : next.capturedAt - 1
+  try {
+    await api.moveInShoot(moving.id, at)
+    await reload()
+  } catch (e) {
+    showFlash(e.message)
+  }
+}
+async function putBack(m) {
+  try {
+    await api.moveInShoot(m.id, null)
+    await reload()
+  } catch (e) {
+    showFlash(e.message)
+  }
+}
 
 // ---------------------------------------------------------------- selection
 
@@ -782,4 +836,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .partrow.activepart { background: var(--sage-soft); }
 .partrow .sw { width: 12px; height: 12px; border-radius: 50%; flex: none; }
 .reelname { font-weight: 600; text-decoration: underline; text-decoration-color: var(--line); }
+.clip.dragging { opacity: 0.4; }
+.clip.drop-before { box-shadow: inset 0 3px 0 var(--sage); }
+.clip.drop-after { box-shadow: inset 0 -3px 0 var(--sage); }
+.unmove {
+  border: 1px solid var(--line); background: transparent; color: inherit; border-radius: 999px;
+  width: 26px; height: 26px; cursor: pointer; font-size: 14px; line-height: 1;
+}
+.unmove:hover { border-color: var(--sage); }
 </style>

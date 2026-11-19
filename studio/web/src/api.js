@@ -96,6 +96,8 @@ export const api = {
   // The part of a file picked in its shoot, kept until it's changed (see db.py).
   savePick: (mediaId, pick) => send('PUT', path`/api/media/${mediaId}/pick`, pick),
   deletePick: (mediaId) => send('DELETE', path`/api/media/${mediaId}/pick`),
+  // Dragged to another spot in its shoot: the time it's taken as from now on (null: its own) -> the file.
+  moveInShoot: (mediaId, at) => send('PUT', path`/api/media/${mediaId}/moved`, { at }),
   // A clip's highlights: moments pinned on it, in seconds (see Weave's Moments).
   saveHighlights: (mediaId, highlights, amount) => send('PUT', path`/api/media/${mediaId}/highlights`,
     amount === undefined ? { highlights } : { highlights, amount }),
