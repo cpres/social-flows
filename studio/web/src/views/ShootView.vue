@@ -56,10 +56,11 @@
           <button class="btn small primary" :disabled="!picked.size" @click="moving = true">Move {{ picked.size || '' }}…</button>
           <button class="btn small danger" :disabled="!picked.size" @click="deleting = true">Delete…</button>
         </div>
-        <button class="refresh" @click="reload" :disabled="refreshing" title="Look for new clips in this folder">
+        <button class="refresh" @click="reload(true)" :disabled="refreshing" title="Look for new clips in this folder">
           ↻ {{ refreshing ? 'Checking…' : 'Check for new clips' }}
           <span v-if="newCount" class="new">+{{ newCount }} new</span>
         </button>
+        <p v-if="checkNote" class="muted checknote">{{ checkNote }}</p>
         <ClipCard
           v-for="(m, i) in media" :key="m.id" :media="m"
           :thumb-time="m.kind === 'video' ? draftOf(m).start : 0"
@@ -79,9 +80,10 @@
             :title="`Moved here by hand. Put it back where it was taken (${clockTime(m.takenAt)})`"
           >↺</button>
         </ClipCard>
-        <button class="refresh" @click="reload" :disabled="refreshing" title="Look for new clips in this folder">
+        <button class="refresh" @click="reload(true)" :disabled="refreshing" title="Look for new clips in this folder">
           ↻ {{ refreshing ? 'Checking…' : 'Check for new clips' }}
         </button>
+        <p v-if="checkNote" class="muted checknote">{{ checkNote }}</p>
         <button
           v-if="intent?.source === 'gphotos'" class="refresh" @click="addingFromGoogle = true"
           title="Bring more of the album into this shoot; what's already here is skipped"
@@ -386,7 +388,16 @@ onMounted(async () => {
 })
 
 // Pick up clips added to the folder since the page opened, keeping your place.
-async function reload() {
+// What Check for new clips found, shown under the button for a few seconds.
+const checkNote = ref('')
+let checkTimer = null
+function noteCheck(text) {
+  checkNote.value = text
+  clearTimeout(checkTimer)
+  checkTimer = setTimeout(() => { checkNote.value = '' }, 5000)
+}
+// asked: from the Check for new clips button (say what was found), not a refresh on focus.
+async function reload(asked = false) {
   if (refreshing.value || loading.value) return
   refreshing.value = true
   try {
@@ -395,10 +406,21 @@ async function reload() {
     const before = new Set(media.value.map((m) => m.id))
     const data = await api.folder(props.name)
     apply(data)
-    newCount.value = data.media.filter((m) => !before.has(m.id)).length
+    const found = data.media.filter((m) => !before.has(m.id))
+    newCount.value = found.length
     const i = media.value.findIndex((m) => m.id === keep)
     selected.value = i >= 0 ? i : 0
-    if (newCount.value) setTimeout(() => { newCount.value = 0 }, 4000)
+    if (found.length) setTimeout(() => { newCount.value = 0 }, 4000)
+    if (asked) {
+      // Say what it found either way; a new file lands at its own time, often
+      // mid-list, so go to the first of them.
+      if (found.length) {
+        select(media.value.findIndex((m) => m.id === found[0].id))
+        noteCheck(found.length === 1 ? `1 new: ${found[0].file}` : `${found.length} new, from ${found[0].file}`)
+      } else {
+        noteCheck('No new clips in this folder')
+      }
+    }
   } catch (e) {
     showFlash(e.message)
   } finally {
@@ -894,4 +916,5 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 }
 .unmove:hover { border-color: var(--sage); }
 .coverrow { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.checknote { margin: 2px 4px 6px; font-size: 12px; text-align: center; }
 </style>

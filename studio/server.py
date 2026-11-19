@@ -466,6 +466,41 @@ def teaser_first(db, s):
                        *[sc for sc in s["scenes"] if sc.get("from") != tid]]
 
 
+@app.post("/api/reels/{reel_id}/teaser")
+def reel_teaser(reel_id: int, body: dict = Body(...)):
+    """Open an existing reel on a few seconds of a file ({mediaId}): a
+    teaser part at the very front (as a reel from a shoot with a cover gets,
+    add_teaser), replacing any it had. A Relay reel is stitched back
+    together around it. -> {ok, teaserItemId}."""
+    with lib.connect() as db:
+        r = reel_row(db, reel_id)
+        m = db.execute("SELECT * FROM media WHERE id = ? AND missing = 0", (int(body.get("mediaId") or 0),)).fetchone()
+        if not m:
+            raise HTTPException(404, "No such file")
+        s = settings_of(r)
+        if s.get("teaserItemId"):
+            db.execute("DELETE FROM reel_items WHERE id = ?", (s["teaserItemId"],))
+        pick = pick_of(db, m["id"]) or {}
+        if m["kind"] == "video":
+            start = float(pick.get("start", default_start(m["duration"], TEASER_SECONDS)))
+            length = min(TEASER_SECONDS, float(m["duration"]) - start)
+        else:
+            start, length = 0.0, TEASER_SECONDS
+        cur = db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length, focus_x, focus_y, "
+                         "zoom, layout, frames, keep) VALUES (?, ?, -1, ?, ?, ?, ?, ?, ?, '{}', 1)",
+                         (reel_id, lib.original_of(db, m["id"]), start, length, pick.get("focusX", 0.5),
+                          pick.get("focusY", 0.5), pick.get("zoom", 1),
+                          pick.get("layout", "") if m["kind"] == "video" else ""))
+        s["teaserItemId"] = cur.lastrowid
+        if s.get("relayPlan"):
+            items, templates, ids = relay_restitch_items(db, reel_id, s)
+            write_relay(db, reel_id, s, items, templates, relay_opts(s.get("relay") or {}), ids)
+        teaser_first(db, s)
+        db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), reel_id))
+        touch(db, reel_id)
+        return {"ok": True, "teaserItemId": s["teaserItemId"]}
+
+
 @app.put("/api/folders/{name}/cover")
 def set_cover(name: str, body: dict = Body(...)):
     """The shoot's cover: {mediaId} (one of its files) or {mediaId: null}
@@ -908,6 +943,9 @@ def relay_restitch_items(db, reel_id, s):
         rs = groups[idx]
         it = dict(saved_items[idx])
         it.pop("mediaId", None)
+        # when it was shot as the studio has it now (its time may have been
+        # corrected, or the file dragged to another spot in its shoot)
+        it["shot_at"] = float(rs[0]["captured_at"] or 0)
         mine = [pid for pid, v in saved_parts.items() if v[0] == idx]
         same = len(mine) == len(rs) and all(
             abs(x["start"] - saved_parts[str(x["id"])][1]) < 0.01 and abs(x["length"] - saved_parts[str(x["id"])][2]) < 0.01
