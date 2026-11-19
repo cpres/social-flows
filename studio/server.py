@@ -541,7 +541,14 @@ def relay_bases(db, parts, opts, cached_only=False, file_of=None):
     return bases, missing
 
 
-def expand_items(bases, cap, most, around=relay_mod.AROUND_DEFAULT, drop=None, dropped=None):
+def feature_row(bases):
+    """Which part is the shoot's highlight video (relay.feature_of), or None."""
+    return relay_mod.feature_of({i: float(b["p"]["duration"] or 0) for i, b in enumerate(bases)
+                                 if b["p"]["kind"] == "video"})
+
+
+def expand_items(bases, cap, most, around=relay_mod.AROUND_DEFAULT, drop=None, dropped=None,
+                 stretch=relay_mod.FEATURE_STRETCH):
     """What the relay planner needs: [{kind, duration, start, length, avail,
     shot_at, keep, clip, match, _row}], _row: which part it's from. A long
     clip plays the long stretch picked in its shoot, or the clip less a
@@ -552,24 +559,32 @@ def expand_items(bases, cap, most, around=relay_mod.AROUND_DEFAULT, drop=None, d
     `keep` is a stretch with its lulls out. drop ({file: [moments]}): a
     long clip's stretch whose share of the clip holds one of those moments
     is left out (the others stay where they were), and noted in `dropped`
-    ([{file, start, length}]) when given."""
+    ([{file, start, length}]) when given. The highlight (feature_row) plays
+    in stretches `stretch` times as long, unless Less is asked for it."""
     items = []
     drop = drop or {}
+    # one video much longer than the rest: the highlight, in longer stretches (relay.feature_of)
+    feature = feature_row(bases) if stretch > 1 else None
     for row_i, b in enumerate(bases):
         p, pick = b["p"], b["pick"]
         it = {"kind": p["kind"], "duration": float(p["duration"] or 0), "start": float(p["start"]),
               "length": float(p["length"]), "shot_at": float(p["captured_at"] or 0), "_row": row_i}
         if p["kind"] == "video" and it["duration"] >= relay_mod.LONG_THRESHOLD:
             mine = relay_mod.most_for(most, b.get("amount", 0))   # Less / More of this clip
+            cap_i, around_i = cap, around
+            if row_i == feature and b.get("amount", 0) < 0:
+                feature = None   # Less asked for it: no longer than the others
+            if row_i == feature:
+                cap_i, around_i = relay_mod.feature_cap(cap, stretch), around * stretch
             if pick and pick["length"] >= relay_mod.LONG_THRESHOLD:   # the stretch picked: just as picked
                 span, breath = (float(pick["start"]), float(pick["length"])), 0
             else:
                 span, breath = (0.0, it["duration"]), relay_mod.BREATH
             # Just the moments around its highlights (all of the ones marked; with
             # none, as many suggested ones as it gets stretches), else spread evenly.
-            pinned = relay_mod.pinned_stretches(*span, b.get("pins") or b.get("suggested") or [], cap, mine,
-                                                around, every=bool(b.get("pins")))
-            st = pinned or relay_mod.stretches(*span, cap, breath=breath, most=mine)
+            pinned = relay_mod.pinned_stretches(*span, b.get("pins") or b.get("suggested") or [], cap_i, mine,
+                                                around_i, every=bool(b.get("pins")))
+            st = pinned or relay_mod.stretches(*span, cap_i, breath=breath, most=mine)
             # each stretch claims the photos shot up to halfway to its neighbours
             bounds = [0.0] + [(a + la + c) / 2 for (a, la), (c, _) in zip(st, st[1:])] + [it["duration"]]
             for k, (s, ln) in enumerate(st):
@@ -580,6 +595,8 @@ def expand_items(bases, cap, most, around=relay_mod.AROUND_DEFAULT, drop=None, d
                         dropped.append({"file": b.get("file"), "start": s, "length": ln, "ats": hits})
                     continue
                 one = {**it, "start": s, "avail": ln, "clip": row_i, "match": (bounds[k], bounds[k + 1])}
+                if row_i == feature:
+                    one["feature"] = stretch
                 if pinned:
                     one["pinned"] = "marked" if b.get("pins") else "suggested"
                 if b["points"]:
@@ -600,9 +617,10 @@ def relay_fit(bases, opts):
     were, and the reel is that much shorter (it isn't fitted again, which
     would move and stretch the ones left). -> (items, plan, cap, dropped:
     the sections left out, [{file, start, length, ats}])."""
-    def make(cap, most, around, drop=None, dropped=None):
-        return expand_items(bases, cap, most, around, drop, dropped)
+    def make(cap, most, around, drop=None, dropped=None, stretch=relay_mod.FEATURE_STRETCH):
+        return expand_items(bases, cap, most, around, drop, dropped, stretch)
 
+    stretch = relay_mod.FEATURE_STRETCH
     if not opts.get("target"):
         cap, most, around = opts.get("cap"), opts["most"], opts["around"]
     else:
@@ -612,20 +630,28 @@ def relay_fit(bases, opts):
         # Stretches never go under relay.MIN_STRETCH (shorter can't relay), so
         # if the footage won't fit like that, each long clip gets fewer of them
         # (At most is a most) before anything has to come out.
-        best = None
-        for most in range(opts["most"], 0, -1):
-            got = relay_mod.fit_target(lambda cap: make(cap, most, cap or math.inf), opts, opts["target"], longest)
-            if best is None or got[1]["stats"]["totalSeconds"] < best[0][1]["stats"]["totalSeconds"]:
-                best = (got, most)
-            if relay_mod.fits(got[1]["stats"]["totalSeconds"], opts["target"]):
-                best = (got, most)
+        # The highlight's longer stretches give way, a step at a time, to a
+        # length that can't take them.
+        steps = relay_mod.FEATURE_STEPS if feature_row(bases) is not None else (relay_mod.FEATURE_STRETCH,)
+        for stretch in steps:
+            best = None
+            for most in range(opts["most"], 0, -1):
+                got = relay_mod.fit_target(lambda cap, most=most, stretch=stretch: make(cap, most, cap or math.inf,
+                                                                                        stretch=stretch),
+                                           opts, opts["target"], longest)
+                if best is None or got[1]["stats"]["totalSeconds"] < best[0][1]["stats"]["totalSeconds"]:
+                    best = (got, most)
+                if relay_mod.fits(got[1]["stats"]["totalSeconds"], opts["target"]):
+                    best = (got, most)
+                    break
+            if relay_mod.fits(best[0][1]["stats"]["totalSeconds"], opts["target"]):
                 break
         (items, plan, cap), most = best
         around = cap or math.inf
         if not opts.get("drop"):
             return items, plan, cap, []
     dropped = []
-    items = make(cap, most, around, opts.get("drop"), dropped)
+    items = make(cap, most, around, opts.get("drop"), dropped, stretch)
     return items, relay_mod.plan_relay(items, {**opts, "cap": cap}), cap, dropped
 
 
@@ -3400,8 +3426,11 @@ def content_of(rows):
     """How much footage a shoot has, and the reel length to suggest for it."""
     video = sum(r["duration"] for r in rows if r["kind"] == "video")
     photos = sum(1 for r in rows if r["kind"] == "photo")
-    return {"videoSeconds": round(video, 1), "videoCount": sum(1 for r in rows if r["kind"] == "video"),
-            "photoCount": photos, "suggestedTarget": relay_mod.suggest_target(video, photos)}
+    # a highlight video (relay.feature_of) plays in longer stretches: room for that
+    lengths = {i: r["duration"] for i, r in enumerate(rows) if r["kind"] == "video"}
+    extra = lengths[f] if (f := relay_mod.feature_of(lengths)) is not None else 0.0
+    return {"videoSeconds": round(video, 1), "videoCount": len(lengths),
+            "photoCount": photos, "suggestedTarget": relay_mod.suggest_target(video + extra, photos)}
 
 
 def looks_like(path):

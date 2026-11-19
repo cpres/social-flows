@@ -221,6 +221,30 @@ def pinned_stretches(start, length, pins, cap, most=MOST_DEFAULT, around=AROUND_
     return [(round(a, 3), round(b - a, 3)) for a, b in merged]
 
 
+# ---------------------------------------------------------------- the feature
+# One video clearly longer than the rest is usually the highlight of the
+# shoot: it plays in longer stretches than the others (with a target length,
+# the others give way). Not with Less asked for it.
+FEATURE_MIN = 30.0      # at least this long…
+FEATURE_RATIO = 2.0     # …and at least this many times the next longest video
+FEATURE_STRETCH = 2.0   # its stretches: up to this many times the cap…
+FEATURE_STEPS = (2.0, 1.5, 1.0)   # …less, in these steps, when a target length can't take that
+
+
+def feature_of(lengths):
+    """Which of these videos' lengths ({key: seconds}) is the feature, or None."""
+    if not lengths:
+        return None
+    key, longest = max(lengths.items(), key=lambda kv: kv[1])
+    rest = max([v for k, v in lengths.items() if k != key] or [0.0])
+    return key if longest >= FEATURE_MIN and longest >= FEATURE_RATIO * rest else None
+
+
+def feature_cap(cap, stretch=FEATURE_STRETCH):
+    """The feature's stretch length for this cap (None: all of it anyway)."""
+    return cap * stretch if cap else cap
+
+
 def fits(total, target):
     """Whether a reel this long is near enough a target length (as the
     New reel dialog's LeaveOut.overBy)."""
@@ -308,6 +332,8 @@ class Entry:
         self.shot_at = float(it.get("shot_at") or 0)
         photo_s = float(opts.get("photo_seconds") or PHOTO_SECONDS)
         cap = opts.get("cap") or None
+        if it.get("feature"):   # the shoot's highlight: longer stretches (feature_of), this many times
+            cap = feature_cap(cap, float(it["feature"]))
         if it.get("kind") == "photo":
             self.kind = PHOTO
             life = float(it.get("hold") or photo_s)   # its own, once it's been trimmed in the reel

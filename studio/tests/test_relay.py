@@ -372,3 +372,29 @@ class Highlights(unittest.TestCase):
         self.assertEqual((relay.most_for(4, -1), relay.most_for(4, 0), relay.most_for(4, 1)), (2, 4, 8))
         self.assertEqual([relay.suggest_count(d) for d in (20, 90, 300)], [2, 3, 5])
         self.assertEqual(len(relay.suggest_moments([], 90, 3)), 3)
+
+
+class Feature(unittest.TestCase):
+    """One video clearly longer than the rest is the highlight: longer stretches."""
+
+    def test_a_standout_long_video(self):
+        self.assertEqual(relay.feature_of({0: 13.9, 1: 75.3, 2: 10.0}), 1)
+
+    def test_not_when_two_are_close(self):
+        self.assertIsNone(relay.feature_of({0: 50.0, 1: 75.3}))
+
+    def test_not_when_it_is_short(self):
+        self.assertIsNone(relay.feature_of({0: 5.0, 1: 25.0}))
+
+    def test_a_lone_long_video_is_one(self):
+        self.assertEqual(relay.feature_of({"v": 40.0}), "v")
+        self.assertIsNone(relay.feature_of({}))
+
+    def test_the_planner_gives_it_its_longer_cap(self):
+        items = [video(at(0), 13.9), dict(video(at(1), 75.3), feature=2.0), video(at(3), 12.0)]
+        plan = relay.plan_relay(items, {"dial": 1, "cap": 9.0})
+        on = {}
+        for seg in plan["timeline"]:
+            on[seg["top"]] = on.get(seg["top"], 0) + seg["len"]
+        self.assertAlmostEqual(on[1], 18.0, places=3)
+        self.assertAlmostEqual(on[0], 9.0, places=3)
