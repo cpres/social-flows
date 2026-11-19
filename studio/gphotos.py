@@ -167,12 +167,18 @@ class GooglePhotos:
         return self.configured and bool(self._token().get("refresh_token"))
 
     def _token(self):
+        """The saved sign-in, unless another OAuth client made it: Google bills
+        each call to the project of the client its token came from, so after
+        GOOGLE_CLIENT_ID changes an old token would keep using the old project.
+        (Tokens saved before the client was noted are taken as they are.)"""
         try:
-            return json.loads(self.token_path.read_text())
+            tok = json.loads(self.token_path.read_text())
         except (OSError, ValueError):
             return {}
+        return tok if tok.get("client_id", self.client_id) == self.client_id else {}
 
     def _save_token(self, tok):
+        tok = {**tok, "client_id": self.client_id}
         self.token_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.token_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(tok))

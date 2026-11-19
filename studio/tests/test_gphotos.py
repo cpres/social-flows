@@ -171,6 +171,20 @@ class PickerClient(unittest.TestCase):
         self.assertEqual(http.calls[0], ("POST", gphotos.TOKEN_URL))
         self.assertEqual(json.loads(gp.token_path.read_text())["refresh_token"], "r")   # kept
 
+    def test_a_token_from_another_client_is_not_used(self):
+        # GOOGLE_CLIENT_ID changed: the old token would bill the old project.
+        client(self.dir, FakeHttp([[]]))
+        gp = gphotos.GooglePhotos(self.dir, "new-cid", "secret", http=FakeHttp([[]]))
+        self.assertFalse(gp.signed_in)
+        with self.assertRaises(PermissionError):
+            gp.access_token()
+        self.assertTrue(client(self.dir, FakeHttp([[]])).signed_in)   # the old client still sees it
+
+    def test_a_token_saved_before_clients_were_noted_still_works(self):
+        gp = client(self.dir, FakeHttp([[]]))
+        gp.token_path.write_text(json.dumps({"refresh_token": "r", "access_token": "tok", "expires_at": 1e12}))
+        self.assertEqual(gp.access_token(), "tok")
+
     def test_not_configured(self):
         gp = gphotos.GooglePhotos(self.dir, "", "", http=FakeHttp([[]]))
         self.assertFalse(gp.configured)
