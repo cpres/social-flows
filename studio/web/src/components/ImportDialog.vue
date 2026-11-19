@@ -9,9 +9,26 @@
         <button class="x" aria-label="Close" @click="close">×</button>
       </div>
 
+      <!-- zips (a Google Photos download): unpacked here, then imported like the rest -->
+      <section v-if="!loading && zips.length" class="songs zips">
+        <div class="selbar">
+          <b>Zipped downloads</b>
+          <span class="muted">unpacked with the dates they were taken; clips under 3s (Live Photo motion) left out</span>
+        </div>
+        <div v-for="z in zips" :key="z.name" class="song">
+          <span class="sname">🗜 {{ z.name }}</span>
+          <span class="muted small">{{ zipCounts(z) }} · {{ mbOf(z.size) }}</span>
+          <span class="muted mono small">{{ dayLabel(isoDay(new Date(z.arrived * 1000))) }}</span>
+          <button class="btn small" :disabled="!!unzipping" @click="unzip(z)">
+            {{ unzipping === z.name ? 'Unpacking…' : 'Unpack' }}
+          </button>
+        </div>
+      </section>
+      <p class="ok" v-if="zipNotice">{{ zipNotice }}</p>
+
       <p v-if="loading" class="muted">Looking in Downloads…</p>
       <p v-else-if="error" class="err">{{ error }}</p>
-      <p v-else-if="!days.length" class="empty">
+      <p v-else-if="!days.length && !zips.length" class="empty">
         No photos, videos or songs have arrived in Downloads in the last month.
         AirDrop some from your phone, then come back here.
       </p>
@@ -148,6 +165,9 @@ const files = ref([])
 const day = ref('')
 const chosen = ref(new Set())
 const songs = ref([])
+const zips = ref([])          // [{ name, arrived, photos, videos, size }]
+const unzipping = ref('')
+const zipNotice = ref('')
 const musicDir = ref('')
 const chosenSongs = ref(new Set())
 const songBusy = ref(false)
@@ -249,6 +269,27 @@ async function moveVoices() {
   }
 }
 
+const zipCounts = (z) => [z.photos && `${z.photos} photo${z.photos === 1 ? '' : 's'}`,
+  z.videos && `${z.videos} video${z.videos === 1 ? '' : 's'}`].filter(Boolean).join(', ')
+const mbOf = (b) => `${(b / 1e6).toFixed(b > 1e8 ? 0 : 1)} MB`
+async function unzip(z) {
+  unzipping.value = z.name
+  failure.value = ''
+  try {
+    const r = await api.importUnzip(z.name)
+    const n = r.unpacked.length
+    const k = r.skipped.length
+    zipNotice.value = `Unpacked ${n} file${n === 1 ? '' : 's'} from ${z.name} (it's in the Trash now)`
+      + (k ? `, leaving out ${k} short clip${k === 1 ? '' : 's'}` : '') + '. They\'re under Today.'
+    day.value = ''
+    await load()
+  } catch (e) {
+    failure.value = e.message
+  } finally {
+    unzipping.value = ''
+  }
+}
+
 async function moveSongs() {
   songBusy.value = true
   failure.value = ''
@@ -311,6 +352,7 @@ async function load() {
     days.value = r.days
     files.value = r.files
     songs.value = r.songs || []
+    zips.value = r.zips || []
     transcribeNote.value = r.transcribe ? ' · transcribed on the way in'
       : ' · to transcribe them, restart the studio with ./studio/run.sh'
     musicDir.value = r.musicDir || ''

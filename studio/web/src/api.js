@@ -152,6 +152,8 @@ export const api = {
   importThumb: (file, w = 320) => withQuery(path`/api/import/thumb/${file}`, { w }),
   importFiles: (body) => send('POST', '/api/import', body),
   importMusic: (files) => send('POST', '/api/import/music', { files }),
+  // Unpack a zip in Downloads (a Google Photos download): -> { unpacked, skipped }; the zip goes to the Trash.
+  importUnzip: (file) => send('POST', '/api/import/unzip', { file }),
 
   // A voice track's takes: recordings in the shoot folders, and what's said in them.
   voiceFolders: () => get('/api/voice/folders'),

@@ -30,6 +30,7 @@ import sys
 import threading
 import time
 import uuid
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -3207,6 +3208,30 @@ def is_song(path):
     return path.is_file() and not path.name.startswith(".") and path.suffix.lower() in AUDIO_EXTS
 
 
+# Zips in Downloads (what Google Photos gives for a download of several, or
+# of a shared album): unpacked into Downloads, keeping each file's date from
+# the zip, then imported like anything AirDropped.
+ZIP_MAX_BYTES = 20 * 10**9   # more than this unpacked isn't a phone's photos
+
+
+def is_zip(path):
+    return path.is_file() and not path.name.startswith(".") and path.suffix.lower() == ".zip"
+
+
+def zip_media(zf):
+    """A zip's photos and videos (not folders, macOS's __MACOSX copies, or
+    anything else), by their entries."""
+    out = []
+    for e in zf.infolist():
+        name = Path(e.filename).name
+        if e.is_dir() or not name or name.startswith(".") or "__MACOSX" in e.filename:
+            continue
+        p = Path(name)
+        if Library.kind_of(p) or p.suffix.lower() in HEIC_EXTS:
+            out.append(e)
+    return out
+
+
 def download_path(name, ok=importable):
     path = (DOWNLOADS / name).resolve()
     if path.parent != DOWNLOADS or not path.exists() or not ok(path):
@@ -3258,6 +3283,21 @@ def import_list():
                           "importedTo": in_footage(db, p),
                           "copyOf": copy_in_batch(p, seen)})
     files.sort(key=lambda f: f["arrived"])
+    # Zips with photos or videos in them, to unpack (/api/import/unzip).
+    zips = []
+    for p in DOWNLOADS.iterdir():
+        if not is_zip(p) or arrived(p.stat()) < since.timestamp():
+            continue
+        try:
+            with zipfile.ZipFile(p) as zf:
+                media = zip_media(zf)
+        except (zipfile.BadZipFile, OSError):
+            continue
+        if media:
+            videos = sum(Library.kind_of(Path(e.filename)) == "video" for e in media)
+            zips.append({"name": p.name, "arrived": arrived(p.stat()), "photos": len(media) - videos,
+                         "videos": videos, "size": sum(e.file_size for e in media)})
+    zips.sort(key=lambda z: z["arrived"], reverse=True)
     # Songs downloaded for the music folder, listed apart from the footage.
     songs = []
     for p in DOWNLOADS.iterdir():
@@ -3280,7 +3320,44 @@ def import_list():
         d["songs"] += 1
     return {"dir": str(DOWNLOADS), "today": date.today().isoformat(), "musicDir": str(shelf.folder),
             "days": sorted(days.values(), key=lambda d: d["day"], reverse=True),
-            "files": files, "songs": songs, "transcribe": transcription_available()}
+            "files": files, "songs": songs, "zips": zips, "transcribe": transcription_available()}
+
+
+@app.post("/api/import/unzip")
+def import_unzip(body: dict = Body(...)):
+    """Unpack a zip in Downloads: its photos and videos come out into
+    Downloads (by their own names, so nothing lands anywhere else), each
+    dated as in the zip (when it was taken, for a Google Photos download),
+    to be imported like any other; a clip under relay.MIN_SCENE (a Live
+    Photo's motion) is left out, since nothing that short goes in a reel.
+    The zip then goes to the Trash. {file} -> {unpacked, skipped}."""
+    src = download_path(body.get("file") or "", is_zip)
+    try:
+        zf = zipfile.ZipFile(src)
+    except zipfile.BadZipFile:
+        raise HTTPException(400, f"{src.name} isn't a zip that can be opened")
+    unpacked, skipped = [], []
+    with zf:
+        media = zip_media(zf)
+        if not media:
+            raise HTTPException(400, f"No photos or videos in {src.name}")
+        if sum(e.file_size for e in media) > ZIP_MAX_BYTES:
+            raise HTTPException(400, f"{src.name} unpacks to more than {ZIP_MAX_BYTES // 10**9} GB")
+        for e in media:
+            target = DOWNLOADS / Path(e.filename).name
+            if target.exists():
+                target = free_name(target)
+            with zf.open(e) as fin, open(target, "wb") as fout:
+                shutil.copyfileobj(fin, fout, 1 << 20)
+            at = time.mktime((*e.date_time, 0, 0, -1))   # the zip's date: local time
+            os.utime(target, (at, at))
+            if Library.kind_of(target) == "video" and probe(target)["duration"] < relay_mod.MIN_SCENE:
+                target.unlink()
+                skipped.append(target.name)
+                continue
+            unpacked.append(target.name)
+    to_trash(src)
+    return {"unpacked": unpacked, "skipped": skipped}
 
 
 @app.post("/api/import/music")
