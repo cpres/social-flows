@@ -42,6 +42,8 @@ export const api = {
   relayPlan: (name, opts = {}) => send('POST', path`/api/folders/${name}/relay-plan`, opts),
   // Move files to another shoot folder: { files, to, create } -> { folder, moved, failed, emptied }.
   moveFiles: (name, body) => send('POST', path`/api/folders/${name}/move`, body),
+  // The shoot's cover, a reel from it opens with ({ mediaId } or null for none) -> { cover }.
+  setCover: (name, mediaId) => send('PUT', path`/api/folders/${name}/cover`, { mediaId }),
   // Delete files (to the Trash): { files } -> { deleted, failed, parts, emptied }.
   deleteFiles: (name, files) => send('POST', path`/api/folders/${name}/delete`, { files }),
 

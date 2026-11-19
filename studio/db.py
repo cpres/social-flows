@@ -17,6 +17,9 @@ The studio's library: one SQLite file at ~/Footage/.studio/studio.db.
                 the New reel dialog starts; nothing is held to it
     gphotos_items  files that came from Google Photos, by the picker's item
                 id, so picking the same thing again isn't downloaded twice
+    shoot_covers  the file chosen as a shoot's cover: a reel made from the
+                shoot opens with a few seconds of it (a teaser) as well as
+                playing it in its own place
 
 Files are only moved when asked (Import, Move files). Each media row remembers size and capture
 time, so a file that is renamed or moved to another shoot folder is relinked
@@ -128,6 +131,11 @@ CREATE TABLE IF NOT EXISTS shoot_intents (
     folder     TEXT PRIMARY KEY,   -- the shoot folder's name
     intent     TEXT NOT NULL,      -- JSON {style, target (seconds or null), albumLink, source}
     updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS shoot_covers (
+    folder     TEXT PRIMARY KEY,   -- the shoot folder's name
+    media_id   INTEGER NOT NULL REFERENCES media(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS gphotos_items (

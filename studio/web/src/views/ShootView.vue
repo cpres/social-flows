@@ -63,7 +63,7 @@
         <ClipCard
           v-for="(m, i) in media" :key="m.id" :media="m"
           :thumb-time="m.kind === 'video' ? draftOf(m).start : 0"
-          :sub="clockTime(m.capturedAt) + (m.moved ? ' · moved' : '') + (kept.has(m.id) ? ' · picked' : '')"
+          :sub="clockTime(m.capturedAt) + (m.id === cover ? ' · ★ cover' : '') + (m.moved ? ' · moved' : '') + (kept.has(m.id) ? ' · picked' : '')"
           :dots="partsOf(m.id).map((p) => ({ color: reelColor(p.reelId), label: reelName(p.reelId) }))"
           :selected="!picking && i === selected" :used="partsOf(m.id).length > 0"
           :draggable="!picking && media.length > 1"
@@ -216,6 +216,14 @@
             ref="picker" :reels="pickable" :color-of="reelColor" :note="(r) => countIn(r.id) ? `${countIn(r.id)} here` : ''"
             @pick="addTo" @create="newReelAndTag"
           />
+          <div class="coverrow">
+            <button
+              class="btn small" :class="{ active: current.id === cover }" @click="toggleCover"
+              :title="current.id === cover ? 'Stop using this as the cover'
+                : 'New reels from this shoot open on a few seconds of this (it still plays in its own place too)'"
+            >{{ current.id === cover ? '★ Cover' : '☆ Use as cover' }}</button>
+            <small class="muted" v-if="current.id === cover">New reels from this shoot open with it, as a teaser.</small>
+          </div>
           <p class="muted flash" v-if="flash">{{ flash }}</p>
         </div>
 
@@ -355,6 +363,7 @@ function apply(data) {
   draftAt.value = data.draftAt || null
   intent.value = data.intent || null
   content.value = data.content || null
+  cover.value = data.cover ?? null
 }
 
 onMounted(async () => {
@@ -716,6 +725,18 @@ function weave() {
 // and a length suggested from how much footage there is.
 const makingReel = ref(false)
 const intent = ref(null)      // { style, target, albumLink, source } (Import from Google Photos)
+// The shoot's cover: reels made from here open on a few seconds of it (a
+// teaser), and it plays in its own place too. One per shoot.
+const cover = ref(null)
+async function toggleCover() {
+  try {
+    const r = await api.setCover(props.name, cover.value === current.value.id ? null : current.value.id)
+    cover.value = r.cover
+    showFlash(r.cover ? 'Cover set: new reels from this shoot open with it' : 'No cover')
+  } catch (e) {
+    showFlash(e.message)
+  }
+}
 // Import more from Google Photos, into this shoot; then its new files show up.
 const addingFromGoogle = ref(false)
 function addedFromGoogle() {
@@ -872,4 +893,5 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   width: 26px; height: 26px; cursor: pointer; font-size: 14px; line-height: 1;
 }
 .unmove:hover { border-color: var(--sage); }
+.coverrow { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
 </style>

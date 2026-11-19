@@ -407,10 +407,79 @@ def get_folder(name: str):
         reels = reel_summaries(db)
         draft_at = draft_time(db, draft_key(folder=name))
         intent = shoot_intent(db, name)
+        cover = shoot_cover(db, name)
     content = content_of([{"kind": m["kind"], "duration": m["duration"]} for m in media])
     return {"name": name, "path": str(folder), "media": media, "items": items, "reels": reels,
-            "hasSidecar": (folder / SIDECAR).exists(), "draftAt": draft_at,
+            "hasSidecar": (folder / SIDECAR).exists(), "draftAt": draft_at, "cover": cover,
             "intent": intent, "content": content}
+
+
+TEASER_SECONDS = 3.0   # a cover's moment at the start of a reel (relay.MIN_SCENE: nothing shorter)
+
+
+def shoot_cover(db, folder):
+    """The media id of the shoot's cover, while it's still there, or None."""
+    row = db.execute("""SELECT c.media_id FROM shoot_covers c JOIN media m ON m.id = c.media_id
+                        WHERE c.folder = ? AND m.folder = ? AND m.missing = 0""", (folder, folder)).fetchone()
+    return row["media_id"] if row else None
+
+
+def add_teaser(db, reel_id, folder, side, leave=()):
+    """A reel from a shoot with a cover opens on a few seconds of it, ahead
+    of everything (and it still plays in its own place): a second part of
+    the cover's file at the very front, noted as the reel's teaserItemId so
+    Relay leaves it out of its plan and keeps it first. Not if the cover
+    was left out of the reel."""
+    cover = shoot_cover(db, folder)
+    if cover is None or cover in leave:
+        return
+    for _, m, start, length, pick in folder_parts(db, folder, side):
+        if m["id"] != cover:
+            continue
+        if m["kind"] == "video":   # the start of its part, or as much of it as there is
+            length = min(TEASER_SECONDS, length)
+        else:
+            start, length = 0.0, TEASER_SECONDS
+        cur = db.execute("INSERT INTO reel_items (reel_id, media_id, position, start, length, focus_x, focus_y, "
+                         "zoom, layout, frames, keep) VALUES (?, ?, -1, ?, ?, ?, ?, ?, ?, '{}', 1)",
+                         (reel_id, lib.original_of(db, m["id"]), start, length, pick.get("focusX", 0.5),
+                          pick.get("focusY", 0.5), pick.get("zoom", 1),
+                          pick.get("layout", "") if m["kind"] == "video" else ""))
+        r = db.execute("SELECT settings FROM reels WHERE id = ?", (reel_id,)).fetchone()
+        s = {**json.loads(r["settings"] or "{}"), "teaserItemId": cur.lastrowid}
+        db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), reel_id))
+        return
+
+
+def teaser_first(db, s):
+    """After Relay has (re)planned a reel: its teaser (s["teaserItemId"]),
+    if it still has one, first in the reel, a full-frame scene of its own."""
+    tid = s.get("teaserItemId")
+    row = tid and db.execute("SELECT id, keep FROM reel_items WHERE id = ?", (tid,)).fetchone()
+    if not row:
+        s.pop("teaserItemId", None)
+        return
+    db.execute("UPDATE reel_items SET position = -1 WHERE id = ?", (tid,))
+    if row["keep"] and s.get("scenes") is not None:
+        s["scenes"] = [{"id": scenes_mod.new_id(), "layout": "soloB", "from": tid, "into": "cut"},
+                       *[sc for sc in s["scenes"] if sc.get("from") != tid]]
+
+
+@app.put("/api/folders/{name}/cover")
+def set_cover(name: str, body: dict = Body(...)):
+    """The shoot's cover: {mediaId} (one of its files) or {mediaId: null}
+    for none. Reels made from the shoot from now on open with it."""
+    resolve(name)
+    media_id = body.get("mediaId")
+    with lib.connect() as db:
+        if media_id is None:
+            db.execute("DELETE FROM shoot_covers WHERE folder = ?", (name,))
+            return {"cover": None}
+        if not db.execute("SELECT 1 FROM media WHERE id = ? AND folder = ? AND missing = 0",
+                          (int(media_id), name)).fetchone():
+            raise HTTPException(400, "That file isn't in this shoot")
+        db.execute("INSERT OR REPLACE INTO shoot_covers (folder, media_id) VALUES (?, ?)", (name, int(media_id)))
+        return {"cover": int(media_id)}
 
 
 @app.post("/api/folders/{name}/to-reel")
@@ -447,6 +516,7 @@ def folder_to_reel(name: str, body: dict = Body(default={})):
                         pick.get("focusX", 0.5), pick.get("focusY", 0.5), pick.get("zoom", 1),
                         pick.get("layout", "") if m["kind"] == "video" else "", 0 if m["id"] in leave else 1))
             file_of[cur.lastrowid] = m["id"]
+        add_teaser(db, reel_id, name, side, leave)
         style = body.get("style") or "standard"
         if style in ("stack", "relay"):
             apply_style(db, reel_id, style, {**body, "_fileOf": file_of})
@@ -721,10 +791,12 @@ def apply_style(db, reel_id, style, body):
         s["scenes"] = [{"id": scenes_mod.new_id(), "layout": "stack", "from": rest[0]["id"], "split": 0.5, "into": "cut",
                         "a": {"item": top["id"], "in": None, "out": None, "timing": "real", "speed": 1}}]
     else:
+        rows = [r for r in rows if r["id"] != s.get("teaserItemId")]   # not planned: it goes first
         opts = relay_opts(body)
         bases, _ = relay_bases(db, rows, opts, file_of=body.get("_fileOf"))
         items, _, opts["cap"], _ = relay_fit(bases, opts)
         write_relay(db, reel_id, s, items, rows, opts, [r["id"] for r in rows])
+        teaser_first(db, s)
     db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), reel_id))
 
 
@@ -791,6 +863,7 @@ def relay_restitch_items(db, reel_id, s):
                          JOIN media m ON m.id = i.media_id
                          WHERE i.reel_id = ? AND i.keep = 1 AND m.missing = 0
                          ORDER BY i.position, i.id""", (reel_id,)).fetchall()
+    rows = [r for r in rows if r["id"] != s.get("teaserItemId")]   # the teaser isn't planned: it goes first
     by_id = {r["id"]: r for r in rows}
     scenes = scenes_mod.normalized(s.get("scenes") or [], [r["id"] for r in rows], [])
     carry = {}   # part id -> seconds it plays on, on top, as the next comes in under it
@@ -878,6 +951,7 @@ def restitch(reel_id: int):
             raise HTTPException(400, "Nothing left in the cut to stitch together")
         opts = relay_opts(s.get("relay") or {})
         plan = write_relay(db, reel_id, s, items, templates, opts, ids)
+        teaser_first(db, s)
         db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), reel_id))
         touch(db, reel_id)
     return {"ok": True, "stats": plan["stats"]}
