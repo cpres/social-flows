@@ -73,6 +73,14 @@
         <button class="refresh" @click="reload" :disabled="refreshing" title="Look for new clips in this folder">
           ↻ {{ refreshing ? 'Checking…' : 'Check for new clips' }}
         </button>
+        <button
+          v-if="intent?.source === 'gphotos'" class="refresh" @click="addingFromGoogle = true"
+          title="Bring more of the album into this shoot; what's already here is skipped"
+        >＋ Import more from Google Photos</button>
+        <GooglePhotosImport
+          v-if="addingFromGoogle" :into="name" :intent="intent"
+          @close="addingFromGoogle = false" @imported="addedFromGoogle"
+        />
       </aside>
 
       <section class="editor" v-if="current">
@@ -247,6 +255,7 @@ import TimingFields from '../components/TimingFields.vue'
 import TrimBar from '../components/TrimBar.vue'
 import WeavePrompt from '../components/WeavePrompt.vue'
 import NewReelDialog from '../components/NewReelDialog.vue'
+import GooglePhotosImport from '../components/GooglePhotosImport.vue'
 import { contentLine } from '../reelStyles'
 
 const props = defineProps({ name: { type: String, required: true } })
@@ -627,6 +636,12 @@ function weave() {
 // and a length suggested from how much footage there is.
 const makingReel = ref(false)
 const intent = ref(null)      // { style, target, albumLink, source } (Import from Google Photos)
+// Import more from Google Photos, into this shoot; then its new files show up.
+const addingFromGoogle = ref(false)
+function addedFromGoogle() {
+  addingFromGoogle.value = false
+  reload()
+}
 const content = ref(null)     // { videoSeconds, photoCount, suggestedTarget }
 const contentSummary = computed(() => contentLine(content.value))
 // Straight from Import from Google Photos: New reel opens, set up from the

@@ -3,8 +3,10 @@
     <div class="dialog gphotos">
       <div class="top">
         <div>
-          <h2>Import from Google Photos</h2>
-          <p class="muted">Pick what's in it in Google's own picker; it's downloaded into a shoot folder here.</p>
+          <h2>{{ into ? 'Import more from Google Photos' : 'Import from Google Photos' }}</h2>
+          <p v-if="into" class="muted">Into <b>{{ folderTitle(into) }}</b>. Pick the whole album again if that's
+            easiest: what's already here isn't downloaded twice.</p>
+          <p v-else class="muted">Pick what's in it in Google's own picker; it's downloaded into a shoot folder here.</p>
         </div>
         <button class="x" aria-label="Close" @click="close">×</button>
       </div>
@@ -35,8 +37,8 @@ GOOGLE_CLIENT_SECRET=…</pre></li>
       </section>
 
       <template v-else>
-        <!-- 1. what kind of reel this is -->
-        <section>
+        <!-- 1. what kind of reel this is (adding to a shoot: as it was brought in) -->
+        <section v-if="!into">
           <div class="sh"><span class="step">1</span><b>What kind of reel is this?</b>
             <small class="muted">A starting point for New reel: everything there stays changeable.</small></div>
           <div class="styles">
@@ -54,7 +56,7 @@ GOOGLE_CLIENT_SECRET=…</pre></li>
 
         <!-- 2. the album link, kept as a note -->
         <section>
-          <div class="sh"><span class="step">2</span><b>Album link</b> <span class="muted small">(optional)</span></div>
+          <div class="sh"><span class="step">{{ step(2) }}</span><b>Album link</b> <span class="muted small">(optional)</span></div>
           <div class="linkrow">
             <input v-model="albumLink" placeholder="https://photos.google.com/…/album/…" />
             <button class="btn small" :disabled="!linkOk" @click="openAlbum">Open ↗</button>
@@ -65,7 +67,7 @@ GOOGLE_CLIENT_SECRET=…</pre></li>
 
         <!-- 3. pick in Google Photos -->
         <section>
-          <div class="sh"><span class="step">3</span><b>Choose in Google Photos</b></div>
+          <div class="sh"><span class="step">{{ step(3) }}</span><b>Choose in Google Photos</b></div>
           <div v-if="!session" class="pickrow">
             <button class="btn primary" @click="pick">Choose in Google Photos…</button>
             <small class="muted">Opens Google's picker in a new tab. To take an album, open <b>Albums</b> there, then
@@ -89,7 +91,7 @@ GOOGLE_CLIENT_SECRET=…</pre></li>
         </section>
 
         <!-- 4. where it goes -->
-        <section v-if="picked && fresh.length">
+        <section v-if="picked && fresh.length && !into">
           <div class="sh"><span class="step">4</span><b>Where should it go?</b></div>
           <ShootDestination
             :folders="folders" :root="root" v-model:mode="mode" v-model:date="newDate"
@@ -141,6 +143,9 @@ import ShootDestination, { folderNameOf } from './ShootDestination.vue'
 const props = defineProps({
   folders: { type: Array, default: () => [] },
   root: { type: String, default: '' },
+  // Import more: straight into this shoot, as it was first brought in ({ style, target, albumLink }).
+  into: { type: String, default: '' },
+  intent: { type: Object, default: null },
 })
 const emit = defineEmits(['close', 'imported'])
 
@@ -149,8 +154,10 @@ const status = ref({ configured: false, signedIn: false })
 const failure = ref('')
 const notice = ref('')
 
-const style = ref('relay')
-const albumLink = ref('')
+const style = ref(props.intent?.style || 'relay')
+const albumLink = ref(props.intent?.albumLink || '')
+// Step numbers: adding to a shoot skips choosing the kind of reel.
+const step = (n) => (props.into ? n - 1 : n)
 const linkOk = computed(() => /^https:\/\/\S+$/.test(albumLink.value.trim()))
 function openAlbum() { if (linkOk.value) window.open(albumLink.value.trim(), '_blank', 'noopener') }
 
@@ -241,10 +248,10 @@ const pickedCounts = computed(() => {
 })
 
 // ---------------------------------------------------------------- where it goes
-const mode = ref('new')
+const mode = ref(props.into ? 'existing' : 'new')
 const newDate = ref('')
 const newLabel = ref('')
-const target = ref(props.folders[0]?.name || '')
+const target = ref(props.into || props.folders[0]?.name || '')
 const isoDay = (t) =>
   `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`
 // The day the first of it was taken (not today: it may be weeks old).
@@ -282,7 +289,9 @@ async function go() {
   try {
     const r = await gphotos.importItems({
       sessionId: session.value.sessionId, folder, create: mode.value === 'new',
-      intent: { style: style.value, target: null, albumLink: linkOk.value ? albumLink.value.trim() : '' },
+      // adding to a shoot keeps the length it was brought in for
+      intent: { style: style.value, target: props.into ? props.intent?.target ?? null : null,
+        albumLink: linkOk.value ? albumLink.value.trim() : '' },
     })
     job.value = { done: 0, total: r.total, bytes: 0, failed: [], current: null }
     await follow(r.job)

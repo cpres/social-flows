@@ -197,6 +197,17 @@ class PickerClient(unittest.TestCase):
                      "2026-11-15T10:04:30.925-08:00"):
             self.assertAlmostEqual(gphotos.parse_time(text), utc + (0.925 if "." in text else 0), places=3, msg=text)
 
+    def test_a_pixel_name_says_when_it_was_taken(self):
+        for name in ("PXL_20261115_180430715.jpg", "PXL_20261115_180430715.MP.jpg", "PXL_20261115_180430715.TS-000.jpg"):
+            self.assertAlmostEqual(gphotos.name_time(name), 1794765870.715, places=3, msg=name)
+        for name in ("IMG_1234.JPG", "", None, "PXL_20261345_180430715.jpg"):
+            self.assertIsNone(gphotos.name_time(name), name)
+
+    def test_the_name_wins_over_googles_time(self):
+        v = gphotos.item_view(item(1, t="2026-11-16T02:04:30Z", name="PXL_20261115_180430715.jpg"))
+        self.assertAlmostEqual(v["capturedAt"], 1794765870.715, places=3)
+        self.assertEqual(gphotos.item_view(item(2, t="2026-11-15T18:04:30Z"))["capturedAt"], 1794765870.0)
+
     def test_nanosecond_times(self):
         self.assertAlmostEqual(gphotos.parse_time("2026-10-06T14:00:00.123456789Z"), 1791295200.123456, places=5)
 

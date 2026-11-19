@@ -26,13 +26,14 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import ssl
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 SCOPE = "https://www.googleapis.com/auth/photospicker.mediaitems.readonly"
@@ -124,6 +125,25 @@ def seconds_of(text, default):
         return default
 
 
+# A Pixel names each shot for when it was taken, in UTC, to the millisecond:
+# PXL_20261115_180430715.jpg (also .MP.jpg, .TS-000.jpg, .mp4).
+PIXEL_NAME = re.compile(r"PXL_(\d{8})_(\d{6})(\d{3})")
+
+
+def name_time(filename):
+    """When a shot was taken, from its file name where that says (a Pixel's),
+    epoch seconds; else None. Truer than Google's createTime, which an
+    edit or a re-upload can move."""
+    m = PIXEL_NAME.match(filename or "")
+    if not m:
+        return None
+    try:
+        t = datetime.strptime(m[1] + m[2], "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return t.timestamp() + int(m[3]) / 1000
+
+
 def parse_time(text):
     """RFC 3339 ("2026-10-06T14:22:01.123Z") -> epoch seconds, or None."""
     if not text:
@@ -147,7 +167,8 @@ def item_view(item):
     kind = "video" if item.get("type") == "VIDEO" or (f.get("mimeType") or "").startswith("video/") else "photo"
     return {"id": item.get("id"), "filename": f.get("filename") or f"{item.get('id')}",
             "kind": kind, "mimeType": f.get("mimeType") or "",
-            "createTime": item.get("createTime"), "capturedAt": parse_time(item.get("createTime")),
+            "createTime": item.get("createTime"),
+            "capturedAt": name_time(f.get("filename")) or parse_time(item.get("createTime")),
             "baseUrl": f.get("baseUrl")}
 
 
