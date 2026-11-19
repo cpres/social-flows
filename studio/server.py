@@ -501,6 +501,27 @@ def reel_teaser(reel_id: int, body: dict = Body(...)):
         return {"ok": True, "teaserItemId": s["teaserItemId"]}
 
 
+@app.delete("/api/reels/{reel_id}/teaser")
+def reel_teaser_off(reel_id: int):
+    """No teaser: its part comes out (the file still plays in its own place),
+    a Relay reel stitched back together. -> {ok}."""
+    with lib.connect() as db:
+        s = settings_of(reel_row(db, reel_id))
+        tid = s.pop("teaserItemId", None)
+        if tid is None:
+            return {"ok": True}
+        db.execute("DELETE FROM reel_items WHERE id = ? AND reel_id = ?", (tid, reel_id))
+        if s.get("scenes") is not None:
+            s["scenes"] = [sc for sc in s["scenes"] if sc.get("from") != tid]
+        if s.get("relayPlan"):
+            items, templates, ids = relay_restitch_items(db, reel_id, s)
+            if items:
+                write_relay(db, reel_id, s, items, templates, relay_opts(s.get("relay") or {}), ids)
+        db.execute("UPDATE reels SET settings = ? WHERE id = ?", (json.dumps(s), reel_id))
+        touch(db, reel_id)
+        return {"ok": True}
+
+
 @app.put("/api/folders/{name}/cover")
 def set_cover(name: str, body: dict = Body(...)):
     """The shoot's cover: {mediaId} (one of its files) or {mediaId: null}

@@ -154,6 +154,23 @@
         <h3>Title &amp; end card</h3>
         <p class="muted small">Laid over your footage on a dim, see-through layer with cream text. Grey text is a suggestion: <kbd>Tab</kbd> takes it.</p>
         <div class="cardgrid">
+          <div class="cardbox teaserbox" :class="{ off: !teaserPart }">
+            <header>
+              <strong>Teaser</strong>
+              <small class="muted">a few seconds of one shot before everything; it still plays in its own place</small>
+            </header>
+            <div class="teaserrow">
+              <span v-if="teaserPart" class="teasername">Opens on <b>{{ teaserPart.media.file }}</b></span>
+              <span v-else class="muted small">None. Select a part below, then use its file.</span>
+              <span class="spacer"></span>
+              <button
+                v-if="current && current.id !== teaserPart?.id && current.media.file !== teaserPart?.media.file"
+                class="btn small" :disabled="teaserBusy" @click="setTeaser"
+                :title="`Open the reel on 3 seconds of ${current.media.file}`"
+              >{{ teaserPart ? 'Use the selected one instead' : `Open on ${current.media.file}` }}</button>
+              <button v-if="teaserPart" class="btn small" :disabled="teaserBusy" @click="removeTeaser">Remove</button>
+            </div>
+          </div>
           <div class="cardbox" :class="{ off: !titleOn }">
             <header>
               <label class="check"><input type="checkbox" :checked="titleOn" @change="settings.titleCard = $event.target.checked" /> <strong>Title</strong></label>
@@ -1012,6 +1029,8 @@ async function loadReel() {
   const data = await api.reel(id)
   items.value = data.items
   otherItems.value = data.otherItems
+  // what the server took out goes here too (or the next save would put it back)
+  for (const k of Object.keys(settings)) if (!(k in data.settings)) delete settings[k]
   Object.assign(settings, data.settings)
   return data
 }
@@ -1284,6 +1303,29 @@ function setKeep(p, keep) {
 // each stretch as you have it, after a ✓ under the preview.
 const restitchAsk = ref(false)
 const restitching = ref(false)
+
+// The teaser (server.py reel_teaser): the reel opens on a few seconds of one
+// shot, ahead of everything; that shot still plays in its own place too.
+const teaserPart = computed(() => items.value.find((p) => p.id === settings.teaserItemId) || null)
+const teaserBusy = ref(false)
+async function changeTeaser(call, done) {
+  teaserBusy.value = true
+  try {
+    await saver.flushAll()
+    ready = false
+    await call()
+    await loadReel()
+    selected.value = Math.min(selected.value, items.value.length - 1)
+    saveState.value = done
+  } catch (e) {
+    saveState.value = `· teaser not changed: ${e.message}`
+  } finally {
+    teaserBusy.value = false
+    setTimeout(() => { ready = true })
+  }
+}
+const setTeaser = () => changeTeaser(() => api.setTeaser(id, current.value.mediaId), '· opens on its teaser')
+const removeTeaser = () => changeTeaser(() => api.removeTeaser(id), '· teaser removed')
 async function restitch() {
   restitching.value = true
   try {
@@ -3295,4 +3337,6 @@ h1 .sw { width: 14px; height: 14px; border-radius: 50%; flex: none; }
 /* the reel's Look, as near as CSS gets to the render's eq */
 .preview-col.look-vivid :deep(.media video), .preview-col.look-vivid :deep(.media img) { filter: contrast(1.08) saturate(1.28) brightness(0.985); }
 .preview-col.look-rich :deep(.media video), .preview-col.look-rich :deep(.media img) { filter: contrast(1.15) saturate(1.45) brightness(0.97); }
+.teaserrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.teasername { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 </style>

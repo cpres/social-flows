@@ -74,6 +74,9 @@ export const api = {
   saveItems: (reelId, items) => send('PUT', path`/api/reels/${reelId}/items`, { items }),
   // Plan a relay reel again around parts taken out, added or trimmed: -> { ok, stats }.
   restitch: (reelId) => send('POST', path`/api/reels/${reelId}/restitch`),
+  // Open the reel on a few seconds of a file (a teaser, first; it still plays in its own place), or none.
+  setTeaser: (reelId, mediaId) => send('POST', path`/api/reels/${reelId}/teaser`, { mediaId }),
+  removeTeaser: (reelId) => send('DELETE', path`/api/reels/${reelId}/teaser`),
 
   // Rendering.
   render: (id) => send('POST', path`/api/reels/${id}/render`),
