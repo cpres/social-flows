@@ -5,7 +5,7 @@
         <div>
           <h2>{{ into ? 'Import more from Google Photos' : 'Import from Google Photos' }}</h2>
           <p v-if="into" class="muted">Into <b>{{ folderTitle(into) }}</b>. Pick the whole album again if that's
-            easiest: what's already here isn't downloaded twice.</p>
+            easiest: what's already here isn't downloaded twice.<template v-if="linkOk">&nbsp;<a :href="albumLink.trim()" target="_blank" rel="noopener">Open the album ↗</a></template></p>
           <p v-else class="muted">Pick what's in it in Google's own picker; it's downloaded into a shoot folder here.</p>
         </div>
         <button class="x" aria-label="Close" @click="close">×</button>
@@ -54,9 +54,9 @@ GOOGLE_CLIENT_SECRET=…</pre></li>
           </div>
         </section>
 
-        <!-- 2. the album link, kept as a note -->
-        <section>
-          <div class="sh"><span class="step">{{ step(2) }}</span><b>Album link</b> <span class="muted small">(optional)</span></div>
+        <!-- 2. the album link, kept as a note (adding to a shoot: it's in the subtitle) -->
+        <section v-if="!into">
+          <div class="sh"><span class="step">2</span><b>Album link</b> <span class="muted small">(optional)</span></div>
           <div class="linkrow">
             <input v-model="albumLink" placeholder="https://photos.google.com/…/album/…" />
             <button class="btn small" :disabled="!linkOk" @click="openAlbum">Open ↗</button>
@@ -67,7 +67,7 @@ GOOGLE_CLIENT_SECRET=…</pre></li>
 
         <!-- 3. pick in Google Photos -->
         <section>
-          <div class="sh"><span class="step">{{ step(3) }}</span><b>Choose in Google Photos</b></div>
+          <div class="sh" v-if="!into"><span class="step">3</span><b>Choose in Google Photos</b></div>
           <div v-if="!session" class="pickrow">
             <button class="btn primary" @click="pick">Choose in Google Photos…</button>
             <small class="muted">Opens Google's picker in a new tab. To take an album, open <b>Albums</b> there, then
@@ -156,8 +156,6 @@ const notice = ref('')
 
 const style = ref(props.intent?.style || 'relay')
 const albumLink = ref(props.intent?.albumLink || '')
-// Step numbers: adding to a shoot skips choosing the kind of reel.
-const step = (n) => (props.into ? n - 1 : n)
 const linkOk = computed(() => /^https:\/\/\S+$/.test(albumLink.value.trim()))
 function openAlbum() { if (linkOk.value) window.open(albumLink.value.trim(), '_blank', 'noopener') }
 

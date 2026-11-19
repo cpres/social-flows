@@ -86,10 +86,13 @@
           v-if="intent?.source === 'gphotos'" class="refresh" @click="addingFromGoogle = true"
           title="Bring more of the album into this shoot; what's already here is skipped"
         >＋ Import more from Google Photos</button>
-        <GooglePhotosImport
-          v-if="addingFromGoogle" :into="name" :intent="intent"
-          @close="addingFromGoogle = false" @imported="addedFromGoogle"
-        />
+        <!-- at the top of the page, not inside the list, so the preview can't cover it -->
+        <Teleport to="body">
+          <GooglePhotosImport
+            v-if="addingFromGoogle" :into="name" :intent="intent"
+            @close="addingFromGoogle = false" @imported="addedFromGoogle"
+          />
+        </Teleport>
       </aside>
 
       <section class="editor" v-if="current">
@@ -196,9 +199,10 @@
 
         <div class="panel" v-if="!active">
           <h3>{{ current.kind === 'video' ? 'Add this selection to a reel' : 'Use this photo in' }}</h3>
-          <div class="chips">
+          <!-- this shoot's reels, one click (and 1–9) each; any other by typing its name -->
+          <div class="chips" v-if="shootReels.length">
             <button
-              v-for="(r, i) in reels" :key="r.id" class="reelchip"
+              v-for="(r, i) in shootReels" :key="r.id" class="reelchip"
               :class="{ on: current.kind === 'photo' && partsOf(current.id).some((p) => p.reelId === r.id) }"
               @click="tag(r)"
             >
@@ -207,8 +211,11 @@
               <span class="count" v-if="countIn(r.id)" :title="`${countIn(r.id)} part(s) of this clip already in ${r.name}`">{{ countIn(r.id) }} here</span>
               <kbd v-if="i < 9" class="key" :title="`Press ${i + 1} to add`">{{ i + 1 }}</kbd>
             </button>
-            <button class="reelchip" @click="newReelAndTag">+ New reel</button>
           </div>
+          <ReelPicker
+            ref="picker" :reels="pickable" :color-of="reelColor" :note="(r) => countIn(r.id) ? `${countIn(r.id)} here` : ''"
+            @pick="addTo" @create="newReelAndTag"
+          />
           <p class="muted flash" v-if="flash">{{ flash }}</p>
         </div>
 
@@ -231,7 +238,7 @@
         <p class="muted keys">
           <kbd>Space</kbd> play selection · <kbd>Enter</kbd> play/pause whole clip · <kbd>I</kbd>/<kbd>O</kbd> start/end at playhead ·
           <kbd>←</kbd>/<kbd>→</kbd> nudge 0.1s · <kbd>↑</kbd>/<kbd>↓</kbd> previous/next · <kbd>H</kbd> highlight · <kbd>S</kbd> speed 1×/2×/4× ·
-          <kbd>1</kbd>–<kbd>9</kbd> add to reel · <kbd>G</kbd> Instagram overlays
+          <kbd>1</kbd>–<kbd>9</kbd> add to this shoot's reels · <kbd>A</kbd> add to any reel · <kbd>G</kbd> Instagram overlays
         </p>
         </div>
       </section>
@@ -265,6 +272,7 @@ import TrimBar from '../components/TrimBar.vue'
 import WeavePrompt from '../components/WeavePrompt.vue'
 import NewReelDialog from '../components/NewReelDialog.vue'
 import GooglePhotosImport from '../components/GooglePhotosImport.vue'
+import ReelPicker from '../components/ReelPicker.vue'
 import { contentLine } from '../reelStyles'
 
 const props = defineProps({ name: { type: String, required: true } })
@@ -648,12 +656,30 @@ async function untag(part) {
   if (activeId.value === part.id) activeId.value = null
 }
 
-async function newReelAndTag() {
-  const name = window.prompt('Name the new reel')
+// The reels this shoot's files are in, the latest added to first: where the
+// next part almost always goes. Every other reel is a search away (ReelPicker).
+const shootReels = computed(() => {
+  const last = new Map()
+  for (const p of items.value) last.set(p.reelId, Math.max(last.get(p.reelId) ?? -1, p.id))
+  return reels.value.filter((r) => last.has(r.id)).sort((a, b) => last.get(b.id) - last.get(a.id))
+})
+// Every reel, most recently edited first (the server's order), for typing to find.
+const pickable = computed(() => allReels.value.filter((r) => !r.archivedAt))
+const picker = ref(null)
+// From the picker: add, never take away (a photo's chip toggles; this doesn't).
+function addTo(reel) {
+  const m = current.value
+  if (m.kind === 'photo' && partsOf(m.id).some((p) => p.reelId === reel.id)) return showFlash(`Already in ${reel.name}`)
+  tag(reel)
+}
+
+async function newReelAndTag(typed = '') {
+  const name = typed || window.prompt('Name the new reel')
   if (!name?.trim()) return
   try {
     const r = await api.createReel(name.trim())
     reels.value.push({ id: r.id, name: r.name })
+    allReels.value.unshift({ id: r.id, name: r.name })
     await tag(r)
   } catch (e) {
     showFlash(e.message)
@@ -787,7 +813,8 @@ function onKey(e) {
   else if (k === 'ArrowRight' && video) { setRange({ ...range.value, start: range.value.start + (e.shiftKey ? 1 : 0.1) }); player.seek(range.value.start) }
   else if (k === 'Escape') picking.value ? stopPicking() : (activeId.value = null)
   else if (k === 'g' || k === 'G') guides.value = !guides.value
-  else if (/^[1-9]$/.test(k) && !active.value && reels.value[Number(k) - 1]) tag(reels.value[Number(k) - 1])
+  else if (/^[1-9]$/.test(k) && !active.value && shootReels.value[Number(k) - 1]) tag(shootReels.value[Number(k) - 1])
+  else if ((k === 'a' || k === 'A') && !active.value) picker.value?.focus()
   else return
   e.preventDefault()
 }
@@ -798,6 +825,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 <style scoped>
 .pickbar .btn.danger { color: var(--danger); border-color: var(--danger); }
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.chips + .reelpicker { margin-top: 10px; }
 .btn.ghost { border-style: dashed; opacity: 0.8; }
 .speed {
   font: 600 12px ui-monospace, monospace; padding: 2px 8px; border-radius: 999px; cursor: pointer;
